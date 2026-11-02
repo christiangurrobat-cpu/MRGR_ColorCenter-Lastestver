@@ -63,10 +63,15 @@ function getModuleNotificationCount(moduleId, role) {
     }
 
     case 'alerts': {
-      if (typeof lowStockProducts === 'function') {
-        return lowStockProducts().length;
+      // Saktong tugma sa default tab na "Needs Purchase Order":
+      // Bilang ng mga produktong mababa ang stock at WALA PANG bukas na Purchase Order
+      if (typeof lowStockProductsNeedingPO === 'function') {
+        return lowStockProductsNeedingPO().length;
       }
-      return (db.products || []).filter(p => p.status === 'active' && Number(p.stock) <= Number(p.threshold || 5)).length;
+      if (typeof lowStockProducts === 'function') {
+        return lowStockProducts().filter(p => !productHasOpenPO(p.id)).length;
+      }
+      return 0;
     }
 
     case 'receiving': {
@@ -88,12 +93,9 @@ function getModuleNotificationCount(moduleId, role) {
     }
 
     case 'purchaseOrders': {
+      // Bilang ng Purchase Orders na naghihintay ng Admin review / authorization
       const pendingPOs = (db.purchaseOrders || []).filter(o => o.status === 'pending');
-      const openPOs = (db.purchaseOrders || []).filter(o => o.status === 'ordered' || o.status === 'partial');
-      if (currentRole === 'admin') {
-        return pendingPOs.length > 0 ? pendingPOs.length : openPOs.length;
-      }
-      return openPOs.length > 0 ? openPOs.length : pendingPOs.length;
+      return pendingPOs.length;
     }
 
     case 'inventory': {
@@ -103,7 +105,10 @@ function getModuleNotificationCount(moduleId, role) {
         (p.pendingSizes && p.pendingSizes.length > 0) || 
         (p.pendingPrice != null && Number(p.pendingPrice) > 0)
       );
-      if (pendingInv.length > 0) return pendingInv.length;
+      if (currentRole === 'staff') {
+        return pendingInv.length;
+      }
+      // Para sa Admin, ang pending items ay nasa Approvals hub; dito ay out-of-stock count (0 stock) kung mayroon
       const zeroStock = (db.products || []).filter(p => p.status === 'active' && Number(p.stock) <= 0);
       return zeroStock.length;
     }
@@ -120,12 +125,8 @@ function getModuleNotificationCount(moduleId, role) {
     }
 
     case 'auditLog': {
-      const todayIso = typeof todayISO === 'function' ? todayISO() : new Date().toISOString().slice(0, 10);
-      const todayLogs = (db.auditLog || []).filter(a => {
-        const d = a.timestamp || a.date || '';
-        return d.slice(0, 10) === todayIso;
-      });
-      return todayLogs.length;
+      // Audit log is an event trail; no notification badge needed
+      return 0;
     }
 
     case 'users': {
@@ -141,39 +142,14 @@ function getModuleNotificationCount(moduleId, role) {
     }
 
     case 'sales': {
-      const todayIso = typeof todayISO === 'function' ? todayISO() : new Date().toISOString().slice(0, 10);
-      const todaySales = (db.sales || []).filter(s => (s.date || '').slice(0, 10) === todayIso);
-      return todaySales.length;
+      // Sales History is a completed transaction ledger; no pending notification needed
+      return 0;
     }
 
     case 'dashboard':
     case 'staffDashboard': {
-      let total = 0;
-      const lowProducts = typeof lowStockProducts === 'function'
-        ? lowStockProducts()
-        : (db.products || []).filter(p => p.status === 'active' && Number(p.stock) <= Number(p.threshold || 5));
-      total += lowProducts.length;
-
-      const pendingInv = (db.products || []).filter(p => 
-        p.status === 'pending_approval' || 
-        Boolean(p.pendingEdit) || 
-        (p.pendingSizes && p.pendingSizes.length > 0) || 
-        (p.pendingPrice != null && Number(p.pendingPrice) > 0)
-      );
-      total += pendingInv.length;
-
-      const pendingPOs = (db.purchaseOrders || []).filter(o => o.status === 'pending');
-      total += pendingPOs.length;
-
-      let pendingAdjCount = 0;
-      if (typeof pendingAdjRequests === 'function') {
-        pendingAdjCount = pendingAdjRequests().length;
-      } else {
-        pendingAdjCount = (db.adjustmentRequests || []).filter(r => r.status === 'pending').length;
-      }
-      total += pendingAdjCount;
-
-      return total;
+      // Top-level landing overview; badges are shown on specific actionable modules
+      return 0;
     }
 
     default:

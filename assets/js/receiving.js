@@ -491,12 +491,6 @@ function renderReceivingPOPreview() {
     <div class="rcv-minimal-list">
       ${rowsHtml}
     </div>
-
-    <!-- Delivery Reference / Receipt Note -->
-    <div style="margin-top:14px; padding:10px 14px; background:#FAF8F5; border:1px solid var(--line); border-radius:var(--radius-sm); display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-      <label for="mv-batch-note-r" style="font-size:12.5px; font-weight:600; color:var(--ink-soft); white-space:nowrap;">Delivery Note / DR # (optional):</label>
-      <input type="text" id="mv-batch-note-r" class="simple-note-input" placeholder="e.g. DR #10482, Delivered by Apex Trucking..." style="flex:1; min-width:220px; font-size:12.5px; padding:6px 10px; margin:0; background:#fff;">
-    </div>
   `;
 }
 
@@ -1653,8 +1647,7 @@ async function submitMovement(e) {
       return false;
     }
 
-    const refNote = document.getElementById('mv-batch-note-r') ? document.getElementById('mv-batch-note-r').value.trim() : '';
-    const result = await completePOReceiving(po, refNote, batchQtys);
+    const result = await completePOReceiving(po, '', batchQtys);
 
     if (result.allCompleted) {
       receivingPOId = '';

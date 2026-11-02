@@ -109,10 +109,10 @@ function adminDashboard() {
     <span class="stat-action-link">Manage Inventory &rarr;</span>
   </div>
 </div>
-<div class="stat-card ${low.length ? 'danger' : 'sage'} clickable" onclick="goTo('alerts')" title="Click to view low-stock alerts">
+<div class="stat-card ${needingPO.length ? 'danger' : (onOrder.length ? 'mustard' : 'sage')} clickable" onclick="goTo('alerts')" title="Click to view low-stock alerts">
   <div class="label">⚠️ Low-Stock Items</div>
   <div class="value">${low.length}</div>
-  <div class="sub">at or below reorder threshold</div>
+  <div class="sub">${needingPO.length} need PO · ${onOrder.length} on order</div>
   <div class="stat-card-footer">
     <span class="stat-action-link">View Low-Stock Alerts &rarr;</span>
   </div>
@@ -146,7 +146,17 @@ function adminDashboard() {
     <a href="#" onclick="goToApprovalsTab('purchaseOrders'); return false;" style="font-weight:700; color:var(--teal); text-decoration:underline;">Review &amp; Approve &rarr;</a>
   </div>` : ''}
 
-  ${low.length ? `<div class="alert-banner danger">⚠️ ${low.length} product(s) are at or below their reorder point. <a href="#" onclick="goTo('alerts');return false;" style="font-weight:600; text-decoration:underline;">View Alerts &rarr;</a> or <a href="#" onclick="goTo('purchaseOrders');return false;" style="font-weight:600; text-decoration:underline;">Create Purchase Order &rarr;</a></div>` : ''}
+  ${needingPO.length ? `
+    <div class="alert-banner danger" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+      <span>⚠️ <b>${needingPO.length} low-stock product${needingPO.length === 1 ? '' : 's'}</b> need restock purchase orders.${onOrder.length ? ` <span style="opacity:0.9;">(${onOrder.length} other item${onOrder.length === 1 ? '' : 's'} already on order)</span>` : ''}</span>
+      <a href="#" onclick="goTo('alerts');return false;" style="font-weight:700; text-decoration:underline;">View Low-Stock Alerts &rarr;</a>
+    </div>
+  ` : (onOrder.length ? `
+    <div class="alert-banner" style="background:#EBF5FB; border-color:#AED6F1; color:#1B4F72; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+      <span>✅ <b>All ${onOrder.length} low-stock item${onOrder.length === 1 ? '' : 's'} have purchase orders placed</b> and are awaiting delivery.</span>
+      <a href="#" onclick="goTo('alerts');return false;" style="font-weight:700; text-decoration:underline;">View On-Order Items &rarr;</a>
+    </div>
+  ` : '')}
 
   <div class="panel">
 <div class="panel-head row">
@@ -272,6 +282,8 @@ function adminDashboard() {
    ============================================================ */
 function staffDashboard() {
   const low = lowStockProducts();
+  const needingPO = low.filter(p => !productHasOpenPO(p.id));
+  const onOrder = low.filter(p => productHasOpenPO(p.id));
   const recentMoves = groupStockMovements(db.movements).slice(0, 8);
   const greeting = getGreeting();
 
@@ -311,9 +323,10 @@ function staffDashboard() {
   <div class="value">${activeProducts().length}</div>
   <div class="stat-card-footer"><span class="stat-action-link">View Products &rarr;</span></div>
 </div>
-<div class="stat-card ${low.length ? 'danger' : 'sage'} clickable" onclick="goTo('alerts')" title="Click to view alerts">
+<div class="stat-card ${needingPO.length ? 'danger' : (onOrder.length ? 'mustard' : 'sage')} clickable" onclick="goTo('alerts')" title="Click to view alerts">
   <div class="label">⚠️ Low-Stock Items</div>
   <div class="value">${low.length}</div>
+  <div class="sub">${needingPO.length} need PO · ${onOrder.length} on order</div>
   <div class="stat-card-footer"><span class="stat-action-link">View Alerts &rarr;</span></div>
 </div>
 <div class="stat-card orange clickable" onclick="goTo('receiving')" title="Click to view stock movements">
@@ -334,7 +347,17 @@ function staffDashboard() {
       <button type="button" class="btn secondary small" onclick="if(typeof filterPendingApprovalProducts==='function') filterPendingApprovalProducts(); goTo('inventory');">View in Inventory &rarr;</button>
     </div>
   ` : ''}
-  ${low.length ? `<div class="alert-banner danger">⚠️ ${low.length} product(s) need restocking. Open <a href="#" onclick="goTo('alerts');return false;">Alerts</a> for the full list.</div>` : ''}
+  ${needingPO.length ? `
+    <div class="alert-banner danger" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+      <span>⚠️ <b>${needingPO.length} product(s)</b> need restock purchase orders.${onOrder.length ? ` (${onOrder.length} other item(s) already on order)` : ''}</span>
+      <a href="#" onclick="goTo('alerts');return false;" style="font-weight:700; text-decoration:underline;">View Alerts &rarr;</a>
+    </div>
+  ` : (onOrder.length ? `
+    <div class="alert-banner" style="background:#EBF5FB; border-color:#AED6F1; color:#1B4F72; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+      <span>✅ <b>All ${onOrder.length} low-stock item(s) have purchase orders placed</b> and are awaiting delivery.</span>
+      <a href="#" onclick="goTo('alerts');return false;" style="font-weight:700; text-decoration:underline;">View On-Order Items &rarr;</a>
+    </div>
+  ` : '')}
   <div class="panel">
 <div class="panel-head row">
   <h3>Recent Stock Movements</h3>
