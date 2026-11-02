@@ -1,0 +1,678 @@
+/* ---------- panels / cards ---------- */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+  box-shadow: var(--shadow-sm);
+}
+
+.panel-head {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.panel-head h3 {
+  font-size: 15px;
+}
+
+/* ---------- panel header toolbar controls ---------- */
+.panel-head input[type="text"],
+.panel-head input[type="search"],
+.panel-head input[type="date"],
+.panel-head select {
+  height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background-color: #fff;
+  color: var(--ink);
+  font-size: 13px;
+  font-family: inherit;
+  transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
+}
+
+.panel-head select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B6259' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
+}
+
+.panel-head input:hover,
+.panel-head select:hover {
+  border-color: #cfc4b3;
+}
+
+.panel-head input:focus,
+.panel-head select:focus {
+  outline: none;
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px rgba(31, 111, 107, 0.14);
+}
+
+.panel-head .btn.small {
+  height: 36px;
+  padding: 0 13px;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+/* ---------- Inventory & Stock Management Toolbar ---------- */
+.inv-header {
+  gap: 12px;
+  padding: 12px 18px;
+  min-height: 58px;
+}
+
+.inv-title-area h3 {
+  font-size: 15.5px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.inv-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.inv-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 220px;
+}
+
+.inv-search-wrap .search-icon {
+  position: absolute;
+  left: 10px;
+  width: 14px;
+  height: 14px;
+  color: var(--ink-soft);
+  pointer-events: none;
+}
+
+.inv-search-wrap input.inv-input {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px 0 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #FFFFFF;
+  color: var(--ink);
+  font-size: 13px;
+  font-family: inherit;
+  box-shadow: 0 1px 2px rgba(38, 33, 28, 0.03);
+  transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
+}
+
+.inv-search-wrap input.inv-input::placeholder {
+  color: #9C9184;
+}
+
+.inv-search-wrap input.inv-input:hover {
+  border-color: #cfc4b3;
+}
+
+.inv-search-wrap input.inv-input:focus {
+  outline: none;
+  border-color: var(--teal);
+  background: #FFFFFF;
+  box-shadow: 0 0 0 3px rgba(31, 111, 107, 0.15);
+}
+
+.inv-select {
+  height: 36px;
+  padding: 0 28px 0 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background-color: #FFFFFF;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B6259' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(38, 33, 28, 0.03);
+  transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
+}
+
+.inv-select:hover {
+  border-color: #cfc4b3;
+  background-color: #FAF8F4;
+}
+
+.inv-select:focus {
+  outline: none;
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px rgba(31, 111, 107, 0.15);
+  background-color: #FFFFFF;
+}
+
+.inv-select-type {
+  width: 148px;
+}
+
+.inv-select-status {
+  width: 135px;
+}
+
+.inv-select-sort {
+  width: 180px;
+}
+
+.inv-btn {
+  height: 36px;
+  padding: 0 13px;
+  font-size: 13px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .inv-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .inv-toolbar {
+    width: 100%;
+  }
+
+  .inv-search-wrap {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .inv-select-type,
+  .inv-select-status,
+  .inv-select-sort {
+    flex: 1 1 calc(33.333% - 6px);
+    min-width: 120px;
+  }
+}
+
+.panel-body {
+  padding: 16px 18px;
+}
+
+.panel-body.tight {
+  padding: 0;
+}
+
+/* ---------- tables ---------- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+th {
+  text-align: left;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+  font-weight: 600;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #FBF8F2;
+}
+
+td {
+  padding: 10px 14px;
+  border-bottom: 1px solid #EFE9DC;
+  vertical-align: middle;
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+tbody tr {
+  transition: background 0.12s ease;
+}
+
+tbody tr:hover {
+  background: #FBF8F2;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.sortable-th {
+  cursor: pointer;
+  user-select: none;
+  transition: background .12s ease, color .12s ease;
+}
+
+.sortable-th:hover {
+  background: #F1EAE0;
+  color: var(--ink);
+}
+
+.sortable-th.sorted {
+  background: #EAE1D3;
+  color: var(--teal-dark);
+}
+
+.th-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.th-content.right {
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.sort-icon {
+  font-size: 11px;
+  display: inline-block;
+  opacity: 0.45;
+}
+
+.sortable-th.sorted .sort-icon {
+  opacity: 1;
+  color: var(--teal);
+  font-weight: 700;
+}
+
+/* ---------- badges ---------- */
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.badge.ok {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.badge.low {
+  background: #FDF3E3;
+  color: #B45309;
+}
+
+.badge.out {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.badge.mid {
+  background: #FDF3E3;
+  color: #94690F;
+}
+
+.badge.role-admin {
+  background: #E9EEF7;
+  color: #2F4C82;
+}
+
+.badge.role-cashier {
+  background: #EAF4EC;
+  color: #2F6B41;
+}
+
+.badge.role-staff {
+  background: #F5EBE0;
+  color: #8A5A24;
+}
+
+.badge.inactive {
+  background: #EFEAE0;
+  color: #8A8070;
+}
+
+.badge.po-pending {
+  background: #FDF3E3;
+  color: #94690F;
+}
+
+.badge.po-ordered {
+  background: #E9EEF7;
+  color: #2F4C82;
+}
+
+.badge.po-partial {
+  background: #FFF3CD;
+  color: #856404;
+  border: 1px solid #FFEBAA;
+}
+
+.badge.po-received {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.badge.po-cancelled {
+  background: #EFEAE0;
+  color: #8A8070;
+  text-decoration: line-through;
+}
+
+.badge.sale-completed {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.badge.sale-partial-refund {
+  background: #FFF3CD;
+  color: #856404;
+  border: 1px solid #FFEBAA;
+}
+
+.badge.sale-refunded {
+  background: #FBEAE8;
+  color: #C1443D;
+  border: 1px solid #F3C4BF;
+}
+
+/* ---------- Modern Stock Movement Log Styling ---------- */
+.movement-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.movement-table td {
+  vertical-align: top;
+  padding: 11px 13px;
+}
+
+.movement-table th {
+  padding: 9px 13px;
+  white-space: nowrap;
+}
+
+.movement-date-td {
+  width: 115px;
+  min-width: 105px;
+}
+
+.movement-date-cell {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.movement-date-day {
+  font-weight: 600;
+  color: var(--ink, #26211C);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.movement-date-time {
+  font-size: 11px;
+  color: var(--ink-soft, #8A8070);
+  white-space: nowrap;
+  margin-top: 2px;
+}
+
+.movement-type-td {
+  width: 110px;
+  min-width: 100px;
+}
+
+.movement-batch-count {
+  font-size: 10.5px;
+  color: var(--ink-soft, #8A8070);
+  margin-top: 4px;
+  font-weight: 600;
+}
+
+.movement-prod-name {
+  font-size: 13.5px;
+  color: var(--ink, #26211C);
+  line-height: 1.35;
+  font-weight: 500;
+}
+
+.movement-qty-td {
+  width: 150px;
+  min-width: 130px;
+  white-space: nowrap;
+}
+
+/* Paired sub-rows for batch transactions */
+.movement-batch-items-td {
+  padding: 8px 12px !important;
+}
+
+.movement-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+}
+
+.movement-item-paired-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 5px 8px;
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: 5px;
+  border-left: 2.5px solid var(--line, #E2DACD);
+  transition: background 0.12s ease;
+}
+
+.movement-item-paired-row:hover {
+  background: rgba(0, 0, 0, 0.045);
+}
+
+.movement-item-name {
+  font-size: 13px;
+  color: var(--ink, #26211C);
+  line-height: 1.35;
+  flex: 1;
+}
+
+.movement-item-delta {
+  flex-shrink: 0;
+  text-align: right;
+}
+
+/* Delta tags / badges */
+.movement-delta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+  line-height: 1.2;
+}
+
+.movement-delta .delta-units {
+  font-weight: 700;
+}
+
+.movement-delta .delta-liters {
+  font-size: 11px;
+  opacity: 0.85;
+  font-weight: 500;
+}
+
+.movement-delta.delta-pos {
+  color: #15803d;
+  /* green-700 */
+}
+
+.movement-delta.delta-neg {
+  color: #b91c1c;
+  /* red-700 */
+}
+
+.movement-delta.delta-opened {
+  color: #b45309;
+  /* amber-700 */
+}
+
+.movement-delta.delta-zero {
+  color: var(--ink-soft, #8A8070);
+}
+
+/* Staff Column */
+.movement-staff-td {
+  width: 130px;
+  min-width: 115px;
+  line-height: 1.25;
+}
+
+.movement-staff-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink, #26211C);
+}
+
+.movement-staff-role {
+  font-size: 11px;
+  color: var(--ink-soft, #8A8070);
+  margin-top: 2px;
+}
+
+/* Product Item Info & Balance Trail */
+.movement-item-left {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+}
+
+.movement-balance-trail {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-soft, #7A7265);
+  margin-top: 3px;
+  line-height: 1.25;
+  background: rgba(0, 0, 0, 0.035);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  padding: 1.5px 7px;
+  border-radius: 4px;
+  align-self: flex-start;
+}
+
+.movement-balance-trail .trail-icon {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+/* Reference & Notes */
+.movement-note-td {
+  min-width: 220px;
+  max-width: 360px;
+  line-height: 1.4;
+  vertical-align: top;
+}
+
+.movement-note-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.movement-ref-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+  flex-wrap: wrap;
+}
+
+/* Distinct high-contrast reference pills */
+.movement-ref-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: 'Space Grotesk', var(--font-mono), monospace;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 2.5px 8px;
+  border-radius: 4px;
+  line-height: 1.25;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.movement-ref-pill .pill-icon {
+  font-size: 11px;
+  line-height: 1;
+}
+
+/* Purchase Order Reference Pill (Clear Blue) */
+.movement-ref-pill.pill-po {
+  background: #EBF3FE;
+  color: #1D4ED8;
+  border: 1px solid #BFDBFE;
+}
+
+/* Official Receipt / Sales Reference Pill (Clear Emerald/Teal) */
+.movement-ref-pill.pill-or {
+  background: #E6F4F1;
+  color: #0F766E;
+  border: 1px solid #B2DFDB;
+}
+
+/* Recipe / Other Reference Pill (Slate / Indigo) */
+.movement-ref-pill.pill-rec {
+  background: #F3E8FF;
+  color: #6B21A8;
+  border: 1px solid #E9D5FF;
+}
+
+/* PO Progress Pill */
+.movement-po-progress {
+  font-size: 11px;
+  font-weight: 600;
+  color: #1D4ED8;
+  background: #EFF6FF;
+  border: 1px solid #DBEAFE;
+  padding: 2px 7px;
+  border-radius: 4px;
+  line-height: 1.2;
+}
+
+/* Note text - 100% visible, sharp contrast, readable line-height */
+.movement-note-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink, #26211C);
+  line-height: 1.4;
+  white-space: normal;
+  word-break: break-word;
+  overflow: visible;
+}
