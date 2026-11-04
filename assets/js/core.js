@@ -78,6 +78,46 @@ function nowISO() {
 
 function todayISO() { return toLocalISODate(new Date()); }
 function daysAgoISO(n) { const d = new Date(); d.setDate(d.getDate() - n); return toLocalISODate(d); }
+function thisMonthStartISO() {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}-01`;
+}
+function formatDateReadable(iso) {
+  if (!iso) return '';
+  const parts = String(iso).slice(0, 10).split('-');
+  if (parts.length !== 3) return String(iso);
+  const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+  if (isNaN(d.getTime())) return String(iso);
+  return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+function formatDateRangeSummary(from, to, prefix = 'Date filter:') {
+  const p = prefix ? `${prefix} ` : '';
+  if (!from && !to) return `${p}<strong>All Time</strong>`;
+  if (from && to && from === to) return `${p}<strong>${formatDateReadable(from)}</strong>`;
+  if (from && to) return `${p}<strong>${formatDateReadable(from)} – ${formatDateReadable(to)}</strong>`;
+  if (from) return `${p}<strong>From ${formatDateReadable(from)}</strong>`;
+  if (to) return `${p}<strong>Until ${formatDateReadable(to)}</strong>`;
+  return '';
+}
+function getDateRangePreset(from, to) {
+  const f = from || '';
+  const t = to || '';
+  if (!f && !t) return 'all';
+  const today = todayISO();
+  const yest = daysAgoISO(1);
+  const d7 = daysAgoISO(6);
+  const d30 = daysAgoISO(29);
+  const mStart = thisMonthStartISO();
+
+  if (f === today && t === today) return 'today';
+  if (f === yest && t === yest) return 'yesterday';
+  if (f === d7 && t === today) return '7d';
+  if (f === d30 && t === today) return '30d';
+  if (f === mStart && t === today) return 'month';
+  return 'custom';
+}
 function formatDateTime(iso) {
   const d = new Date(iso);
   return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' }) + ' · ' +

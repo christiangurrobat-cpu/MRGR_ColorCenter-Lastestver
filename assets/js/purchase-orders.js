@@ -89,6 +89,56 @@ function getFilteredPOs(dateFilteredOrders) {
   return filtered;
 }
 
+function getPODatePreset() {
+  return getDateRangePreset(poDateFrom, poDateTo);
+}
+
+function setPODatePreset(preset) {
+  const today = todayISO();
+  if (preset === 'today') {
+    poDateFrom = today;
+    poDateTo = today;
+  } else if (preset === 'yesterday') {
+    const yest = daysAgoISO(1);
+    poDateFrom = yest;
+    poDateTo = yest;
+  } else if (preset === '7d') {
+    poDateFrom = daysAgoISO(6);
+    poDateTo = today;
+  } else if (preset === '30d') {
+    poDateFrom = daysAgoISO(29);
+    poDateTo = today;
+  } else if (preset === 'month') {
+    poDateFrom = thisMonthStartISO();
+    poDateTo = today;
+  } else if (preset === 'all') {
+    poDateFrom = '';
+    poDateTo = '';
+  }
+  renderPage();
+}
+
+function onPODateChange() {
+  const fromEl = document.getElementById('po-date-from');
+  const toEl = document.getElementById('po-date-to');
+  let f = fromEl ? fromEl.value : '';
+  let t = toEl ? toEl.value : '';
+  if (f && t && f > t) {
+    const tmp = f;
+    f = t;
+    t = tmp;
+    if (fromEl) fromEl.value = f;
+    if (toEl) toEl.value = t;
+  }
+  poDateFrom = f;
+  poDateTo = t;
+  renderPage();
+}
+
+function clearPODates() {
+  setPODatePreset('all');
+}
+
 function setPODateFilter(from, to) {
   poDateFrom = from || '';
   poDateTo = to || '';
@@ -101,22 +151,24 @@ function setPODateFilter(from, to) {
 }
 
 function setPODateShortcut(daysAgo) {
-  if (daysAgo === null) {
-    poDateFrom = '';
-    poDateTo = '';
-  } else {
+  if (daysAgo === null || daysAgo === undefined) setPODatePreset('all');
+  else if (daysAgo === 0) setPODatePreset('today');
+  else if (daysAgo === 1) setPODatePreset('yesterday');
+  else if (daysAgo === 6) setPODatePreset('7d');
+  else if (daysAgo === 29) setPODatePreset('30d');
+  else {
     poDateFrom = daysAgoISO(daysAgo);
     poDateTo = todayISO();
+    renderPage();
   }
-  renderPage();
 }
 
 function formatPODateRangeLabel() {
   if (poDateFrom && poDateTo) {
-    return poDateFrom === poDateTo ? formatDateOnly(poDateFrom) : `${formatDateOnly(poDateFrom)} – ${formatDateOnly(poDateTo)}`;
+    return poDateFrom === poDateTo ? formatDateReadable(poDateFrom) : `${formatDateReadable(poDateFrom)} – ${formatDateReadable(poDateTo)}`;
   }
-  if (poDateFrom) return `From ${formatDateOnly(poDateFrom)}`;
-  if (poDateTo) return `Until ${formatDateOnly(poDateTo)}`;
+  if (poDateFrom) return `From ${formatDateReadable(poDateFrom)}`;
+  if (poDateTo) return `Until ${formatDateReadable(poDateTo)}`;
   return 'All time';
 }
 
@@ -127,13 +179,8 @@ function poListPage() {
   const totalSpend = orders.filter(o => o.status === 'received').reduce((s, o) => s + o.totalAmount, 0);
   const pending = orders.filter(o => o.status === 'pending' || o.status === 'ordered' || o.status === 'partial').reduce((s, o) => s + o.totalAmount, 0);
   const filtered = getFilteredPOs(orders);
-  const today = todayISO();
-  const d7 = daysAgoISO(6);
-  const d30 = daysAgoISO(29);
-  const isToday = poDateFrom === today && poDateTo === today;
-  const is7D = poDateFrom === d7 && poDateTo === today;
-  const is30D = poDateFrom === d30 && poDateTo === today;
-  const isAllDates = !poDateFrom && !poDateTo;
+  const activePreset = getPODatePreset();
+  const hasDates = Boolean(poDateFrom || poDateTo);
 
   return `
   <div class="dashboard-actions-bar">
@@ -172,19 +219,34 @@ function poListPage() {
     </div>
   </div>
 
-  <div class="panel">
-    <div class="po-date-bar">
-      <span class="muted small" style="font-weight:600;">📅 Order Date Between:</span>
-      <input id="po-date-from" type="date" value="${escapeHtml(poDateFrom)}" onchange="setPODateFilter(this.value, poDateTo)" title="Start date">
-      <span class="muted small">and</span>
-      <input id="po-date-to" type="date" value="${escapeHtml(poDateTo)}" onchange="setPODateFilter(poDateFrom, this.value)" title="End date">
-      <div class="report-date-shortcuts" style="display:flex; gap:4px; align-items:center;">
-        <button type="button" class="btn ${isToday ? '' : 'ghost'} small" onclick="setPODateShortcut(0)" title="Today's purchase orders">Today</button>
-        <button type="button" class="btn ${is7D ? '' : 'ghost'} small" onclick="setPODateShortcut(6)" title="Last 7 days">7D</button>
-        <button type="button" class="btn ${is30D ? '' : 'ghost'} small" onclick="setPODateShortcut(29)" title="Last 30 days">30D</button>
-        <button type="button" class="btn ${isAllDates ? '' : 'ghost'} small" onclick="setPODateShortcut(null)" title="Show all dates">All Dates</button>
+  <div class="panel" style="padding:0; overflow:hidden;">
+    <div class="audit-date-bar po-date-bar" style="border-top:none; border-bottom:1px solid var(--line-light);">
+      <div class="audit-date-group">
+        <label class="audit-date-label">📅 Order Date:</label>
+        <div class="audit-date-field" title="Start date">
+          <span class="field-tag">From</span>
+          <input id="po-date-from" type="date" value="${escapeHtml(poDateFrom)}" max="${escapeHtml(poDateTo || '')}" onchange="onPODateChange()">
+        </div>
+        <span class="audit-date-sep">to</span>
+        <div class="audit-date-field" title="End date">
+          <span class="field-tag">To</span>
+          <input id="po-date-to" type="date" value="${escapeHtml(poDateTo)}" min="${escapeHtml(poDateFrom || '')}" onchange="onPODateChange()">
+        </div>
+        <button type="button" id="po-clear-date-btn" class="audit-clear-date-btn" onclick="clearPODates()" title="Clear date range" style="display:${hasDates ? 'inline-flex' : 'none'};">✕</button>
       </div>
-      ${!isAllDates ? `<span class="badge ok" style="margin-left:auto;">Showing ${orders.length} order${orders.length === 1 ? '' : 's'} (${escapeHtml(formatPODateRangeLabel())})</span>` : ''}
+
+      <div class="audit-date-shortcuts">
+        <button type="button" class="audit-date-btn ${activePreset === 'today' ? 'active' : ''}" data-preset="today" onclick="setPODatePreset('today')" title="Orders created today">Today</button>
+        <button type="button" class="audit-date-btn ${activePreset === 'yesterday' ? 'active' : ''}" data-preset="yesterday" onclick="setPODatePreset('yesterday')" title="Orders created yesterday">Yesterday</button>
+        <button type="button" class="audit-date-btn ${activePreset === '7d' ? 'active' : ''}" data-preset="7d" onclick="setPODatePreset('7d')" title="Last 7 days">7D</button>
+        <button type="button" class="audit-date-btn ${activePreset === '30d' ? 'active' : ''}" data-preset="30d" onclick="setPODatePreset('30d')" title="Last 30 days">30D</button>
+        <button type="button" class="audit-date-btn ${activePreset === 'month' ? 'active' : ''}" data-preset="month" onclick="setPODatePreset('month')" title="This month to date">This Month</button>
+        <button type="button" class="audit-date-btn ${activePreset === 'all' ? 'active' : ''}" data-preset="all" onclick="setPODatePreset('all')" title="Show all orders">All</button>
+      </div>
+
+      <div class="audit-date-info" id="po-date-summary">
+        ${formatDateRangeSummary(poDateFrom, poDateTo, 'Order date:')}
+      </div>
     </div>
     <div class="po-list-search">
       <span style="font-size:15px; color:var(--ink-soft);">🔍</span>
@@ -741,12 +803,12 @@ function renderPOItemRows() {
           <div class="po-pill-idle">
             <span class="po-pill-idle-size">${fmtSize(s)}</span>
             ${isLow
-              ? (shortage > 0
-                ? `<button type="button" class="po-pill-shortage-btn" onclick="event.stopPropagation(); inplacePOQty(${index}, ${s}, ${shortage})" title="Short by ${shortage}. Click to order ${shortage}">⚠️ -${shortage}</button>`
-                : `<span class="po-pill-stock-label" style="color:#C1443D; font-weight:600;">0 in stock</span>`
-              )
-              : `<span class="po-pill-stock-label">${canCount} in stock</span>`
-            }
+          ? (shortage > 0
+            ? `<button type="button" class="po-pill-shortage-btn" onclick="event.stopPropagation(); inplacePOQty(${index}, ${s}, ${shortage})" title="Short by ${shortage}. Click to order ${shortage}">⚠️ -${shortage}</button>`
+            : `<span class="po-pill-stock-label" style="color:#C1443D; font-weight:600;">0 in stock</span>`
+          )
+          : `<span class="po-pill-stock-label">${canCount} in stock</span>`
+        }
             <span class="po-pill-add-icon" title="Click to enter quantity">+</span>
           </div>
 
@@ -1267,8 +1329,8 @@ function openMultiSupplierPOPickerModal(supplierGroups) {
     </div>
     <div style="display:flex; flex-direction:column; gap:10px;">
       ${groups.map((g, idx) => {
-        const prodNames = g.products.map(p => escapeHtml(p.name)).join(', ');
-        return `
+    const prodNames = g.products.map(p => escapeHtml(p.name)).join(', ');
+    return `
           <div style="background:#FAF8F5; border:1px solid var(--line); border-radius:var(--radius-sm); padding:12px 14px; display:flex; justify-content:space-between; align-items:center; gap:12px;">
             <div>
               <div style="font-weight:700; color:var(--teal-dark); font-size:14px;">${escapeHtml(g.supplier.name)}</div>
@@ -1279,7 +1341,7 @@ function openMultiSupplierPOPickerModal(supplierGroups) {
             </button>
           </div>
         `;
-      }).join('')}
+  }).join('')}
     </div>
   `;
 
@@ -1290,7 +1352,7 @@ function openMultiSupplierPOPickerModal(supplierGroups) {
 function openUnlinkedSupplierModal(unlinkedProducts, supplierGroups, allIds) {
   const activeSuppliers = (db.suppliers || []).filter(s => s.status === 'active');
   const prodNames = unlinkedProducts.map(p => escapeHtml(p.name)).join(', ');
-  
+
   const bodyHtml = `
     <div style="font-size:13px; color:var(--ink-soft); margin-bottom:14px;">
       The following product(s) do not have a supplier assigned yet:<br>
@@ -1614,15 +1676,15 @@ function renderPOProductPickerContent(index, suppliedProducts, currentProductId)
          <div style="font-size:11.5px;">Try another search keyword or clear filters.</div>
        </div>`
     : filtered.map(p => {
-        const hex = getProductHex(p);
-        const isSel = p.id === currentProductId;
-        const otherRow = selectedInOtherRows.get(p.id);
-        const isLow = productHasLowStock(p);
-        const lowSummary = isLow ? productLowSizesSummary(p) : '';
-        const price = p.price ? peso(p.price * 0.8) : '—';
-        const isLinked = hasSupplied && suppliedProducts.some(sp => sp.id === p.id);
+      const hex = getProductHex(p);
+      const isSel = p.id === currentProductId;
+      const otherRow = selectedInOtherRows.get(p.id);
+      const isLow = productHasLowStock(p);
+      const lowSummary = isLow ? productLowSizesSummary(p) : '';
+      const price = p.price ? peso(p.price * 0.8) : '—';
+      const isLinked = hasSupplied && suppliedProducts.some(sp => sp.id === p.id);
 
-        return `
+      return `
           <button type="button" class="po-picker-item ${isSel ? 'selected' : ''} ${otherRow ? 'in-other-row' : ''}" onclick="selectPOProduct(${index}, '${p.id}', event)">
             <span class="po-picker-item-avatar" style="background-color:${hex};"></span>
             <div class="po-picker-item-main">
@@ -1637,17 +1699,17 @@ function renderPOProductPickerContent(index, suppliedProducts, currentProductId)
             </div>
             <div class="po-picker-item-right">
               ${otherRow
-                ? `<span class="badge" style="background:#F0EDED; color:var(--ink-soft); font-size:10px;">Row #${otherRow}</span>`
-                : (isLow
-                    ? `<span class="badge low" title="${escapeHtml(lowSummary)}">⚠️ ${escapeHtml(lowSummary) || 'Low'}</span>`
-                    : `<span class="badge ok">🥫 ${formatStock(p.stock)}L</span>`
-                  )
-              }
+          ? `<span class="badge" style="background:#F0EDED; color:var(--ink-soft); font-size:10px;">Row #${otherRow}</span>`
+          : (isLow
+            ? `<span class="badge low" title="${escapeHtml(lowSummary)}">⚠️ ${escapeHtml(lowSummary) || 'Low'}</span>`
+            : `<span class="badge ok">🥫 ${formatStock(p.stock)}L</span>`
+          )
+        }
               ${isSel ? `<span class="po-picker-check">✓</span>` : ''}
             </div>
           </button>
         `;
-      }).join('');
+    }).join('');
 
   return `
     <div class="po-picker-header">

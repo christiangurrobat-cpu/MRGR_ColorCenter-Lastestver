@@ -676,3 +676,165 @@ tbody tr:hover {
   word-break: break-word;
   overflow: visible;
 }
+/* ============================================================
+   SHARED DATE RANGE BAR (System-wide standard matching Audit Log)
+   ============================================================ */
+.date-range-bar,
+.audit-date-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px dashed var(--line-light);
+  background: #FBF9F4;
+  flex-wrap: wrap;
+}
+
+.date-range-group,
+.audit-date-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.date-range-label,
+.audit-date-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.date-range-field,
+.audit-date-field {
+  display: inline-flex;
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  gap: 6px;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.date-range-field:focus-within,
+.audit-date-field:focus-within {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px rgba(31, 111, 107, .15);
+}
+.date-range-field span.field-tag,
+.audit-date-field span.field-tag {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  letter-spacing: .4px;
+}
+.date-range-field input[type="date"],
+.audit-date-field input[type="date"],
+.panel-head .date-range-field input[type="date"],
+.panel-head .audit-date-field input[type="date"] {
+  border: none !important;
+  padding: 5px 0 !important;
+  height: auto !important;
+  font-size: 12.5px;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--ink);
+  cursor: pointer;
+  outline: none;
+}
+
+.date-range-sep,
+.audit-date-sep {
+  font-size: 12px;
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+
+.date-range-shortcuts,
+.audit-date-shortcuts {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.date-range-btn,
+.audit-date-btn {
+  padding: 5px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: all .15s ease;
+  line-height: 1.2;
+}
+.date-range-btn:hover,
+.audit-date-btn:hover {
+  background: #EFE8DC;
+  color: var(--ink);
+  border-color: var(--line);
+}
+.date-range-btn.active,
+.audit-date-btn.active {
+  background: var(--teal);
+  color: #fff;
+  border-color: var(--teal);
+  box-shadow: 0 2px 6px rgba(31, 111, 107, 0.25);
+}
+
+.date-range-info,
+.audit-date-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.date-range-info strong,
+.audit-date-info strong {
+  color: var(--teal-dark);
+}
+
+.date-range-clear-btn,
+.audit-clear-date-btn {
+  border: none;
+  background: transparent;
+  color: var(--ink-soft);
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s ease, color .15s ease;
+}
+.date-range-clear-btn:hover,
+.audit-clear-date-btn:hover {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+@media (max-width: 900px) {
+  .date-range-bar,
+  .audit-date-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .date-range-group,
+  .audit-date-group,
+  .date-range-shortcuts,
+  .audit-date-shortcuts {
+    width: 100%;
+  }
+}

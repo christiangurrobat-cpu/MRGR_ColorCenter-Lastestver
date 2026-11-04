@@ -7,6 +7,62 @@
 let currentApprovalsTab = 'adjustments'; // 'adjustments' | 'products' | 'purchaseOrders' | 'history'
 let approvalsSearchQuery = '';
 let approvalsHistoryFilter = 'all'; // 'all' | 'approved' | 'rejected'
+let approvalsDateFrom = '';
+let approvalsDateTo = '';
+
+function getApprovalsDatePreset() {
+  return getDateRangePreset(approvalsDateFrom, approvalsDateTo);
+}
+
+function setApprovalsDatePreset(preset) {
+  const today = todayISO();
+  if (preset === 'today') {
+    approvalsDateFrom = today;
+    approvalsDateTo = today;
+  } else if (preset === 'yesterday') {
+    const yest = daysAgoISO(1);
+    approvalsDateFrom = yest;
+    approvalsDateTo = yest;
+  } else if (preset === '7d') {
+    approvalsDateFrom = daysAgoISO(6);
+    approvalsDateTo = today;
+  } else if (preset === '30d') {
+    approvalsDateFrom = daysAgoISO(29);
+    approvalsDateTo = today;
+  } else if (preset === 'month') {
+    approvalsDateFrom = thisMonthStartISO();
+    approvalsDateTo = today;
+  } else if (preset === 'all') {
+    approvalsDateFrom = '';
+    approvalsDateTo = '';
+  }
+  const contentEl = document.getElementById('approvals-tab-content');
+  if (contentEl) contentEl.innerHTML = renderHistoryTab();
+  else renderPage();
+}
+
+function onApprovalsDateChange() {
+  const fromEl = document.getElementById('appr-date-from');
+  const toEl = document.getElementById('appr-date-to');
+  let f = fromEl ? fromEl.value : '';
+  let t = toEl ? toEl.value : '';
+  if (f && t && f > t) {
+    const tmp = f;
+    f = t;
+    t = tmp;
+    if (fromEl) fromEl.value = f;
+    if (toEl) toEl.value = t;
+  }
+  approvalsDateFrom = f;
+  approvalsDateTo = t;
+  const contentEl = document.getElementById('approvals-tab-content');
+  if (contentEl) contentEl.innerHTML = renderHistoryTab();
+  else renderPage();
+}
+
+function clearApprovalsDates() {
+  setApprovalsDatePreset('all');
+}
 
 /* Quick tab navigation helper */
 function switchApprovalsTab(tab) {
@@ -409,12 +465,12 @@ function renderAdjustmentsTab() {
           </thead>
           <tbody>
             ${list.map(r => {
-              const rows = Array.isArray(r.rows) ? r.rows : (r.rowsJson ? JSON.parse(r.rowsJson) : []);
-              const totalItems = rows.length;
-              let totalCans = 0;
-              rows.forEach(row => { totalCans += Math.abs(Number(row.qty) || 0); });
+    const rows = Array.isArray(r.rows) ? r.rows : (r.rowsJson ? JSON.parse(r.rowsJson) : []);
+    const totalItems = rows.length;
+    let totalCans = 0;
+    rows.forEach(row => { totalCans += Math.abs(Number(row.qty) || 0); });
 
-              return `
+    return `
                 <tr>
                   <td>
                     <a href="#" onclick="viewAdjRequestDetails('${r.id}'); return false;"
@@ -439,9 +495,9 @@ function renderAdjustmentsTab() {
                   <td>
                     <div style="font-weight:600; color:var(--ink);">${totalItems} item${totalItems === 1 ? '' : 's'} (${totalCans} cans)</div>
                     <div class="muted small">${rows.map(x => {
-                      const p = productById(x.productId);
-                      return p ? p.name : 'Item';
-                    }).slice(0, 2).join(', ')}${totalItems > 2 ? '…' : ''}</div>
+      const p = productById(x.productId);
+      return p ? p.name : 'Item';
+    }).slice(0, 2).join(', ')}${totalItems > 2 ? '…' : ''}</div>
                   </td>
                   <td style="max-width:200px; font-size:12.5px; color:var(--ink-soft);">
                     ${r.batchNote ? `"${escapeHtml(r.batchNote)}"` : '<span class="muted">-</span>'}
@@ -461,7 +517,7 @@ function renderAdjustmentsTab() {
                   </td>
                 </tr>
               `;
-            }).join('')}
+  }).join('')}
           </tbody>
         </table>
       </div>
@@ -528,7 +584,7 @@ function renderProductsTab() {
           </thead>
           <tbody>
             ${list.map(it => {
-              return `
+    return `
                 <tr>
                   <td>
                     <span class="badge ${it.typeBadgeClass}" style="font-weight:700; font-size:11px;">
@@ -560,7 +616,7 @@ function renderProductsTab() {
                   </td>
                 </tr>
               `;
-            }).join('')}
+  }).join('')}
           </tbody>
         </table>
       </div>
@@ -791,10 +847,10 @@ function renderPurchaseOrdersTab() {
           </thead>
           <tbody>
             ${list.map(o => {
-              const items = Array.isArray(o.items) ? o.items : [];
-              const totalCans = items.reduce((sum, it) => sum + (Number(it.orderedQty) || 0), 0);
+    const items = Array.isArray(o.items) ? o.items : [];
+    const totalCans = items.reduce((sum, it) => sum + (Number(it.orderedQty) || 0), 0);
 
-              return `
+    return `
                 <tr>
                   <td>
                     <a href="#" onclick="openPOPreviewModal('${o.id}'); return false;"
@@ -835,7 +891,7 @@ function renderPurchaseOrdersTab() {
                   </td>
                 </tr>
               `;
-            }).join('')}
+  }).join('')}
           </tbody>
         </table>
       </div>
@@ -933,6 +989,13 @@ function renderHistoryTab() {
     filtered = filtered.filter(e => e.decision === approvalsHistoryFilter);
   }
 
+  if (approvalsDateFrom) {
+    filtered = filtered.filter(e => String(e.date || '').slice(0, 10) >= approvalsDateFrom);
+  }
+  if (approvalsDateTo) {
+    filtered = filtered.filter(e => String(e.date || '').slice(0, 10) <= approvalsDateTo);
+  }
+
   if (approvalsSearchQuery) {
     const q = approvalsSearchQuery;
     filtered = filtered.filter(e =>
@@ -944,17 +1007,50 @@ function renderHistoryTab() {
     );
   }
 
+  const activePreset = getApprovalsDatePreset();
+  const hasDates = Boolean(approvalsDateFrom || approvalsDateTo);
+
   return `
-    <div class="panel">
-      <div class="panel-head row" style="background:#FAF8F5;">
+    <div class="panel" style="padding:0; overflow:hidden;">
+      <div class="panel-head row" style="background:#FAF8F5; padding:12px 16px;">
         <div style="font-weight:700; font-size:13.5px; color:var(--ink);">
-          Recent Approvals & Decisions Log (${filtered.length})
+          Recent Approvals &amp; Decisions Log (${filtered.length})
         </div>
         <div class="spacer"></div>
         <div class="filter-pills" style="margin:0;">
           <button type="button" class="filter-pill ${approvalsHistoryFilter === 'all' ? 'active' : ''}" onclick="setApprovalsHistoryFilter('all')">All</button>
           <button type="button" class="filter-pill ${approvalsHistoryFilter === 'approved' ? 'active' : ''}" onclick="setApprovalsHistoryFilter('approved')">Approved Only</button>
           <button type="button" class="filter-pill ${approvalsHistoryFilter === 'rejected' ? 'active' : ''}" onclick="setApprovalsHistoryFilter('rejected')">Rejected Only</button>
+        </div>
+      </div>
+
+      <!-- Dedicated Date Range Bar & Quick Presets (matches Audit Log) -->
+      <div class="audit-date-bar" style="padding:10px 16px; border-top:1px dashed var(--line-light); border-bottom:1px solid var(--line-light); background:#FBF9F4;">
+        <div class="audit-date-group">
+          <label class="audit-date-label">📅 Date Range:</label>
+          <div class="audit-date-field" title="Start date">
+            <span class="field-tag">From</span>
+            <input id="appr-date-from" type="date" value="${escapeHtml(approvalsDateFrom)}" max="${escapeHtml(approvalsDateTo || '')}" onchange="onApprovalsDateChange()">
+          </div>
+          <span class="audit-date-sep">to</span>
+          <div class="audit-date-field" title="End date">
+            <span class="field-tag">To</span>
+            <input id="appr-date-to" type="date" value="${escapeHtml(approvalsDateTo)}" min="${escapeHtml(approvalsDateFrom || '')}" onchange="onApprovalsDateChange()">
+          </div>
+          <button type="button" id="appr-clear-date-btn" class="audit-clear-date-btn" onclick="clearApprovalsDates()" title="Clear date range" style="display:${hasDates ? 'inline-flex' : 'none'};">✕</button>
+        </div>
+
+        <div class="audit-date-shortcuts">
+          <button type="button" class="audit-date-btn ${activePreset === 'today' ? 'active' : ''}" data-preset="today" onclick="setApprovalsDatePreset('today')" title="Decisions made today">Today</button>
+          <button type="button" class="audit-date-btn ${activePreset === 'yesterday' ? 'active' : ''}" data-preset="yesterday" onclick="setApprovalsDatePreset('yesterday')" title="Decisions made yesterday">Yesterday</button>
+          <button type="button" class="audit-date-btn ${activePreset === '7d' ? 'active' : ''}" data-preset="7d" onclick="setApprovalsDatePreset('7d')" title="Last 7 days">7D</button>
+          <button type="button" class="audit-date-btn ${activePreset === '30d' ? 'active' : ''}" data-preset="30d" onclick="setApprovalsDatePreset('30d')" title="Last 30 days">30D</button>
+          <button type="button" class="audit-date-btn ${activePreset === 'month' ? 'active' : ''}" data-preset="month" onclick="setApprovalsDatePreset('month')" title="This month to date">This Month</button>
+          <button type="button" class="audit-date-btn ${activePreset === 'all' ? 'active' : ''}" data-preset="all" onclick="setApprovalsDatePreset('all')" title="Show all decision history">All</button>
+        </div>
+
+        <div class="audit-date-info" id="appr-date-summary">
+          ${formatDateRangeSummary(approvalsDateFrom, approvalsDateTo, 'Decision date:')}
         </div>
       </div>
       <div class="panel-body tight table-scroll">
@@ -993,8 +1089,8 @@ function renderHistoryTab() {
                   </td>
                   <td>
                     ${e.decision === 'approved'
-                      ? '<span class="badge ok" style="font-weight:700;">✓ Approved</span>'
-                      : '<span class="badge danger" style="font-weight:700;">✕ Rejected</span>'}
+      ? '<span class="badge ok" style="font-weight:700;">✓ Approved</span>'
+      : '<span class="badge danger" style="font-weight:700;">✕ Rejected</span>'}
                   </td>
                   <td style="font-size:12.5px; color:var(--ink-soft);">
                     ${escapeHtml(e.reviewedBy)}

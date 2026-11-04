@@ -6,97 +6,177 @@ let salesDateFrom = '';
 let salesDateTo = '';
 let returnExchangeCart = [];
 
-function salesHistoryPage() {
+function getSalesDatePreset() {
+  return getDateRangePreset(salesDateFrom, salesDateTo);
+}
+
+function updateSalesDatePresetsUI() {
+  const activePreset = getSalesDatePreset();
+  document.querySelectorAll('.sh-date-btn').forEach(btn => {
+    const p = btn.getAttribute('data-preset');
+    if (p === activePreset) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+  const summaryEl = document.getElementById('sh-date-summary');
+  if (summaryEl) {
+    summaryEl.innerHTML = formatDateRangeSummary(salesDateFrom, salesDateTo, 'Date filter:');
+  }
+  const clearBtn = document.getElementById('sh-clear-date-btn');
+  if (clearBtn) {
+    clearBtn.style.display = (salesDateFrom || salesDateTo) ? 'inline-flex' : 'none';
+  }
+}
+
+function syncSalesDateInputs() {
+  const fromEl = document.getElementById('sh-date-from');
+  const toEl = document.getElementById('sh-date-to');
+  if (fromEl) {
+    fromEl.value = salesDateFrom || '';
+    fromEl.max = salesDateTo || '';
+  }
+  if (toEl) {
+    toEl.value = salesDateTo || '';
+    toEl.min = salesDateFrom || '';
+  }
+  updateSalesDatePresetsUI();
+}
+
+function setSalesDatePreset(preset) {
   const today = todayISO();
-  const d7 = daysAgoISO(6);
-  const d30 = daysAgoISO(29);
-  const isToday = salesDateFrom === today && salesDateTo === today;
-  const is7D = salesDateFrom === d7 && salesDateTo === today;
-  const is30D = salesDateFrom === d30 && salesDateTo === today;
-  const isAllDates = !salesDateFrom && !salesDateTo;
+  if (preset === 'today') {
+    salesDateFrom = today;
+    salesDateTo = today;
+  } else if (preset === 'yesterday') {
+    const yest = daysAgoISO(1);
+    salesDateFrom = yest;
+    salesDateTo = yest;
+  } else if (preset === '7d') {
+    salesDateFrom = daysAgoISO(6);
+    salesDateTo = today;
+  } else if (preset === '30d') {
+    salesDateFrom = daysAgoISO(29);
+    salesDateTo = today;
+  } else if (preset === 'month') {
+    salesDateFrom = thisMonthStartISO();
+    salesDateTo = today;
+  } else if (preset === 'all') {
+    salesDateFrom = '';
+    salesDateTo = '';
+  }
+  syncSalesDateInputs();
+  renderSalesHistoryTable();
+}
+
+function onSalesDateRangeChange() {
+  const fromEl = document.getElementById('sh-date-from');
+  const toEl = document.getElementById('sh-date-to');
+  let f = fromEl ? fromEl.value : '';
+  let t = toEl ? toEl.value : '';
+  if (f && t && f > t) {
+    const tmp = f;
+    f = t;
+    t = tmp;
+    if (fromEl) fromEl.value = f;
+    if (toEl) toEl.value = t;
+  }
+  salesDateFrom = f;
+  salesDateTo = t;
+  if (fromEl) fromEl.max = t || '';
+  if (toEl) toEl.min = f || '';
+  updateSalesDatePresetsUI();
+  renderSalesHistoryTable();
+}
+
+function clearSalesDates() {
+  setSalesDatePreset('all');
+}
+
+function setSalesDateRange(daysAgo) {
+  if (daysAgo === null || daysAgo === undefined) setSalesDatePreset('all');
+  else if (daysAgo === 0) setSalesDatePreset('today');
+  else if (daysAgo === 1) setSalesDatePreset('yesterday');
+  else if (daysAgo === 6) setSalesDatePreset('7d');
+  else if (daysAgo === 29) setSalesDatePreset('30d');
+  else {
+    salesDateFrom = daysAgoISO(daysAgo);
+    salesDateTo = todayISO();
+    syncSalesDateInputs();
+    renderSalesHistoryTable();
+  }
+}
+
+function resetAllSalesFilters() {
+  salesFilterStatus = 'all';
+  salesDateFrom = '';
+  salesDateTo = '';
+  const searchEl = document.getElementById('sh-search');
+  if (searchEl) searchEl.value = '';
+  renderPage();
+}
+
+function salesHistoryPage() {
+  const activePreset = getSalesDatePreset();
+  const hasDates = Boolean(salesDateFrom || salesDateTo);
 
   return `
-  <div class="panel">
-    <div class="panel-head row wrap" style="gap:10px;">
+  <div class="panel" style="padding:0; overflow:hidden;">
+    <div class="panel-head row wrap" style="padding:14px 18px 12px; gap:10px;">
       <div>
         <h3 style="margin:0;">Sales History &amp; Aftersales</h3>
         <span class="muted small">Review customer receipts, process same-day product returns &amp; exchanges (within day only), and issue exchange slips</span>
       </div>
       <div class="spacer"></div>
       <div class="row wrap" style="gap:8px; align-items:center;">
-        <input id="sh-search" type="text" placeholder="Search receipt #, customer, cashier…" style="width:240px;" oninput="renderSalesHistoryTable()">
-        <label class="small muted" style="font-weight:600; white-space:nowrap;">Date Range:</label>
-        <input id="sh-date-from" type="date" value="${escapeHtml(salesDateFrom)}" onchange="onSalesDateRangeChange()" title="Start date">
-        <span class="muted small">to</span>
-        <input id="sh-date-to" type="date" value="${escapeHtml(salesDateTo)}" onchange="onSalesDateRangeChange()" title="End date">
-        <div class="report-date-shortcuts" style="display:flex; gap:4px; align-items:center;">
-          <button type="button" class="btn ${isToday ? '' : 'ghost'} small sh-date-shortcut" data-range="0" onclick="setSalesDateRange(0)" title="Today's transactions">Today</button>
-          <button type="button" class="btn ${is7D ? '' : 'ghost'} small sh-date-shortcut" data-range="6" onclick="setSalesDateRange(6)" title="Last 7 days">7D</button>
-          <button type="button" class="btn ${is30D ? '' : 'ghost'} small sh-date-shortcut" data-range="29" onclick="setSalesDateRange(29)" title="Last 30 days">30D</button>
-          <button type="button" class="btn ${isAllDates ? '' : 'ghost'} small sh-date-shortcut" data-range="all" onclick="setSalesDateRange(null)" title="Show all dates">All</button>
-        </div>
+        <input id="sh-search" type="text" placeholder="🔍 Search receipt #, customer, cashier…" style="width:250px;" oninput="renderSalesHistoryTable()">
+        <button type="button" class="btn ghost small" onclick="resetAllSalesFilters()" title="Reset all search and date filters">Reset All</button>
       </div>
     </div>
 
     <!-- Filter Tabs -->
-    <div style="padding:10px 18px 0; display:flex; gap:8px; border-bottom:1px solid var(--line); flex-wrap:wrap;">
+    <div style="padding:10px 18px; display:flex; gap:8px; border-bottom:1px solid var(--line-light); background:#FAF7F2; flex-wrap:wrap;">
       <button class="btn ghost small filter-tab ${salesFilterStatus === 'all' ? 'active' : ''}" onclick="setSalesFilter('all')">All Transactions</button>
       <button class="btn ghost small filter-tab ${salesFilterStatus === 'completed' ? 'active' : ''}" onclick="setSalesFilter('completed')">Completed</button>
       <button class="btn ghost small filter-tab ${salesFilterStatus === 'partially_refunded' ? 'active' : ''}" onclick="setSalesFilter('partially_refunded')">Partial Return / Exchange</button>
       <button class="btn ghost small filter-tab ${salesFilterStatus === 'refunded' ? 'active' : ''}" onclick="setSalesFilter('refunded')">Returned / Exchanged</button>
     </div>
 
+    <!-- Dedicated Date Range Bar & Quick Presets (matches Audit Log) -->
+    <div class="audit-date-bar" style="padding:10px 18px; border-top:none; border-bottom:1px solid var(--line-light); background:#FBF9F4;">
+      <div class="audit-date-group">
+        <label class="audit-date-label">📅 Date Range:</label>
+        <div class="audit-date-field" title="Start date">
+          <span class="field-tag">From</span>
+          <input id="sh-date-from" type="date" value="${escapeHtml(salesDateFrom)}" max="${escapeHtml(salesDateTo || '')}" onchange="onSalesDateRangeChange()">
+        </div>
+        <span class="audit-date-sep">to</span>
+        <div class="audit-date-field" title="End date">
+          <span class="field-tag">To</span>
+          <input id="sh-date-to" type="date" value="${escapeHtml(salesDateTo)}" min="${escapeHtml(salesDateFrom || '')}" onchange="onSalesDateRangeChange()">
+        </div>
+        <button type="button" id="sh-clear-date-btn" class="audit-clear-date-btn" onclick="clearSalesDates()" title="Clear date range" style="display:${hasDates ? 'inline-flex' : 'none'};">✕</button>
+      </div>
+
+      <div class="audit-date-shortcuts">
+        <button type="button" class="audit-date-btn sh-date-btn ${activePreset === 'today' ? 'active' : ''}" data-preset="today" onclick="setSalesDatePreset('today')" title="Transactions today">Today</button>
+        <button type="button" class="audit-date-btn sh-date-btn ${activePreset === 'yesterday' ? 'active' : ''}" data-preset="yesterday" onclick="setSalesDatePreset('yesterday')" title="Transactions yesterday">Yesterday</button>
+        <button type="button" class="audit-date-btn sh-date-btn ${activePreset === '7d' ? 'active' : ''}" data-preset="7d" onclick="setSalesDatePreset('7d')" title="Last 7 days">7D</button>
+        <button type="button" class="audit-date-btn sh-date-btn ${activePreset === '30d' ? 'active' : ''}" data-preset="30d" onclick="setSalesDatePreset('30d')" title="Last 30 days">30D</button>
+        <button type="button" class="audit-date-btn sh-date-btn ${activePreset === 'month' ? 'active' : ''}" data-preset="month" onclick="setSalesDatePreset('month')" title="This month to date">This Month</button>
+        <button type="button" class="audit-date-btn sh-date-btn ${activePreset === 'all' ? 'active' : ''}" data-preset="all" onclick="setSalesDatePreset('all')" title="Show all transactions">All</button>
+      </div>
+
+      <div class="audit-date-info" id="sh-date-summary">
+        ${formatDateRangeSummary(salesDateFrom, salesDateTo, 'Date filter:')}
+      </div>
+    </div>
+
     <div class="panel-body tight table-scroll" id="sales-history-table">
       ${salesHistoryTableHtml()}
     </div>
   </div>`;
-}
-
-function onSalesDateRangeChange() {
-  const fromEl = document.getElementById('sh-date-from');
-  const toEl = document.getElementById('sh-date-to');
-  salesDateFrom = fromEl ? fromEl.value : '';
-  salesDateTo = toEl ? toEl.value : '';
-  if (salesDateFrom && salesDateTo && salesDateFrom > salesDateTo) {
-    const tmp = salesDateFrom;
-    salesDateFrom = salesDateTo;
-    salesDateTo = tmp;
-    if (fromEl) fromEl.value = salesDateFrom;
-    if (toEl) toEl.value = salesDateTo;
-  }
-  updateSalesDateShortcutsUI();
-  renderSalesHistoryTable();
-}
-
-function setSalesDateRange(daysAgo) {
-  if (daysAgo === null || daysAgo === undefined) {
-    salesDateFrom = '';
-    salesDateTo = '';
-  } else {
-    salesDateFrom = daysAgoISO(daysAgo);
-    salesDateTo = todayISO();
-  }
-  const fromEl = document.getElementById('sh-date-from');
-  const toEl = document.getElementById('sh-date-to');
-  if (fromEl) fromEl.value = salesDateFrom;
-  if (toEl) toEl.value = salesDateTo;
-  updateSalesDateShortcutsUI();
-  renderSalesHistoryTable();
-}
-
-function updateSalesDateShortcutsUI() {
-  const today = todayISO();
-  const d7 = daysAgoISO(6);
-  const d30 = daysAgoISO(29);
-  const activeKey = (!salesDateFrom && !salesDateTo) ? 'all'
-    : (salesDateFrom === today && salesDateTo === today) ? '0'
-    : (salesDateFrom === d7 && salesDateTo === today) ? '6'
-    : (salesDateFrom === d30 && salesDateTo === today) ? '29'
-    : '';
-  document.querySelectorAll('.sh-date-shortcut').forEach(btn => {
-    const isMatch = btn.getAttribute('data-range') === activeKey;
-    btn.classList.toggle('ghost', !isMatch);
-  });
 }
 
 function setSalesFilter(status) {
@@ -182,15 +262,15 @@ function salesHistoryTableHtml() {
     </thead>
     <tbody>
       ${list.length ? list.map(s => {
-        const status = s.status || 'completed';
-        const returnedVal = getSaleReturnedValue(s);
-        const exchangeTotal = getSaleExchangeTotal(s);
-        const refundTotal = Number(s.refundTotal || 0);
-        const netTotal = Number((s.total - refundTotal).toFixed(2));
-        const hasReturns = Array.isArray(s.returns) && s.returns.length > 0;
-        const isWithinDay = isSaleReturnWithinDay(s);
+    const status = s.status || 'completed';
+    const returnedVal = getSaleReturnedValue(s);
+    const exchangeTotal = getSaleExchangeTotal(s);
+    const refundTotal = Number(s.refundTotal || 0);
+    const netTotal = Number((s.total - refundTotal).toFixed(2));
+    const hasReturns = Array.isArray(s.returns) && s.returns.length > 0;
+    const isWithinDay = isSaleReturnWithinDay(s);
 
-        return `
+    return `
         <tr>
           <td><code style="color:var(--teal); font-weight:700;">${escapeHtml(getReceiptNo(s))}</code></td>
           <td>${formatDateTime(s.date)}</td>
@@ -200,29 +280,29 @@ function salesHistoryTableHtml() {
           <td class="center">${saleStatusBadge(status)}</td>
           <td class="right">
             ${(returnedVal > 0 || refundTotal > 0)
-              ? `<div><strong style="font-family:'Space Grotesk'; font-size:13.5px;">${peso(netTotal)}</strong></div>
+        ? `<div><strong style="font-family:'Space Grotesk'; font-size:13.5px;">${peso(netTotal)}</strong></div>
                  <div class="muted small" style="color:${exchangeTotal > 0 ? 'var(--teal)' : 'var(--danger)'}; font-size:11px;">
                    ${exchangeTotal > 0
-                     ? `Exchanged: ${peso(exchangeTotal)}`
-                     : `Returned: -${peso(returnedVal || refundTotal)}`}
+          ? `Exchanged: ${peso(exchangeTotal)}`
+          : `Returned: -${peso(returnedVal || refundTotal)}`}
                  </div>`
-              : `<strong style="font-family:'Space Grotesk'; font-size:13.5px;">${peso(s.total)}</strong>`}
+        : `<strong style="font-family:'Space Grotesk'; font-size:13.5px;">${peso(s.total)}</strong>`}
           </td>
           <td class="right" style="white-space:nowrap;">
             <div class="row wrap" style="justify-content:flex-end; gap:6px;">
               <button class="btn ghost small" onclick='viewSale("${s.id}")' title="View Sales Receipt">🧾 Receipt</button>
               ${status !== 'refunded' ? (
-                isWithinDay
-                  ? `<button class="btn secondary small" onclick='openReturnRefundModal("${s.id}")' title="Return cans and process exchange (same-day only)">↩️ Return / Exchange</button>`
-                  : `<button class="btn ghost small" disabled style="opacity:0.55; cursor:not-allowed;" title="Return / Exchange is only allowed within the same day of purchase">🔒 Return Expired</button>`
-              ) : ''}
+        isWithinDay
+          ? `<button class="btn secondary small" onclick='openReturnRefundModal("${s.id}")' title="Return cans and process exchange (same-day only)">↩️ Return / Exchange</button>`
+          : `<button class="btn ghost small" disabled style="opacity:0.55; cursor:not-allowed;" title="Return / Exchange is only allowed within the same day of purchase">🔒 Return Expired</button>`
+      ) : ''}
               ${hasReturns ? `
                 <button class="btn ghost small" onclick='viewReturnVouchers("${s.id}")' title="View return &amp; exchange slips" style="color:#856404; background:#FFF3CD; border:1px solid #FFEBAA;">📋 Slip (${s.returns.length})</button>
               ` : ''}
             </div>
           </td>
         </tr>`;
-      }).join('') : `<tr><td colspan="8" class="empty-state">No sales transactions found matching filters.</td></tr>`}
+  }).join('') : `<tr><td colspan="8" class="empty-state">No sales transactions found matching filters.</td></tr>`}
     </tbody>
   </table>`;
 }
@@ -258,7 +338,7 @@ function openReturnRefundModal(saleId) {
     const qtyPurchased = Number(item.qty || 0);
     const qtyReturned = Number(item.returnedQty || 0);
     const returnable = Math.max(0, Number((qtyPurchased - qtyReturned).toFixed(2)));
-    
+
     // Effective price customer paid per unit after discount
     const rawUnitPrice = Number(item.unitPrice !== undefined ? item.unitPrice : (item.price !== undefined ? item.price : (Number(item.lineTotal || 0) / Math.max(1, Number(item.qty || 1))))) || 0;
     const effectiveUnitPrice = discountPct > 0
@@ -319,10 +399,10 @@ function openReturnRefundModal(saleId) {
   const availableProducts = activeProducts().filter(p => Number(p.stock) > 0);
   const productOptionsHtml = availableProducts.length
     ? availableProducts.map(p => {
-        const hex = getProductHex(p);
-        const col = p.color && p.color !== '-' ? ` (${p.color})` : '';
-        return `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}${hex ? ` [${hex}]` : ''}${escapeHtml(col)} — ${escapeHtml(p.brand)} (${formatLiters(p.stock)} avail · ${peso(p.price)}/L)</option>`;
-      }).join('')
+      const hex = getProductHex(p);
+      const col = p.color && p.color !== '-' ? ` (${p.color})` : '';
+      return `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}${hex ? ` [${hex}]` : ''}${escapeHtml(col)} — ${escapeHtml(p.brand)} (${formatLiters(p.stock)} avail · ${peso(p.price)}/L)</option>`;
+    }).join('')
     : `<option value="">No products in stock</option>`;
 
   const colorMixPolicyBanner = hasColorMixItems ? `
@@ -516,9 +596,9 @@ function syncFixedExchangeLines(saleId) {
     if (item.type === 'colormix') {
       const scaledComponents = Array.isArray(item.components)
         ? item.components.map(cp => ({
-            ...cp,
-            liters: Number(((Number(cp.percentage || 0) / 100) * qtyToReturn).toFixed(2))
-          }))
+          ...cp,
+          liters: Number(((Number(cp.percentage || 0) / 100) * qtyToReturn).toFixed(2))
+        }))
         : [];
       nextCart.push({
         sourceRowIdx: idx,
@@ -701,10 +781,10 @@ function buildExchangePickerCardsHtml(saleId, ex) {
     const diffTag = isOrig
       ? `<span class="badge ok" style="font-size:10px; padding:1px 6px;">★ Same Item · Even Exchange</span>`
       : (Math.abs(priceDiff) < 0.005
-          ? `<span class="badge ok" style="font-size:10px; padding:1px 6px;">Even Exchange</span>`
-          : (priceDiff > 0
-              ? `<span class="badge mid" style="font-size:10px; padding:1px 6px;">+${peso(priceDiff)}/can</span>`
-              : `<span class="badge low" style="font-size:10px; padding:1px 6px;">${peso(priceDiff)}/can</span>`));
+        ? `<span class="badge ok" style="font-size:10px; padding:1px 6px;">Even Exchange</span>`
+        : (priceDiff > 0
+          ? `<span class="badge mid" style="font-size:10px; padding:1px 6px;">+${peso(priceDiff)}/can</span>`
+          : `<span class="badge low" style="font-size:10px; padding:1px 6px;">${peso(priceDiff)}/can</span>`));
 
     return `
       <div onclick="${enoughStock ? `onChangeFixedReplacementProduct('${saleId}', ${ex.sourceRowIdx}, '${p.id}')` : ''}"
@@ -765,11 +845,11 @@ function renderExchangeReplacementCart(saleId) {
         </thead>
         <tbody>
           ${returnExchangeCart.map(ex => {
-            if (ex.type === 'colormix') {
-              const formulaNote = Array.isArray(ex.components) && ex.components.length
-                ? ex.components.map(cp => `${cp.percentage}% ${escapeHtml(cp.name)} (${formatStock(cp.liters)}L)`).join(' + ')
-                : 'Fresh custom mix batch';
-              return `
+    if (ex.type === 'colormix') {
+      const formulaNote = Array.isArray(ex.components) && ex.components.length
+        ? ex.components.map(cp => `${cp.percentage}% ${escapeHtml(cp.name)} (${formatStock(cp.liters)}L)`).join(' + ')
+        : 'Fresh custom mix batch';
+      return `
               <tr style="background:#F8FBFB;">
                 <td>
                   <div style="display:flex; align-items:center; gap:8px;">
@@ -788,35 +868,35 @@ function renderExchangeReplacementCart(saleId) {
                 <td class="right" style="font-family:'Space Grotesk';">${peso(ex.unitPrice)}</td>
                 <td class="right" style="font-weight:700; font-family:'Space Grotesk'; color:var(--teal);">${peso(ex.lineTotal)}</td>
               </tr>`;
-            }
+    }
 
-            const fixedSize = Number(ex.size) || 1;
-            const fixedQty = Number(ex.qty) || 1;
-            const origProd = productById(ex.origProductId);
-            const selectedProd = productById(ex.productId);
-            const isPickerOpen = openExchangePickerRow === ex.sourceRowIdx;
+    const fixedSize = Number(ex.size) || 1;
+    const fixedQty = Number(ex.qty) || 1;
+    const origProd = productById(ex.origProductId);
+    const selectedProd = productById(ex.productId);
+    const isPickerOpen = openExchangePickerRow === ex.sourceRowIdx;
 
-            const selHex = selectedProd ? getProductDefaultColor(selectedProd) : '#1F6F6B';
-            const selCode = selectedProd ? getProductHex(selectedProd) : '';
-            const selRgb = hexToRgb(selHex);
-            const selDetected = detectMixedColorName(selRgb.r, selRgb.g, selRgb.b);
-            const selColorLabel = selectedProd && selectedProd.color && selectedProd.color !== '-' ? selectedProd.color : selDetected.name;
-            const isOrig = selectedProd && selectedProd.id === ex.origProductId;
+    const selHex = selectedProd ? getProductDefaultColor(selectedProd) : '#1F6F6B';
+    const selCode = selectedProd ? getProductHex(selectedProd) : '';
+    const selRgb = hexToRgb(selHex);
+    const selDetected = detectMixedColorName(selRgb.r, selRgb.g, selRgb.b);
+    const selColorLabel = selectedProd && selectedProd.color && selectedProd.color !== '-' ? selectedProd.color : selDetected.name;
+    const isOrig = selectedProd && selectedProd.id === ex.origProductId;
 
-            const priceDiffPerCan = Number((ex.unitPrice - (ex.origUnitPrice || ex.unitPrice)).toFixed(2));
-            const diffBadge = isOrig
-              ? `<span class="badge ok" style="font-size:10px; padding:1px 6px;">★ Same Item · Even Exchange</span>`
-              : (Math.abs(priceDiffPerCan) < 0.005
-                  ? `<span class="badge ok" style="font-size:10px; padding:1px 6px;">Even Exchange (₱0.00)</span>`
-                  : (priceDiffPerCan > 0
-                      ? `<span class="badge mid" style="font-size:10px; padding:1px 6px;">+${peso(priceDiffPerCan)}/can</span>`
-                      : `<span class="badge low" style="font-size:10px; padding:1px 6px;">${peso(priceDiffPerCan)}/can</span>`));
+    const priceDiffPerCan = Number((ex.unitPrice - (ex.origUnitPrice || ex.unitPrice)).toFixed(2));
+    const diffBadge = isOrig
+      ? `<span class="badge ok" style="font-size:10px; padding:1px 6px;">★ Same Item · Even Exchange</span>`
+      : (Math.abs(priceDiffPerCan) < 0.005
+        ? `<span class="badge ok" style="font-size:10px; padding:1px 6px;">Even Exchange (₱0.00)</span>`
+        : (priceDiffPerCan > 0
+          ? `<span class="badge mid" style="font-size:10px; padding:1px 6px;">+${peso(priceDiffPerCan)}/can</span>`
+          : `<span class="badge low" style="font-size:10px; padding:1px 6px;">${peso(priceDiffPerCan)}/can</span>`));
 
-            const recCount = origProd
-              ? allProds.filter(p => p.id === ex.origProductId || p.type === origProd.type || p.brand === origProd.brand).length
-              : allProds.length;
+    const recCount = origProd
+      ? allProds.filter(p => p.id === ex.origProductId || p.type === origProd.type || p.brand === origProd.brand).length
+      : allProds.length;
 
-            return `
+    return `
             <tr>
               <td>
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; background:#FAF7F2; border:1px solid var(--line); border-radius:8px; padding:8px 12px;">
@@ -874,7 +954,7 @@ function renderExchangeReplacementCart(saleId) {
               <td class="right" style="font-family:'Space Grotesk';">${peso(ex.unitPrice)}</td>
               <td class="right" style="font-weight:700; font-family:'Space Grotesk'; color:var(--teal);">${peso(ex.lineTotal)}</td>
             </tr>`;
-          }).join('')}
+  }).join('')}
         </tbody>
       </table>
     </div>`;
@@ -1322,8 +1402,8 @@ function showReturnVoucherModal(saleId, voucherId) {
   const restockBadgeHtml = voucher.restocked
     ? '<span class="badge ok">✓ Restocked into inventory</span>'
     : (onlyColorMixReturned
-        ? '<span class="badge low">🎨 Miscast Mix (Not Restocked to Base Cans)</span>'
-        : '<span class="badge low">✕ Damaged / Not Restocked</span>');
+      ? '<span class="badge low">🎨 Miscast Mix (Not Restocked to Base Cans)</span>'
+      : '<span class="badge low">✕ Damaged / Not Restocked</span>');
 
   const exItems = Array.isArray(voucher.exchangeItems) ? voucher.exchangeItems : [];
   const exchangeHtml = exItems.length ? `
@@ -1339,11 +1419,11 @@ function showReturnVoucherModal(saleId, voucherId) {
       </thead>
       <tbody>
         ${exItems.map(ex => {
-          if (ex.type === 'colormix') {
-            const formulaStr = Array.isArray(ex.components) && ex.components.length
-              ? ` · Formula: ${ex.components.map(cp => `${cp.percentage}% ${escapeHtml(cp.name)}`).join(' + ')}`
-              : '';
-            return `
+    if (ex.type === 'colormix') {
+      const formulaStr = Array.isArray(ex.components) && ex.components.length
+        ? ` · Formula: ${ex.components.map(cp => `${cp.percentage}% ${escapeHtml(cp.name)}`).join(' + ')}`
+        : '';
+      return `
             <tr>
               <td>
                 <b>${escapeHtml(ex.name)}</b> <span class="muted small">(${escapeHtml(ex.colorName || ex.color || 'Custom Shade')})</span>
@@ -1353,9 +1433,9 @@ function showReturnVoucherModal(saleId, voucherId) {
               <td class="right">${peso(ex.unitPrice)}</td>
               <td class="right" style="font-weight:700; color:var(--teal);">${peso(ex.lineTotal)}</td>
             </tr>`;
-          }
-          const exHex = ex.productId ? getProductHex(productById(ex.productId)) : '';
-          return `
+    }
+    const exHex = ex.productId ? getProductHex(productById(ex.productId)) : '';
+    return `
           <tr>
             <td>
               <b>${escapeHtml(ex.name)}</b> ${exHex ? `<span class="muted small" style="font-family:monospace; font-weight:600; color:var(--teal);">(${exHex})</span>` : ''}
@@ -1366,7 +1446,7 @@ function showReturnVoucherModal(saleId, voucherId) {
             <td class="right">${peso(ex.unitPrice)}</td>
             <td class="right" style="font-weight:700; color:var(--teal);">${peso(ex.lineTotal)}</td>
           </tr>`;
-        }).join('')}
+  }).join('')}
       </tbody>
     </table>
   ` : '';

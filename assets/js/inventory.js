@@ -5,6 +5,7 @@ let invSortField = 'name';
 let invSortAsc = true;
 let invTypeFilter = '';
 let invStatusFilter = '';
+let invSearchQuery = '';
 let invExpandedProductIds = new Set();
 let invExpandedMovementsProductIds = new Set();
 
@@ -45,7 +46,7 @@ function inventoryPage() {
   const recentMoves = groupStockMovements(db.movements).slice(0, 25);
   const pendingProducts = (db.products || []).filter(p => p.status === 'pending_approval' || Boolean(p.pendingEdit) || (p.pendingSizes && p.pendingSizes.length > 0) || (p.pendingPrice != null && Number(p.pendingPrice) > 0));
 
-  const productTypes = Array.from(new Set(db.products.map(p => p.type).filter(t => t && t.toLowerCase() !== 'accessory')));
+  const productTypes = Array.from(new Set((db && Array.isArray(db.products) ? db.products : []).map(p => p && (p.type || p.category)).filter(t => t && String(t).toLowerCase() !== 'accessory')));
 
   return `
   <div class="panel">
@@ -67,18 +68,18 @@ function inventoryPage() {
     <div class="inv-toolbar">
       <div class="inv-search-wrap">
         <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-        <input id="inv-search" class="inv-input" type="text" placeholder="Search name, brand, type, color…" oninput="renderInventoryTable()">
+        <input id="inv-search" class="inv-input" type="text" placeholder="Search name, brand, type, color…" value="${escapeHtml(invSearchQuery)}" oninput="renderInventoryTable()" onchange="renderInventoryTable()">
       </div>
       <select id="inv-type-filter" class="inv-select inv-select-type" onchange="renderInventoryTable()">
         <option value="">All Categories</option>
-        ${productTypes.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
+        ${productTypes.map(t => `<option value="${escapeHtml(t)}" ${invTypeFilter === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
       </select>
       <select id="inv-status-filter" class="inv-select inv-select-status" onchange="renderInventoryTable()">
-        <option value="">All Status</option>
-        <option value="in">In Stock</option>
-        <option value="low">Low Stock</option>
-        <option value="out">Out of Stock</option>
-        <option value="pending">⏳ Pending Approval</option>
+        <option value="" ${!invStatusFilter ? 'selected' : ''}>All Status</option>
+        <option value="in" ${invStatusFilter === 'in' ? 'selected' : ''}>In Stock</option>
+        <option value="low" ${invStatusFilter === 'low' ? 'selected' : ''}>Low Stock</option>
+        <option value="out" ${invStatusFilter === 'out' ? 'selected' : ''}>Out of Stock</option>
+        <option value="pending" ${invStatusFilter === 'pending' ? 'selected' : ''}>⏳ Pending Approval</option>
       </select>
       <select id="inv-sort-select" class="inv-select inv-select-sort" onchange="onInventorySortSelectChange()">
         <option value="name_asc" ${invSortField === 'name' && invSortAsc ? 'selected' : ''}>Sort: Name (A &rarr; Z)</option>
@@ -116,16 +117,28 @@ function inventoryPage() {
 }
 
 function renderInventoryTable() {
+  const searchInput = document.getElementById('inv-search');
+  if (searchInput) invSearchQuery = searchInput.value;
+  const typeSelect = document.getElementById('inv-type-filter');
+  if (typeSelect) invTypeFilter = typeSelect.value;
+  const statusSelect = document.getElementById('inv-status-filter');
+  if (statusSelect) invStatusFilter = statusSelect.value;
+
   const tableEl = document.getElementById('inventory-table');
   if (tableEl) tableEl.innerHTML = inventoryTableHtml();
 }
 
+function filterInventory() {
+  renderInventoryTable();
+}
+
 function suppliersForProduct(productId) {
-  return (db.suppliers || []).filter(s => (s.productIds || []).includes(productId));
+  if (!productId) return [];
+  return (db && Array.isArray(db.suppliers) ? db.suppliers : []).filter(s => s && Array.isArray(s.productIds) && s.productIds.includes(productId));
 }
 
 function supplierNamesForProduct(productId) {
-  return suppliersForProduct(productId).map(s => s.name).join(', ');
+  return suppliersForProduct(productId).map(s => (s && s.name) ? s.name : '').filter(Boolean).join(', ');
 }
 
 function supplierBadgesHtml(productId) {
@@ -243,8 +256,9 @@ function productInventoryDetailsHtml(p) {
     statusMessage += ` <span style="display:block; margin-top:4px; color:#1B4F72; font-weight:600;">🚚 Purchase Order ${openPOsForThis.map(o => o.poNumber).join(', ')} is currently active (${poStatusBadgeText(openPOsForThis[0].status)}). Delivery pending.</span>`;
   }
 
-  // Sealed Cans Cards
-  const canCards = productSizes(p).map(s => {
+  // Sealed Cans Rows (clean horizontal row-based layout)
+  const sortedSizes = (productSizes(p) || []).slice().sort((a, b) => Number(a) - Number(b));
+  const canRowsHtml = sortedSizes.map(s => {
     const count = productCanCount(p, s);
     const sizeThresh = productSizeThreshold(p, s);
     const totalLitersForSize = count * s;
@@ -257,37 +271,64 @@ function productInventoryDetailsHtml(p) {
     const targetScale = Math.max(sizeThresh * 2, 2);
     const fillPct = Math.min(100, Math.max(count > 0 ? 8 : 0, Math.round((count / targetScale) * 100)));
 
-    let cardStatusClass = '';
-    let barColor = 'var(--teal)';
-    let statusBadge = `<span class="inv-can-status-tag" style="color:var(--teal);">🟢 Good (Min: ${sizeThresh} ${canWord} · ${formatLiters(threshLitersForSize)})</span>`;
+    let rowStatusClass = '';
+    let barColor = '#10B981'; // Green for Good
+    let statusText = 'Good';
 
     if (status === 'out') {
-      cardStatusClass = 'card-out';
-      barColor = 'var(--danger)';
-      statusBadge = `<span class="inv-can-status-tag" style="color:var(--danger);">🔴 Out (Min: ${sizeThresh} ${canWord} · ${formatLiters(threshLitersForSize)})</span>`;
+      rowStatusClass = 'row-out';
+      barColor = '#EF4444'; // Red for Out
+      statusText = 'Out';
     } else if (status === 'low') {
-      cardStatusClass = 'card-low';
-      barColor = '#D97706';
-      statusBadge = `<span class="inv-can-status-tag" style="color:#D97706;">🟡 Low (${count}/${sizeThresh} ${canWord} min · ${formatLiters(threshLitersForSize)})</span>`;
+      rowStatusClass = 'row-low';
+      barColor = '#F59E0B'; // Yellow/Orange for Low
+      statusText = 'Low';
     }
 
+    const titleText = `${fmtSize(s)}: ${count} in stock, minimum ${sizeThresh} ${canWord} (${formatLiters(threshLitersForSize)})`;
+
     return `
-      <div class="inv-friendly-can-card ${cardStatusClass}" title="${fmtSize(s)}: ${count} in stock, minimum ${sizeThresh} ${canWord} (${formatLiters(threshLitersForSize)})">
-        <div class="inv-can-type-header">
-          <span>${icon}</span>
-          <span>${fmtSize(s)} ${unitLabel}</span>
-        </div>
-        <div class="inv-can-big-count" style="color:${status === 'out' ? 'var(--danger)' : (status === 'low' ? '#D97706' : 'var(--ink)')};">
-          ${count}
-        </div>
-        <div class="inv-can-unit">
-          ${count === 1 ? 'can' : 'cans'} <span style="color:var(--teal); font-weight:600;">(${formatLiters(totalLitersForSize)})</span>
-        </div>
-        <div class="inv-can-bar-wrap">
-          <div class="inv-can-bar-fill" style="width:${status === 'out' ? '0%' : fillPct + '%'}; background:${barColor};"></div>
-        </div>
-        ${statusBadge}
-      </div>
+      <tr class="${rowStatusClass}" title="${escapeHtml(titleText)}">
+        <!-- 1. Container Size (Left aligned) -->
+        <td class="inv-td-size">
+          <div class="inv-can-cell-size">
+            <span class="inv-can-row-icon">${icon}</span>
+            <span class="inv-can-row-name">${fmtSize(s)} ${unitLabel}</span>
+          </div>
+        </td>
+
+        <!-- 2. Stock Quantity (Center aligned) -->
+        <td class="inv-td-qty">
+          <span class="inv-can-row-qty-num ${status === 'out' ? 'is-out' : (status === 'low' ? 'is-low' : '')}">${count}</span>
+          <span class="inv-can-row-qty-unit">${count === 1 ? 'can' : 'cans'}</span>
+        </td>
+
+        <!-- 3. Total Volume (Center aligned) -->
+        <td class="inv-td-vol">
+          <span class="inv-can-row-vol-val">${formatLiters(totalLitersForSize)}</span>
+        </td>
+
+        <!-- 4. Stock Progress Bar (Center aligned) -->
+        <td class="inv-td-progress" title="${fillPct}% stock level">
+          <div class="inv-can-row-bar-wrap">
+            <div class="inv-can-row-bar-fill" style="width:${status === 'out' ? '0%' : fillPct + '%'}; background:${barColor};"></div>
+          </div>
+        </td>
+
+        <!-- 5. Minimum Stock Threshold (Center aligned) -->
+        <td class="inv-td-min">
+          <span>Min: <strong>${sizeThresh}</strong> ${canWord}</span>
+          <span class="inv-can-row-min-liters">(${formatLiters(threshLitersForSize)})</span>
+        </td>
+
+        <!-- 6. Stock Status (Center aligned) -->
+        <td class="inv-td-status">
+          <span class="inv-can-status-badge status-${status}">
+            <span class="inv-status-dot"></span>
+            ${statusText}
+          </span>
+        </td>
+      </tr>
     `;
   }).join('');
 
@@ -364,7 +405,16 @@ function productInventoryDetailsHtml(p) {
             <button type="button" class="btn small" style="background:#1F6F6B; color:#fff;" onclick="event.stopPropagation(); approvePendingProduct('${p.id}')">✓ Approve Product</button>
             <button type="button" class="btn secondary small danger" onclick="event.stopPropagation(); rejectPendingProduct('${p.id}')">✕ Reject Product</button>
           ` : ''}
-          ${currentUser && currentUser.role === 'staff' ? `<button type="button" class="btn secondary small" onclick="event.stopPropagation(); openProductModal('${p.id}')">${p.pendingEdit ? '✏️ Edit / Update Request' : '✏️ Edit Product'}</button>` : ''}
+          ${canManage ? `
+            <button type="button" id="inv-detail-edit-btn-${p.id}" class="btn secondary small inv-detail-edit-btn" onclick="event.stopPropagation(); openProductModal('${p.id}')">
+              ${currentUser && currentUser.role === 'admin' ? '✏️ Edit Product' : (p.pendingEdit ? '✏️ Edit / Update Request' : '✏️ Edit Product')}
+            </button>
+          ` : ''}
+          ${currentUser && currentUser.role === 'admin' && p.status !== 'pending_approval' ? `
+            <button type="button" class="btn secondary small ${p.status === 'active' ? 'danger' : ''}" onclick="event.stopPropagation(); toggleProductStatus('${p.id}')">
+              ${p.status === 'active' ? '🚫 Deactivate' : '✓ Activate'}
+            </button>
+          ` : ''}
           ${canManage ? `<button type="button" class="btn small" onclick="event.stopPropagation(); goToAdjustment('${p.id}')">⚖️ Adjust Stock</button>` : ''}
           ${productHasOpenPO(p.id) ? `
             <button type="button" class="btn secondary small" style="background:#EBF5FB; border-color:#AED6F1; color:#1B4F72;" onclick="event.stopPropagation(); openPODetail('${openPOsForProduct(p.id)[0].id}')">
@@ -451,9 +501,37 @@ function productInventoryDetailsHtml(p) {
             <span class="inv-box-title">📦 Ready-to-Sell Sealed Cans</span>
             <span class="inv-box-meta">Total: <b>${formatLiters(stock)}</b></span>
           </div>
-          <div class="inv-can-cards-row">
-            ${canCards}
-          </div>
+          ${sortedSizes.length ? `
+            <div class="inv-can-table-wrap">
+              <table class="inv-can-table">
+                <colgroup>
+                  <col style="width: 155px;">
+                  <col style="width: 135px;">
+                  <col style="width: 125px;">
+                  <col style="width: 160px;">
+                  <col style="width: 150px;">
+                  <col style="width: 105px;">
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th class="inv-th-size">Container Size</th>
+                    <th class="inv-th-qty">Stock Quantity</th>
+                    <th class="inv-th-vol">Total Volume</th>
+                    <th class="inv-th-progress">Stock Level</th>
+                    <th class="inv-th-min">Min. Threshold</th>
+                    <th class="inv-th-status">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${canRowsHtml}
+                </tbody>
+              </table>
+            </div>
+          ` : `
+            <div class="inv-can-empty-sizes">
+              No container sizes configured for this product.
+            </div>
+          `}
         </div>
 
         <!-- 2. Opened Stock & Price Reference -->
@@ -623,64 +701,156 @@ function productMovementHistoryHtml(p, isAllExpanded = false) {
   `;
 }
 
+function getProductSearchableText(p) {
+  if (!p || typeof p !== 'object') return '';
+
+  const parts = [];
+
+  // 1. Product Name
+  if (p.name != null) parts.push(String(p.name));
+
+  // 2. Brand
+  if (p.brand != null) parts.push(String(p.brand));
+
+  // 3. Supplier(s)
+  if (typeof supplierNamesForProduct === 'function') {
+    const sNames = supplierNamesForProduct(p.id);
+    if (sNames) parts.push(sNames);
+  }
+  if (typeof p.supplier === 'string' && p.supplier) parts.push(p.supplier);
+  if (p.supplier && typeof p.supplier === 'object' && p.supplier.name) parts.push(String(p.supplier.name));
+  if (typeof p.supplierName === 'string' && p.supplierName) parts.push(p.supplierName);
+  if (typeof p.supplier_name === 'string' && p.supplier_name) parts.push(p.supplier_name);
+
+  // 4. Product Type / Category
+  if (p.type != null) parts.push(String(p.type));
+  if (p.category != null) parts.push(String(p.category));
+
+  // 5. Color Name
+  if (p.color != null && p.color !== '-') parts.push(String(p.color));
+  if (p.colorName != null) parts.push(String(p.colorName));
+  if (p.color_name != null) parts.push(String(p.color_name));
+
+  // 6. Color Hex Code (e.g. #1F6F6B) & Detected / Related Color Name
+  let hex = '';
+  try {
+    if (typeof getProductDefaultColor === 'function') {
+      hex = getProductDefaultColor(p);
+    } else if (typeof getProductHex === 'function') {
+      hex = getProductHex(p);
+    }
+  } catch (e) {
+    hex = '';
+  }
+  if (!hex && p.color && typeof p.color === 'string' && p.color.startsWith('#')) {
+    hex = p.color;
+  }
+  if (!hex && p.hex) hex = String(p.hex);
+  if (!hex && p.colorHex) hex = String(p.colorHex);
+  if (!hex && p.color_hex) hex = String(p.color_hex);
+
+  if (hex) {
+    parts.push(hex);
+    if (hex.startsWith('#')) {
+      parts.push(hex.substring(1));
+    }
+
+    try {
+      if (typeof hexToRgb === 'function' && typeof detectMixedColorName === 'function') {
+        const rgb = hexToRgb(hex);
+        if (rgb) {
+          const detected = detectMixedColorName(rgb.r, rgb.g, rgb.b);
+          if (detected && detected.name) {
+            parts.push(detected.name);
+          }
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  return parts.join(' ').toLowerCase();
+}
+
 function inventoryTableHtml() {
   const canManage = currentUser && (currentUser.role === 'admin' || currentUser.role === 'staff');
-  const q = (document.getElementById('inv-search') ? document.getElementById('inv-search').value : '').toLowerCase();
-  const typeFilter = document.getElementById('inv-type-filter') ? document.getElementById('inv-type-filter').value : '';
-  const statusFilter = document.getElementById('inv-status-filter') ? document.getElementById('inv-status-filter').value : '';
+  const searchInput = document.getElementById('inv-search');
+  const rawQ = searchInput ? searchInput.value : (invSearchQuery || '');
+  invSearchQuery = rawQ;
+  const q = String(rawQ || '').trim().toLowerCase();
 
-  let list = db.products;
+  const typeFilterEl = document.getElementById('inv-type-filter');
+  const typeFilter = typeFilterEl ? typeFilterEl.value : (invTypeFilter || '');
+  invTypeFilter = typeFilter;
 
-  // Search filter
+  const statusFilterEl = document.getElementById('inv-status-filter');
+  const statusFilter = statusFilterEl ? statusFilterEl.value : (invStatusFilter || '');
+  invStatusFilter = statusFilter;
+
+  let list = (db && Array.isArray(db.products)) ? [...db.products] : [];
+  list = list.filter(p => p && (p.type || '').toLowerCase() !== 'accessory');
+
+  // Search filter (real-time, multi-keyword partial matching, case-insensitive, AND logic)
   if (q) {
-    list = list.filter(p => [p.name, p.brand, p.type, p.color, supplierNamesForProduct(p.id)].join(' ').toLowerCase().includes(q));
+    const keywords = q
+      .split(/\s+/)
+      .map(k => k.trim().replace(/^[,;]+|[,;]+$/g, ''))
+      .filter(Boolean);
+    if (keywords.length > 0) {
+      list = list.filter(p => {
+        const text = getProductSearchableText(p);
+        return keywords.every(kw => text.includes(kw));
+      });
+    }
   }
 
   // Type / Category filter
   if (typeFilter) {
-    list = list.filter(p => p.type === typeFilter);
+    list = list.filter(p => p && ((p.type && p.type === typeFilter) || (p.category && p.category === typeFilter)));
   }
 
   // Status / Stock filter
   if (statusFilter === 'in') {
-    list = list.filter(p => p.status === 'active' && !productHasLowStock(p) && (Number(p.stock) || 0) > 0);
+    list = list.filter(p => p && p.status === 'active' && !productHasLowStock(p) && (Number(p.stock) || 0) > 0);
   } else if (statusFilter === 'low') {
-    list = list.filter(p => p.status === 'active' && productHasLowStock(p) && (Number(p.stock) || 0) > 0);
+    list = list.filter(p => p && p.status === 'active' && productHasLowStock(p) && (Number(p.stock) || 0) > 0);
   } else if (statusFilter === 'out') {
-    list = list.filter(p => p.status === 'active' && (Number(p.stock) || 0) <= 0);
+    list = list.filter(p => p && p.status === 'active' && (Number(p.stock) || 0) <= 0);
   } else if (statusFilter === 'pending') {
-    list = list.filter(p => p.status === 'pending_approval' || Boolean(p.pendingEdit) || (p.pendingSizes && p.pendingSizes.length > 0) || (p.pendingPrice != null && Number(p.pendingPrice) > 0));
+    list = list.filter(p => p && (p.status === 'pending_approval' || Boolean(p.pendingEdit) || (p.pendingSizes && p.pendingSizes.length > 0) || (p.pendingPrice != null && Number(p.pendingPrice) > 0)));
   }
 
   // Sorting
   list = [...list].sort((a, b) => {
     let valA, valB;
     if (invSortField === 'name') {
-      valA = (a.name || '').toLowerCase();
-      valB = (b.name || '').toLowerCase();
+      valA = (a && a.name ? String(a.name) : '').toLowerCase();
+      valB = (b && b.name ? String(b.name) : '').toLowerCase();
     } else if (invSortField === 'brand') {
-      valA = (a.brand || '').toLowerCase();
-      valB = (b.brand || '').toLowerCase();
+      valA = (a && a.brand ? String(a.brand) : '').toLowerCase();
+      valB = (b && b.brand ? String(b.brand) : '').toLowerCase();
     } else if (invSortField === 'type') {
-      valA = (a.type || '').toLowerCase();
-      valB = (b.type || '').toLowerCase();
+      valA = (a && (a.type || a.category) ? String(a.type || a.category) : '').toLowerCase();
+      valB = (b && (b.type || b.category) ? String(b.type || b.category) : '').toLowerCase();
     } else if (invSortField === 'supplier') {
-      valA = supplierNamesForProduct(a.id).toLowerCase();
-      valB = supplierNamesForProduct(b.id).toLowerCase();
+      valA = supplierNamesForProduct(a ? a.id : '').toLowerCase();
+      valB = supplierNamesForProduct(b ? b.id : '').toLowerCase();
     } else if (invSortField === 'price') {
-      valA = Number(a.price) || 0;
-      valB = Number(b.price) || 0;
+      valA = Number(a ? a.price : 0) || 0;
+      valB = Number(b ? b.price : 0) || 0;
     } else if (invSortField === 'stock') {
-      valA = Number(a.stock) || 0;
-      valB = Number(b.stock) || 0;
+      valA = Number(a ? a.stock : 0) || 0;
+      valB = Number(b ? b.stock : 0) || 0;
     } else if (invSortField === 'openedStock') {
-      valA = productOpenedStock(a);
-      valB = productOpenedStock(b);
+      valA = a ? productOpenedStock(a) : 0;
+      valB = b ? productOpenedStock(b) : 0;
     } else if (invSortField === 'threshold') {
-      valA = productTotalThresholdLiters(a) || Number(a.threshold) || 0;
-      valB = productTotalThresholdLiters(b) || Number(b.threshold) || 0;
+      valA = a ? (productTotalThresholdLiters(a) || Number(a.threshold) || 0) : 0;
+      valB = b ? (productTotalThresholdLiters(b) || Number(b.threshold) || 0) : 0;
     } else if (invSortField === 'status') {
       const getStatusRank = p => {
+        if (!p) return 0;
         const s = Number(p.stock) || 0;
         if (s <= 0) return 0;
         if (productHasLowStock(p)) return 1;
@@ -689,8 +859,8 @@ function inventoryTableHtml() {
       valA = getStatusRank(a);
       valB = getStatusRank(b);
     } else {
-      valA = (a.name || '').toLowerCase();
-      valB = (b.name || '').toLowerCase();
+      valA = (a && a.name ? String(a.name) : '').toLowerCase();
+      valB = (b && b.name ? String(b.name) : '').toLowerCase();
     }
 
     if (valA < valB) return invSortAsc ? -1 : 1;
@@ -797,6 +967,11 @@ function inventoryTableHtml() {
             📋 PO
           </button>
         ` : ''))}
+        ${canManage ? `
+          <button type="button" id="inv-edit-btn-${p.id}" class="btn secondary small inv-edit-btn" style="padding:4px 8px; margin-right:4px;" onclick="event.stopPropagation(); openProductModal('${p.id}')" title="Edit product details">
+            ✏️ Edit
+          </button>
+        ` : ''}
         <button id="inv-toggle-btn-${p.id}" class="btn ${isExpanded ? 'ghost' : 'secondary'} small" onclick="event.stopPropagation(); toggleProductInventoryDetails('${p.id}')" title="Expand / collapse Stock per Size, Opened/Used, Threshold &amp; Status">
           ${isExpanded ? '▴ Close' : '▾ Details'}
         </button>
@@ -808,7 +983,7 @@ function inventoryTableHtml() {
       </td>
     </tr>`;
   }).join('')
-      : `<tr><td colspan="7" class="empty-state">No products found matching the criteria.</td></tr>`}
+      : `<tr><td colspan="7" class="empty-state" style="text-align:center; padding:32px 16px;">No products found</td></tr>`}
 </tbody>
   </table>`;
 }

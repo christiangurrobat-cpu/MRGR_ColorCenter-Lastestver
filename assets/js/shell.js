@@ -52,10 +52,10 @@ function getModuleNotificationCount(moduleId, role) {
       } else {
         total += (db.adjustmentRequests || []).filter(r => r.status === 'pending').length;
       }
-      total += (db.products || []).filter(p => 
-        p.status === 'pending_approval' || 
-        Boolean(p.pendingEdit) || 
-        (p.pendingSizes && p.pendingSizes.length > 0) || 
+      total += (db.products || []).filter(p =>
+        p.status === 'pending_approval' ||
+        Boolean(p.pendingEdit) ||
+        (p.pendingSizes && p.pendingSizes.length > 0) ||
         (p.pendingPrice != null && Number(p.pendingPrice) > 0)
       ).length;
       total += (db.purchaseOrders || []).filter(o => o.status === 'pending').length;
@@ -99,10 +99,10 @@ function getModuleNotificationCount(moduleId, role) {
     }
 
     case 'inventory': {
-      const pendingInv = (db.products || []).filter(p => 
-        p.status === 'pending_approval' || 
-        Boolean(p.pendingEdit) || 
-        (p.pendingSizes && p.pendingSizes.length > 0) || 
+      const pendingInv = (db.products || []).filter(p =>
+        p.status === 'pending_approval' ||
+        Boolean(p.pendingEdit) ||
+        (p.pendingSizes && p.pendingSizes.length > 0) ||
         (p.pendingPrice != null && Number(p.pendingPrice) > 0)
       );
       if (currentRole === 'staff') {
@@ -998,8 +998,22 @@ function movementProductLabel(movement) {
 }
 function supplierById(id) { return db.suppliers.find(s => s.id === id); }
 function salesOn(iso) { return db.sales.filter(s => s.date.slice(0, 10) === iso); }
-function salesBetween(fromISO, toISO) { return db.sales.filter(s => s.date.slice(0, 10) >= fromISO && s.date.slice(0, 10) <= toISO); }
-function movementsBetween(fromISO, toISO) { return db.movements.filter(m => m.date.slice(0, 10) >= fromISO && m.date.slice(0, 10) <= toISO); }
+function salesBetween(fromISO, toISO) {
+  return db.sales.filter(s => {
+    const d = s.date.slice(0, 10);
+    if (fromISO && d < fromISO) return false;
+    if (toISO && d > toISO) return false;
+    return true;
+  });
+}
+function movementsBetween(fromISO, toISO) {
+  return db.movements.filter(m => {
+    const d = m.date.slice(0, 10);
+    if (fromISO && d < fromISO) return false;
+    if (toISO && d > toISO) return false;
+    return true;
+  });
+}
 function purchaseOrdersBetween(fromISO, toISO) {
   return (db.purchaseOrders || []).filter(o => {
     const d = String(o.orderDate || '').slice(0, 10);

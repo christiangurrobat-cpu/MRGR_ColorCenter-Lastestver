@@ -139,10 +139,12 @@ function canBreakdownHtml(p) {
 }
 
 function openProductModal(id) {
-  if (!currentUser || currentUser.role !== 'staff') {
-    showToast('Only Inventory Staff can add or edit products. Administrators review and approve requests.', 'error');
+  const user = currentUser || (typeof db !== 'undefined' && db && db.users ? db.users.find(u => u.role === 'admin') : null);
+  if (!user || (user.role !== 'staff' && user.role !== 'admin')) {
+    showToast('Only Administrators and Inventory Staff can add or edit products.', 'error');
     return;
   }
+  const isAdmin = user.role === 'admin';
   const p = id ? productById(id) : null;
   productFormEditingId = p ? p.id : null;
 
@@ -175,16 +177,83 @@ function openProductModal(id) {
   const initialColor = (prop && prop.color !== undefined) ? prop.color : (p ? p.color : '');
   const currentColorHex = getProductHex({ color: initialColor, name: initialName });
 
-  openModal(p ? (pending ? 'Update Product Edit Request (Staff)' : 'Edit Product (Staff Request)') : 'Add New Product (Staff Request)', `
-<form id="product-form" onsubmit="return submitProduct(event, ${p ? `'${p.id}'` : 'null'})">
-  <div class="form-grid">
-    ${p ? `
+  const currentSuppliers = p ? (typeof suppliersForProduct === 'function' ? suppliersForProduct(p.id) : []) : [];
+  const initialSupplierId = (prop && prop.supplierId !== undefined)
+    ? prop.supplierId
+    : (currentSuppliers.length > 0 ? currentSuppliers[0].id : (p && p.supplierId ? p.supplierId : ''));
+
+  const defaultTypes = ['Automotive Paint', 'House Paint', 'Specialty Paint'];
+  const existingTypes = (db && Array.isArray(db.products) ? db.products : []).map(x => x && (x.type || x.category)).filter(Boolean);
+  const allTypes = Array.from(new Set([...defaultTypes, ...existingTypes, initialType].filter(Boolean)));
+  const allSuppliers = (db && Array.isArray(db.suppliers) ? db.suppliers : []);
+
+  const modalTitle = p ? `Edit Product: ${p.name}` : (isAdmin ? 'Add New Product' : 'Add New Product (Staff Request)');
+  const submitButtonLabel = p ? 'Save Changes' : (isAdmin ? 'Save Product' : 'Submit for Approval →');
+
+  const bannerNoticeHtml = isAdmin ? (
+    p ? (
+      pending ? `
+        <div class="full" style="background:#FEF3C7; border:1px solid #FCD34D; border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:4px; font-size:12px; color:#92400E;">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;">
+            <div style="flex:1; min-width:240px;">
+              <div style="font-weight:700; font-size:13px; display:flex; align-items:center; gap:6px;">
+                <span>⏳</span>
+                <span>May nakabinbing edit request mula kay ${escapeHtml(pending.requestedBy || 'Inventory Staff')}</span>
+              </div>
+              <div style="margin-top:3px; color:#78350F;">
+                Isinumite noong ${formatDateTime(pending.requestedAt || nowISO())} (${Object.keys(pending.changes || {}).length} field change(s)). Bilang Administrator, kapag pinindot mo ang <b>Save Changes</b>, direktang mailalapat ang mga detalye at mareresolba ang pending request.
+              </div>
+            </div>
+            <div>
+              <button type="button" class="btn secondary small danger" style="padding:5px 12px; font-size:11.5px; white-space:nowrap;" onclick="cancelProductPendingEdit('${p.id}')">✕ Reject / Cancel Request</button>
+            </div>
+          </div>
+        </div>
+      ` : `
+        <div class="full" style="background:#EAF4F3; border:1px solid #C5DFDC; border-radius:var(--radius-sm); padding:10px 14px; margin-bottom:4px; font-size:12px; color:var(--teal-dark); display:flex; gap:8px; align-items:flex-start;">
+          <span style="font-size:16px; line-height:1;">⚡</span>
+          <div>
+            <strong>Administrator Direct Edit:</strong> Lahat ng pagbabago (pangalan, brand, uri, presyo, sukat, at threshold) ay direktang magiging epektibo agad sa buong sistema.
+          </div>
+        </div>
+      `
+    ) : `
+      <div class="full" style="background:#EAF4F3; border:1px solid #C5DFDC; border-radius:var(--radius-sm); padding:10px 14px; margin-bottom:4px; font-size:12px; color:var(--teal-dark); display:flex; gap:8px; align-items:flex-start;">
+        <span style="font-size:16px; line-height:1;">⚡</span>
+        <div>
+          <strong>Administrator Direct Entry:</strong> Ang bagong produktong ito ay direktang malilikha bilang <b>Active</b> at magiging handa kaagad para sa POS, bodega, at Purchase Orders nang hindi na nangangailangan ng approval.
+        </div>
+      </div>
+    `
+  ) : (
+    p ? `
       <div class="full" style="background:#FFFBEB; border:1px solid #FCD34D; border-radius:var(--radius-sm); padding:10px 14px; margin-bottom:4px; font-size:12px; color:#92400E; display:flex; gap:8px; align-items:flex-start;">
         <span style="font-size:16px; line-height:1;">ℹ️</span>
         <div>
           <strong>Staff Edit Request:</strong> Bilang Inventory Staff, maaari mong i-edit ang detalye ng produkto (pangalan, brand, type, kulay, presyo, sukat, at minimum thresholds). Lahat ng pagbabago ay isusumite para sa <b>Administrator Approval</b> bago maging aktibo sa tindahan.
         </div>
       </div>
+      ${pending ? `
+        <div class="full" style="background:#FEF3C7; border:1px solid #FCD34D; border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:4px; font-size:12px; color:#92400E;">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;">
+            <div style="flex:1; min-width:240px;">
+              <div style="font-weight:700; font-size:13px; display:flex; align-items:center; gap:6px;">
+                <span>⏳</span>
+                <span>May nakabinbin nang edit request para sa produktong ito</span>
+              </div>
+              <div style="margin-top:3px; color:#78350F;">
+                Isinumite ni <b>${escapeHtml(pending.requestedBy || 'Inventory Staff')}</b> noong ${formatDateTime(pending.requestedAt || nowISO())} (${Object.keys(pending.changes || {}).length} field change(s) awaiting Admin approval).
+              </div>
+              <div style="margin-top:4px; font-size:11.5px; color:#B45309;">
+                💡 <em>Naka-load sa form ang kasalukuyang proposed values. Kapag nag-save ka, ia-update nito ang nakabinbing request para sa Admin.</em>
+              </div>
+            </div>
+            <div>
+              <button type="button" class="btn secondary small danger" style="padding:5px 12px; font-size:11.5px; white-space:nowrap;" onclick="cancelProductPendingEdit('${p.id}')">✕ Cancel / Withdraw Request</button>
+            </div>
+          </div>
+        </div>
+      ` : ''}
     ` : `
       <div class="full" style="background:#FFFBEB; border:1px solid #FCD34D; border-radius:var(--radius-sm); padding:10px 14px; margin-bottom:4px; font-size:12px; color:#92400E; display:flex; gap:8px; align-items:flex-start;">
         <span style="font-size:16px; line-height:1;">ℹ️</span>
@@ -192,44 +261,71 @@ function openProductModal(id) {
           <strong>Staff Product Request:</strong> Bilang Inventory Staff, ang bagong produktong ito ay isusumite bilang <b>Pending Approval</b> para suriin at aprubahan ng Administrator bago maging aktibo sa POS at bodega.
         </div>
       </div>
-    `}
-    ${pending ? `
-      <div class="full" style="background:#FEF3C7; border:1px solid #FCD34D; border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:4px; font-size:12px; color:#92400E;">
-        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;">
-          <div style="flex:1; min-width:240px;">
-            <div style="font-weight:700; font-size:13px; display:flex; align-items:center; gap:6px;">
-              <span>⏳</span>
-              <span>May nakabinbin nang edit request para sa produktong ito</span>
-            </div>
-            <div style="margin-top:3px; color:#78350F;">
-              Isinumite ni <b>${escapeHtml(pending.requestedBy || 'Inventory Staff')}</b> noong ${formatDateTime(pending.requestedAt || nowISO())} (${Object.keys(pending.changes || {}).length} field change(s) awaiting Admin approval).
-            </div>
-            <div style="margin-top:4px; font-size:11.5px; color:#B45309;">
-              💡 <em>Naka-load sa form ang kasalukuyang proposed values. Kapag nag-save ka, ia-update nito ang nakabinbing request para sa Admin.</em>
-            </div>
-          </div>
-          <div>
-            <button type="button" class="btn secondary small danger" style="padding:5px 12px; font-size:11.5px; white-space:nowrap;" onclick="cancelProductPendingEdit('${p.id}')">✕ Cancel / Withdraw Request</button>
+    `
+  );
+
+  const stockNoteHtml = p ? `
+    <div class="full" style="background:#FAF7F2; border:1px solid var(--line); border-radius:var(--radius-sm); padding:12px 14px; display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:4px;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span style="font-size:20px; line-height:1;">🔒</span>
+        <div>
+          <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); font-weight:600;">Current Stock Level (Audited)</div>
+          <div style="font-size:14.5px; font-weight:700; color:var(--ink); font-family:'Space Grotesk',sans-serif; display:flex; align-items:center; gap:8px;">
+            ${formatLiters(p.stock)}
+            ${stockBadge(p)}
           </div>
         </div>
       </div>
-    ` : ''}
+      <div style="font-size:11.5px; text-align:right; color:var(--ink-soft); line-height:1.4;">
+        Stock cannot be edited directly.<br>
+        <a href="#" onclick="closeModal();goTo('receiving');return false;" style="color:var(--teal); font-weight:600; text-decoration:underline;">Stock Receiving / Adjust &rarr;</a>
+      </div>
+    </div>
+  ` : (isAdmin ? `
+    <div class="full" style="background:#EAF4F3; border:1px solid #C5DFDC; border-radius:var(--radius-sm); padding:11px 14px; display:flex; align-items:center; gap:12px; margin-top:4px;">
+      <span style="font-size:20px; line-height:1;">📦</span>
+      <div style="flex:1; font-size:12px; color:var(--teal-dark); line-height:1.4;">
+        <strong style="color:var(--ink);">Initial Stock: 0.00 L</strong> — Bagong produkto ay magsisimula sa 0 stock. Pagka-save, magiging <b>aktibo agad</b> ito at maaari nang magdagdag ng stock sa Stock Receiving o gumawa ng Purchase Order.
+      </div>
+    </div>
+  ` : `
+    <div class="full" style="background:#FAF7F2; border:1px solid var(--line); border-radius:var(--radius-sm); padding:11px 14px; display:flex; align-items:center; gap:12px; margin-top:4px;">
+      <span style="font-size:20px; line-height:1;">📦</span>
+      <div style="flex:1; font-size:12px; color:var(--ink-soft); line-height:1.4;">
+        <strong style="color:var(--ink);">Initial Stock: 0.00 L</strong> — New products start at 0 stock. ⏳ <b>Approval Required:</b> Bilang Inventory Staff, ang produktong ito ay isusumite bilang <b>Pending Approval</b> para sa Administrator bago magamit sa POS at pagtanggap ng delivery.
+      </div>
+    </div>
+  `);
+
+  openModal(modalTitle, `
+<form id="product-form" onsubmit="return submitProduct(event, ${p ? `'${p.id}'` : 'null'})">
+  <div class="form-grid">
+    ${bannerNoticeHtml}
     <div class="field">
-      <label>Name</label>
-      <input id="pf-name" value="${escapeHtml(initialName)}" placeholder="e.g. Boysen Permacoat Latex" required>
+      <label>Product Name</label>
+      <input id="pf-name" value="${escapeHtml(initialName)}" placeholder="e.g. Boysen Permacoat Latex" oninput="updateProductColorHexPreview(document.getElementById('pf-color') ? document.getElementById('pf-color').value : '')" required>
     </div>
     <div class="field">
       <label>Brand</label>
       <input id="pf-brand" value="${escapeHtml(initialBrand)}" placeholder="e.g. Boysen, Davies, K92" required>
     </div>
     <div class="field">
-      <label>Type</label>
-      <select id="pf-type">
-        ${['Automotive Paint', 'House Paint', 'Specialty Paint'].map(t => `<option ${initialType === t ? 'selected' : ''}>${t}</option>`).join('')}
+      <label>Supplier</label>
+      <select id="pf-supplier">
+        <option value="">-- No Supplier Linked --</option>
+        ${allSuppliers.map(s => `
+          <option value="${escapeHtml(s.id)}" ${initialSupplierId === s.id ? 'selected' : ''}>${escapeHtml(s.name)}${s.status !== 'active' ? ' (Inactive)' : ''}</option>
+        `).join('')}
       </select>
     </div>
     <div class="field">
-      <label>Color / Hex Code ${p ? `<code style="font-family:'Space Grotesk',monospace; font-size:11px; font-weight:600; color:var(--teal);">(${currentColorHex})</code>` : ''}</label>
+      <label>Product Type / Category</label>
+      <select id="pf-type">
+        ${allTypes.map(t => `<option ${initialType === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field">
+      <label>Color / Hex Code ${p ? `<code id="pf-hex-label" style="font-family:'Space Grotesk',monospace; font-size:11px; font-weight:600; color:var(--teal);">(${currentColorHex})</code>` : ''}</label>
       <div style="display:flex; gap:8px; align-items:center;">
         <input id="pf-color" value="${escapeHtml(initialColor)}" placeholder="e.g. White, #FFFFFF, Sky Blue" oninput="updateProductColorHexPreview(this.value)">
         <label style="position:relative; display:inline-flex; align-items:center; cursor:pointer;" title="Click to pick a color">
@@ -254,7 +350,7 @@ function openProductModal(id) {
         onfocus="this.select()"
         oninput="onProductPriceInput(this.value, ${p ? Number(p.price) : 'null'}, ${hasSavedRecent ? Number(p.recentPrice) : 'null'})"
         ${p ? '' : 'required'}>
-      ${currentUser && currentUser.role === 'staff' ? `
+      ${user && user.role === 'staff' ? `
         <div class="muted small" style="margin-top:4px; color:#92400E; font-size:11.5px;">
           ℹ️ Bilang Inventory Staff, ang pagbago ng presyo ay isusumite para sa approval ng Admin bago magbago sa tindahan.
         </div>
@@ -293,36 +389,20 @@ function openProductModal(id) {
         ℹ️ Automatically computed from the per-size can thresholds above. Reorder alerts and stock monitoring trigger individually per can size.
       </div>
     </div>
-    ${p ? `
-    <div class="full" style="background:#FAF7F2; border:1px solid var(--line); border-radius:var(--radius-sm); padding:12px 14px; display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:4px;">
-      <div style="display:flex; align-items:center; gap:10px;">
-        <span style="font-size:20px; line-height:1;">🔒</span>
-        <div>
-          <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); font-weight:600;">Current Stock Level (Audited)</div>
-          <div style="font-size:14.5px; font-weight:700; color:var(--ink); font-family:'Space Grotesk',sans-serif; display:flex; align-items:center; gap:8px;">
-            ${formatLiters(p.stock)}
-            ${stockBadge(p)}
-          </div>
-        </div>
-      </div>
-      <div style="font-size:11.5px; text-align:right; color:var(--ink-soft); line-height:1.4;">
-        Stock cannot be edited directly.<br>
-        <a href="#" onclick="closeModal();goTo('receiving');return false;" style="color:var(--teal); font-weight:600; text-decoration:underline;">Stock Receiving / Adjust &rarr;</a>
-      </div>
-    </div>
-    ` : `
-    <div class="full" style="background:#FAF7F2; border:1px solid var(--line); border-radius:var(--radius-sm); padding:11px 14px; display:flex; align-items:center; gap:12px; margin-top:4px;">
-      <span style="font-size:20px; line-height:1;">📦</span>
-      <div style="flex:1; font-size:12px; color:var(--ink-soft); line-height:1.4;">
-        <strong style="color:var(--ink);">Initial Stock: 0.00 L</strong> — New products start at 0 stock. ⏳ <b>Approval Required:</b> Bilang Inventory Staff, ang produktong ito ay isusumite bilang <b>Pending Approval</b> para sa Administrator bago magamit sa POS at pagtanggap ng delivery.
-      </div>
-    </div>
-    `}
+    ${stockNoteHtml}
   </div>
 </form>`,
-    `<button class="btn secondary" onclick="closeModal()">Cancel</button><button class="btn" onclick="document.getElementById('product-form').requestSubmit()">${p ? (pending ? 'Update Pending Request →' : 'Submit Edits for Approval →') : 'Submit for Approval →'}</button>`
+    `<button type="button" class="btn secondary" id="pf-cancel-btn" onclick="closeModal()">Cancel</button><button type="button" class="btn" id="pf-submit-btn" onclick="submitProductFormDirectly(${p ? `'${p.id}'` : 'null'})">${submitButtonLabel}</button>`
   );
   setTimeout(() => updateProductOverallThresholdFromSizes(), 20);
+}
+
+function submitProductFormDirectly(id) {
+  const form = document.getElementById('product-form');
+  if (form && form.reportValidity && !form.reportValidity()) {
+    return;
+  }
+  submitProduct(null, id);
 }
 
 function onProductPriceInput(val, origPrice, savedRecentPrice) {
@@ -407,11 +487,13 @@ function updateProductColorHexPreview(val) {
 }
 
 async function submitProduct(e, id) {
-  e.preventDefault();
-  if (!currentUser || currentUser.role !== 'staff') {
-    showToast('Only Inventory Staff can add or edit products. Administrators review and approve requests.', 'error');
+  if (e && e.preventDefault) e.preventDefault();
+  const user = currentUser || (typeof db !== 'undefined' && db && db.users ? db.users.find(u => u.role === 'admin') : null);
+  if (!user || (user.role !== 'staff' && user.role !== 'admin')) {
+    showToast('Only Administrators and Inventory Staff can add or edit products.', 'error');
     return false;
   }
+  const isAdmin = user.role === 'admin';
   const priceInput = document.getElementById('pf-price');
   let priceVal = priceInput.value.trim();
   if (!priceVal && id && priceInput.placeholder) {
@@ -428,6 +510,10 @@ async function submitProduct(e, id) {
     const v = productFormThresholds[s];
     thresholdBySize[s] = (typeof v === 'number' && !isNaN(v) && v >= 0) ? v : (s >= 16 ? 1 : (s >= 4 ? 2 : 5));
   });
+
+  const supplierSelect = document.getElementById('pf-supplier');
+  const selectedSupplierId = supplierSelect ? supplierSelect.value : '';
+
   const data = {
     name: document.getElementById('pf-name').value.trim(),
     brand: document.getElementById('pf-brand').value.trim(),
@@ -438,6 +524,14 @@ async function submitProduct(e, id) {
     thresholdBySize: thresholdBySize,
     sizes: sanitizeSizeList(productFormSizes),
   };
+  if (!data.name) {
+    showToast('Please enter a product name.', 'error');
+    return false;
+  }
+  if (!data.brand) {
+    showToast('Please enter a brand name.', 'error');
+    return false;
+  }
   if (!data.sizes.length) {
     showToast('Add at least one can size for this product.', 'error');
     return false;
@@ -449,6 +543,14 @@ async function submitProduct(e, id) {
   }
   if (id) {
     const existing = productById(id);
+    if (!existing) {
+      showToast('Product not found.', 'error');
+      return false;
+    }
+
+    const currentSuppliers = (typeof suppliersForProduct === 'function') ? suppliersForProduct(id) : [];
+    const oldSupplierId = currentSuppliers.length > 0 ? currentSuppliers[0].id : '';
+
     const changes = {};
     if (data.name !== existing.name) changes.name = { label: 'Product Name', old: existing.name, new: data.name };
     if (data.brand !== existing.brand) changes.brand = { label: 'Brand', old: existing.brand, new: data.brand };
@@ -463,8 +565,9 @@ async function submitProduct(e, id) {
 
     const oldSizes = existing.sizes || [];
     const addedSizes = (data.sizes || []).filter(s => !oldSizes.includes(s));
-    if (addedSizes.length > 0) {
-      changes.sizes = { label: 'New Can Size(s)', old: oldSizes, new: data.sizes, added: addedSizes };
+    const removedSizes = (oldSizes || []).filter(s => !(data.sizes || []).includes(s));
+    if (addedSizes.length > 0 || removedSizes.length > 0) {
+      changes.sizes = { label: 'Can Sizes', old: oldSizes, new: data.sizes, added: addedSizes, removed: removedSizes };
     }
 
     const oldThresh = Number(existing.threshold);
@@ -486,104 +589,226 @@ async function submitProduct(e, id) {
       changes.thresholdBySize = { label: 'Per-Size Thresholds', old: oldTBS, new: newTBS };
     }
 
+    if (selectedSupplierId !== oldSupplierId) {
+      const oldS = supplierById(oldSupplierId);
+      const newS = supplierById(selectedSupplierId);
+      changes.supplier = { label: 'Supplier', old: oldS ? oldS.name : 'None', new: newS ? newS.name : 'None' };
+    }
+
     const changeKeys = Object.keys(changes);
-    if (changeKeys.length === 0) {
-      if (existing.pendingEdit) {
+
+    // Sync supplier in db.suppliers
+    if (selectedSupplierId) {
+      (db.suppliers || []).forEach(s => {
+        if (s.id === selectedSupplierId) {
+          if (!Array.isArray(s.productIds)) s.productIds = [];
+          if (!s.productIds.includes(id)) s.productIds.push(id);
+        } else {
+          if (Array.isArray(s.productIds)) {
+            s.productIds = s.productIds.filter(pid => pid !== id);
+          }
+        }
+      });
+    } else {
+      (db.suppliers || []).forEach(s => {
+        if (Array.isArray(s.productIds)) {
+          s.productIds = s.productIds.filter(pid => pid !== id);
+        }
+      });
+    }
+
+    if (isAdmin) {
+      if (changeKeys.length === 0 && !existing.pendingEdit) {
+        showToast(`Product "${existing.name}" saved. No changes made.`, 'ok');
+        closeModal();
+        return false;
+      }
+
+      if (changes.price) {
+        existing.recentPrice = oldPrice;
+        existing.price = newPrice;
+      } else {
+        existing.price = newPrice;
+      }
+      existing.name = data.name;
+      existing.brand = data.brand;
+      existing.type = data.type;
+      existing.color = data.color;
+      existing.sizes = data.sizes;
+      existing.threshold = data.threshold;
+      existing.thresholdBySize = data.thresholdBySize;
+      if (existing.status === 'pending_approval') {
+        existing.status = 'active';
+      }
+
+      const hadPendingEdit = Boolean(existing.pendingEdit);
+      existing.pendingEdit = null;
+      existing.pendingPrice = null;
+      existing.pendingSizes = [];
+
+      const changeSummary = changeKeys.map(k => changes[k].label).join(', ');
+      logAudit(
+        'PRODUCT_EDIT',
+        'Product',
+        `Admin updated product ${existing.name}${changeSummary ? ` (${changeSummary})` : ''}${hadPendingEdit ? ' (resolved pending request)' : ''}`
+      );
+      showToast(`Product "${existing.name}" updated successfully!`, 'ok');
+    } else {
+      // Staff workflow
+      if (changeKeys.length === 0) {
+        if (existing.pendingEdit) {
+          const confirmed = await showConfirmDialog({
+            title: 'Bawiin ang Nakabinbing Edit?',
+            message: `Lahat ng detalye para sa <b>${escapeHtml(existing.name)}</b> ay ibinalik sa orihinal nitong estado.<br><br>Nais mo bang kanselahin at bawiin ang nakabinbing edit request?`,
+            icon: '🔄',
+            confirmText: 'Oo, Bawiin Request',
+            cancelText: 'Manatili sa Form',
+            danger: true
+          });
+          if (confirmed) {
+            await cancelProductPendingEdit(existing.id, true);
+            return false;
+          }
+        }
+        showToast('No changes were made to the product details.', 'info');
+        closeModal();
+        return false;
+      }
+
+      const isUpdate = Boolean(existing.pendingEdit);
+      if (isUpdate) {
         const confirmed = await showConfirmDialog({
-          title: 'Bawiin ang Nakabinbing Edit?',
-          message: `Lahat ng detalye para sa <b>${escapeHtml(existing.name)}</b> ay ibinalik sa orihinal nitong estado.<br><br>Nais mo bang kanselahin at bawiin ang nakabinbing edit request?`,
-          icon: '🔄',
-          confirmText: 'Oo, Bawiin Request',
-          cancelText: 'Manatili sa Form',
-          danger: true
+          title: 'I-update ang Request?',
+          message: `May umiiral nang pending edit request para sa <b>${escapeHtml(existing.name)}</b> (isinumite ni <b>${escapeHtml(existing.pendingEdit.requestedBy || 'Staff')}</b>).<br><br>Nais mo bang i-update ang nakabinbing request gamit ang mga bagong pagbabagong ito para sa Admin review?`,
+          icon: '✏️',
+          confirmText: 'Oo, I-update',
+          cancelText: 'Bumalik sa Form',
+          danger: false
         });
-        if (confirmed) {
-          await cancelProductPendingEdit(existing.id, true);
+        if (!confirmed) {
           return false;
         }
       }
-      showToast('No changes were made to the product details.', 'info');
-      closeModal();
-      return false;
-    }
 
-    const isUpdate = Boolean(existing.pendingEdit);
-    if (isUpdate) {
-      const confirmed = await showConfirmDialog({
-        title: 'I-update ang Request?',
-        message: `May umiiral nang pending edit request para sa <b>${escapeHtml(existing.name)}</b> (isinumite ni <b>${escapeHtml(existing.pendingEdit.requestedBy || 'Staff')}</b>).<br><br>Nais mo bang i-update ang nakabinbing request gamit ang mga bagong pagbabagong ito para sa Admin review?`,
-        icon: '✏️',
-        confirmText: 'Oo, I-update',
-        cancelText: 'Bumalik sa Form',
-        danger: false
-      });
-      if (!confirmed) {
-        return false;
+      existing.pendingEdit = {
+        requestedBy: (currentUser && currentUser.name) || 'Inventory Staff',
+        requestedAt: nowISO(),
+        changes: changes,
+        proposed: {
+          name: data.name,
+          brand: data.brand,
+          type: data.type,
+          color: data.color,
+          price: data.price,
+          sizes: sanitizeSizeList([...(existing.sizes || []), ...addedSizes]),
+          threshold: data.threshold,
+          thresholdBySize: data.thresholdBySize,
+          supplierId: selectedSupplierId
+        }
+      };
+
+      if (changes.price) {
+        existing.pendingPrice = changes.price.new;
+      } else {
+        existing.pendingPrice = null;
       }
-    }
-
-    existing.pendingEdit = {
-      requestedBy: (currentUser && currentUser.name) || 'Inventory Staff',
-      requestedAt: nowISO(),
-      changes: changes,
-      proposed: {
-        name: data.name,
-        brand: data.brand,
-        type: data.type,
-        color: data.color,
-        price: data.price,
-        sizes: sanitizeSizeList([...(existing.sizes || []), ...addedSizes]),
-        threshold: data.threshold,
-        thresholdBySize: data.thresholdBySize
+      if (changes.sizes && addedSizes.length > 0) {
+        existing.pendingSizes = addedSizes;
+      } else {
+        existing.pendingSizes = [];
       }
-    };
 
-    if (changes.price) {
-      existing.pendingPrice = changes.price.new;
-    } else {
-      existing.pendingPrice = null;
+      const changeSummary = changeKeys.map(k => changes[k].label).join(', ');
+      logAudit(
+        isUpdate ? 'PRODUCT_EDIT_UPDATE' : 'PRODUCT_EDIT_REQUEST',
+        'Product',
+        `Staff ${isUpdate ? 'updated' : 'submitted'} edit request for ${existing.name} (${changeSummary}) for Admin approval`
+      );
+      showToast(
+        isUpdate
+          ? `Product edit request (${changeSummary}) successfully updated for Admin approval!`
+          : `Product edit request (${changeSummary}) submitted for Admin approval!`,
+        'ok'
+      );
     }
-    if (changes.sizes && addedSizes.length > 0) {
-      existing.pendingSizes = addedSizes;
-    } else {
-      existing.pendingSizes = [];
-    }
-
-    const changeSummary = changeKeys.map(k => changes[k].label).join(', ');
-    logAudit(
-      isUpdate ? 'PRODUCT_EDIT_UPDATE' : 'PRODUCT_EDIT_REQUEST',
-      'Product',
-      `Staff ${isUpdate ? 'updated' : 'submitted'} edit request for ${existing.name} (${changeSummary}) for Admin approval`
-    );
-    showToast(
-      isUpdate
-        ? `Product edit request (${changeSummary}) successfully updated for Admin approval!`
-        : `Product edit request (${changeSummary}) submitted for Admin approval!`,
-      'ok'
-    );
   } else {
-    data.recentPrice = null;
-    const newProd = {
-      id: uid('p'),
-      status: 'pending_approval',
-      requestedBy: (currentUser && currentUser.name) || 'Inventory Staff',
-      requestedAt: nowISO(),
-      stock: 0,
-      canStock: {},
-      openedStock: 0,
-      openedCanSize: 0,
-      openedBySize: {},
-      pendingSizes: [],
-      ...data
-    };
+    // New product
+    if (selectedSupplierId) {
+      const targetSupplier = (db.suppliers || []).find(s => s.id === selectedSupplierId);
+      if (targetSupplier) {
+        if (!Array.isArray(targetSupplier.productIds)) targetSupplier.productIds = [];
+      }
+    }
 
-    db.products.push(newProd);
-    logAudit('PRODUCT_REQUEST', 'Product', `Staff submitted new product ${data.name} (price ${peso(data.price)}) for Admin approval`);
-    showToast(`Product "${data.name}" submitted for Admin approval!`, 'ok');
+    if (isAdmin) {
+      data.recentPrice = null;
+      data.pendingPrice = null;
+      data.pendingSizes = [];
+      data.pendingEdit = null;
+      const newProd = {
+        id: uid('p'),
+        status: 'active',
+        createdBy: (currentUser && currentUser.name) || 'Administrator',
+        createdAt: nowISO(),
+        reviewedBy: (currentUser && currentUser.name) || 'Administrator',
+        reviewedAt: nowISO(),
+        stock: 0,
+        canStock: {},
+        openedStock: 0,
+        openedCanSize: 0,
+        openedBySize: {},
+        ...data
+      };
+
+      if (selectedSupplierId) {
+        const targetSupplier = (db.suppliers || []).find(s => s.id === selectedSupplierId);
+        if (targetSupplier) {
+          if (!Array.isArray(targetSupplier.productIds)) targetSupplier.productIds = [];
+          if (!targetSupplier.productIds.includes(newProd.id)) targetSupplier.productIds.push(newProd.id);
+        }
+      }
+
+      db.products.push(newProd);
+      logAudit('PRODUCT_ADD', 'Product', `Admin added new product ${data.name} (price ${peso(data.price)})`);
+      showToast(`Product "${data.name}" added successfully and is now active!`, 'ok');
+    } else {
+      data.recentPrice = null;
+      const newProd = {
+        id: uid('p'),
+        status: 'pending_approval',
+        requestedBy: (currentUser && currentUser.name) || 'Inventory Staff',
+        requestedAt: nowISO(),
+        stock: 0,
+        canStock: {},
+        openedStock: 0,
+        openedCanSize: 0,
+        openedBySize: {},
+        pendingSizes: [],
+        ...data
+      };
+
+      if (selectedSupplierId) {
+        const targetSupplier = (db.suppliers || []).find(s => s.id === selectedSupplierId);
+        if (targetSupplier) {
+          if (!Array.isArray(targetSupplier.productIds)) targetSupplier.productIds = [];
+          if (!targetSupplier.productIds.includes(newProd.id)) targetSupplier.productIds.push(newProd.id);
+        }
+      }
+
+      db.products.push(newProd);
+      logAudit('PRODUCT_REQUEST', 'Product', `Staff submitted new product ${data.name} (price ${peso(data.price)}) for Admin approval`);
+      showToast(`Product "${data.name}" submitted for Admin approval!`, 'ok');
+    }
   }
-  await saveDB();
-  closeModal();
-  renderPage();
+  try {
+    await saveDB();
+    closeModal();
+    if (typeof renderInventoryTable === 'function') renderInventoryTable();
+    if (typeof renderPage === 'function') renderPage();
+  } catch (err) {
+    console.error('Error saving to database:', err);
+    showToast('Failed to save product changes to database.', 'error');
+  }
   return false;
 }
 
@@ -815,3 +1040,7 @@ async function toggleProductStatus(id) {
   renderPage();
   showToast(`Product ${p.status === 'active' ? 'activated' : 'deactivated'}.`);
 }
+
+window.openProductModal = openProductModal;
+window.submitProduct = submitProduct;
+window.submitProductFormDirectly = submitProductFormDirectly;

@@ -85,6 +85,7 @@ function adminDashboard() {
 <div class="bar-buttons">
   <button class="btn small" style="background:var(--teal); color:#fff;" onclick="goTo('approvals')">⏳ Pending Approvals ${getModuleBadgeHtml('approvals')}</button>
   <button class="btn secondary small" onclick="goTo('inventory')">📦 Inventory</button>
+  <button class="btn secondary small" onclick="goTo('inventory'); setTimeout(()=>openProductModal(), 80);">➕ Add Product</button>
   <button class="btn secondary small" onclick="goTo('alerts')">⚠️ Low-Stock Alerts</button>
   <button class="btn secondary small" onclick="goTo('purchaseOrders')">📋 Purchase Orders</button>
   <button class="btn secondary small" onclick="goTo('suppliers')">👥 Suppliers</button>

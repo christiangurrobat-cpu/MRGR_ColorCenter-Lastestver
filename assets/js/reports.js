@@ -2,12 +2,116 @@
    14. REPORTS (admin: full · staff: inventory-focused)
    ============================================================ */
 let reportActiveTab = 'all'; // 'all', 'sales', 'inventory', 'mixing', 'history', 'returns'
+let reportDateFrom = daysAgoISO(6);
+let reportDateTo = todayISO();
+
+function getReportDatePreset() {
+  return getDateRangePreset(reportDateFrom, reportDateTo);
+}
+
+function updateReportDatePresetsUI() {
+  const activePreset = getReportDatePreset();
+  document.querySelectorAll('.rep-date-btn').forEach(btn => {
+    const p = btn.getAttribute('data-preset');
+    if (p === activePreset) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+  const summaryEl = document.getElementById('rep-date-summary');
+  if (summaryEl) {
+    summaryEl.innerHTML = formatDateRangeSummary(reportDateFrom, reportDateTo, 'Report period:');
+  }
+  const clearBtn = document.getElementById('rep-clear-date-btn');
+  if (clearBtn) {
+    clearBtn.style.display = (reportDateFrom || reportDateTo) ? 'inline-flex' : 'none';
+  }
+}
+
+function syncReportDateInputs() {
+  const fromEl = document.getElementById('rep-from');
+  const toEl = document.getElementById('rep-to');
+  if (fromEl) {
+    fromEl.value = reportDateFrom || '';
+    fromEl.max = reportDateTo || '';
+  }
+  if (toEl) {
+    toEl.value = reportDateTo || '';
+    toEl.min = reportDateFrom || '';
+  }
+  updateReportDatePresetsUI();
+}
+
+function setReportDatePreset(preset) {
+  const today = todayISO();
+  if (preset === 'today') {
+    reportDateFrom = today;
+    reportDateTo = today;
+  } else if (preset === 'yesterday') {
+    const yest = daysAgoISO(1);
+    reportDateFrom = yest;
+    reportDateTo = yest;
+  } else if (preset === '7d') {
+    reportDateFrom = daysAgoISO(6);
+    reportDateTo = today;
+  } else if (preset === '30d') {
+    reportDateFrom = daysAgoISO(29);
+    reportDateTo = today;
+  } else if (preset === 'month') {
+    reportDateFrom = thisMonthStartISO();
+    reportDateTo = today;
+  } else if (preset === 'all') {
+    reportDateFrom = '';
+    reportDateTo = '';
+  }
+  syncReportDateInputs();
+  renderReportBody();
+}
+
+function onReportDateChange() {
+  const fromEl = document.getElementById('rep-from');
+  const toEl = document.getElementById('rep-to');
+  let f = fromEl ? fromEl.value : '';
+  let t = toEl ? toEl.value : '';
+  if (f && t && f > t) {
+    const tmp = f;
+    f = t;
+    t = tmp;
+    if (fromEl) fromEl.value = f;
+    if (toEl) toEl.value = t;
+  }
+  reportDateFrom = f;
+  reportDateTo = t;
+  if (fromEl) fromEl.max = t || '';
+  if (toEl) toEl.min = f || '';
+  updateReportDatePresetsUI();
+  renderReportBody();
+}
+
+function clearReportDates() {
+  setReportDatePreset('all');
+}
+
+function setReportDateRange(daysAgo) {
+  if (daysAgo === null || daysAgo === undefined) setReportDatePreset('all');
+  else if (daysAgo === 0) setReportDatePreset('today');
+  else if (daysAgo === 1) setReportDatePreset('yesterday');
+  else if (daysAgo === 6) setReportDatePreset('7d');
+  else if (daysAgo === 29) setReportDatePreset('30d');
+  else {
+    reportDateFrom = daysAgoISO(daysAgo);
+    reportDateTo = todayISO();
+    syncReportDateInputs();
+    renderReportBody();
+  }
+}
 
 function reportsPage() {
-  const from = daysAgoISO(6);
-  const to = todayISO();
   const isAdmin = currentUser && currentUser.role === 'admin';
   const low = lowStockProducts();
+  const activePreset = getReportDatePreset();
+  const hasDates = Boolean(reportDateFrom || reportDateTo);
 
   // If non-admin had admin-only tab selected, default to inventory
   if (!isAdmin && (reportActiveTab === 'sales' || reportActiveTab === 'history' || reportActiveTab === 'returns')) {
@@ -15,23 +119,45 @@ function reportsPage() {
   }
 
   return `
-  <div class="panel">
-    <div class="panel-head row wrap" style="gap:12px; padding:12px 18px;">
+  <div class="panel" style="padding:0; overflow:hidden;">
+    <div class="panel-head row wrap" style="gap:12px; padding:14px 18px 10px;">
       <div>
         <h3 style="margin:0; font-size:16px;">Reports &amp; Analytics</h3>
         <span class="muted small">Business performance, inventory turnover, and transaction logs</span>
       </div>
       <div class="spacer"></div>
-      <div class="row wrap" style="gap:8px; align-items:center;">
-        <label class="small muted" style="font-weight:600;">Date Range:</label>
-        <input id="rep-from" type="date" value="${from}" onchange="renderReportBody()">
-        <span class="muted" style="font-size:12px;">to</span>
-        <input id="rep-to" type="date" value="${to}" onchange="renderReportBody()">
-        <div class="report-date-shortcuts">
-          <button type="button" class="btn ghost small" onclick="setReportDateRange(0)" title="View today's data">Today</button>
-          <button type="button" class="btn ghost small" onclick="setReportDateRange(6)" title="Last 7 days">7D</button>
-          <button type="button" class="btn ghost small" onclick="setReportDateRange(29)" title="Last 30 days">30D</button>
+      <div class="row" style="gap:6px;">
+        <button type="button" class="btn secondary small" onclick="renderReportBody()">↻ Refresh</button>
+      </div>
+    </div>
+
+    <!-- Dedicated Date Range Bar & Quick Presets (matches Audit Log) -->
+    <div class="audit-date-bar" style="padding:10px 18px; border-top:1px dashed var(--line-light); border-bottom:1px solid var(--line-light); background:#FBF9F4;">
+      <div class="audit-date-group">
+        <label class="audit-date-label">📅 Date Range:</label>
+        <div class="audit-date-field" title="Start date">
+          <span class="field-tag">From</span>
+          <input id="rep-from" type="date" value="${reportDateFrom}" max="${reportDateTo || ''}" onchange="onReportDateChange()">
         </div>
+        <span class="audit-date-sep">to</span>
+        <div class="audit-date-field" title="End date">
+          <span class="field-tag">To</span>
+          <input id="rep-to" type="date" value="${reportDateTo}" min="${reportDateFrom || ''}" onchange="onReportDateChange()">
+        </div>
+        <button type="button" id="rep-clear-date-btn" class="audit-clear-date-btn" onclick="clearReportDates()" title="Show all time" style="display:${hasDates ? 'inline-flex' : 'none'};">✕</button>
+      </div>
+
+      <div class="audit-date-shortcuts">
+        <button type="button" class="audit-date-btn rep-date-btn ${activePreset === 'today' ? 'active' : ''}" data-preset="today" onclick="setReportDatePreset('today')" title="Today's data">Today</button>
+        <button type="button" class="audit-date-btn rep-date-btn ${activePreset === 'yesterday' ? 'active' : ''}" data-preset="yesterday" onclick="setReportDatePreset('yesterday')" title="Yesterday's data">Yesterday</button>
+        <button type="button" class="audit-date-btn rep-date-btn ${activePreset === '7d' ? 'active' : ''}" data-preset="7d" onclick="setReportDatePreset('7d')" title="Last 7 days">7D</button>
+        <button type="button" class="audit-date-btn rep-date-btn ${activePreset === '30d' ? 'active' : ''}" data-preset="30d" onclick="setReportDatePreset('30d')" title="Last 30 days">30D</button>
+        <button type="button" class="audit-date-btn rep-date-btn ${activePreset === 'month' ? 'active' : ''}" data-preset="month" onclick="setReportDatePreset('month')" title="This month to date">This Month</button>
+        <button type="button" class="audit-date-btn rep-date-btn ${activePreset === 'all' ? 'active' : ''}" data-preset="all" onclick="setReportDatePreset('all')" title="Show all recorded history">All</button>
+      </div>
+
+      <div class="audit-date-info" id="rep-date-summary">
+        ${formatDateRangeSummary(reportDateFrom, reportDateTo, 'Report period:')}
       </div>
     </div>
 
@@ -63,7 +189,7 @@ function reportsPage() {
     </div>
   </div>
 
-  <div id="report-body">${reportBodyHtml(from, to)}</div>
+  <div id="report-body">${reportBodyHtml(reportDateFrom, reportDateTo)}</div>
   `;
 }
 
@@ -75,39 +201,31 @@ function setReportTab(tab) {
   renderReportBody();
 }
 
-function setReportDateRange(daysAgo) {
-  const fromEl = document.getElementById('rep-from');
-  const toEl = document.getElementById('rep-to');
-  if (fromEl && toEl) {
-    fromEl.value = daysAgoISO(daysAgo);
-    toEl.value = todayISO();
-    renderReportBody();
-  }
-}
-
 function renderReportBody() {
-  const fromEl = document.getElementById('rep-from');
-  const toEl = document.getElementById('rep-to');
-  const from = fromEl ? fromEl.value : daysAgoISO(6);
-  const to = toEl ? toEl.value : todayISO();
   const container = document.getElementById('report-body');
   if (container) {
-    container.innerHTML = reportBodyHtml(from, to);
+    container.innerHTML = reportBodyHtml(reportDateFrom, reportDateTo);
   }
 }
 
 function reportBodyHtml(from, to) {
+  from = (from !== undefined) ? from : reportDateFrom;
+  to = (to !== undefined) ? to : reportDateTo;
   const sales = salesBetween(from, to);
   const moves = movementsBetween(from, to);
   const isAdmin = currentUser && currentUser.role === 'admin';
 
   // Per-day totals for the bar chart
   const dayList = [];
-  let cur = new Date(from + 'T00:00:00');
-  const end = new Date(to + 'T00:00:00');
+  const chartFrom = from || (sales.length ? sales[sales.length - 1].date.slice(0, 10) : daysAgoISO(29));
+  const chartTo = to || todayISO();
+  let cur = new Date(chartFrom + 'T00:00:00');
+  let end = new Date(chartTo + 'T00:00:00');
+  if (isNaN(cur.getTime())) cur = new Date(daysAgoISO(29) + 'T00:00:00');
+  if (isNaN(end.getTime())) end = new Date(todayISO() + 'T00:00:00');
   while (cur <= end && dayList.length < 35) {
     const iso = toLocalISODate(cur);
-    dayList.push({ iso, total: sumSales(salesOn(iso).filter(s => s.date.slice(0, 10) >= from && s.date.slice(0, 10) <= to)) });
+    dayList.push({ iso, total: sumSales(salesOn(iso).filter(s => (!from || s.date.slice(0, 10) >= from) && (!to || s.date.slice(0, 10) <= to))) });
     cur.setDate(cur.getDate() + 1);
   }
   const maxVal = Math.max(1, ...dayList.map(d => d.total));
@@ -325,7 +443,7 @@ function reportBodyHtml(from, to) {
   (db.sales || []).forEach(sale => {
     (sale.returns || []).forEach(ret => {
       const d = toLocalISODate(new Date(ret.date || sale.date));
-      if (d >= from && d <= to) {
+      if ((!from || d >= from) && (!to || d <= to)) {
         allReturns.push({
           ...ret,
           saleId: sale.id,
