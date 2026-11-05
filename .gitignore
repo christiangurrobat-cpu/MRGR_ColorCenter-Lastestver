@@ -1,6 +1,9 @@
 # Logs
 logs/*.log
 
+# Runtime Migration Flags
+api/.schema_migrated
+
 # Operating System Files
 Thumbs.db
 Desktop.ini

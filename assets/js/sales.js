@@ -2,12 +2,48 @@
    13. SALES HISTORY & AFTERSALES (RETURNS & EXCHANGES)
    ============================================================ */
 let salesFilterStatus = 'all';
-let salesDateFrom = '';
-let salesDateTo = '';
+let salesSearchQuery = '';
+let salesDateFrom = currentYearStartISO();
+let salesDateTo = currentYearEndISO();
+let salesYearFilter = 'current';
 let returnExchangeCart = [];
 
 function getSalesDatePreset() {
   return getDateRangePreset(salesDateFrom, salesDateTo);
+}
+
+function getSalesSelectedYear() {
+  const curY = getCurrentYear();
+  if (salesYearFilter === 'current' || !salesYearFilter) return curY;
+  const y = parseInt(salesYearFilter, 10);
+  if (!isNaN(y)) return y;
+  if (salesDateFrom && salesDateFrom.length >= 4) {
+    const yf = parseInt(salesDateFrom.slice(0, 4), 10);
+    if (!isNaN(yf)) return yf;
+  }
+  return curY;
+}
+
+function openSalesCalendar(target, anchorEl, event) {
+  openAppMonthDayPicker({
+    target: target,
+    anchorEl: anchorEl || document.getElementById(target === 'from' ? 'sh-date-from-wrap' : 'sh-date-to-wrap'),
+    event: event,
+    currentDate: (target === 'from' ? salesDateFrom : salesDateTo),
+    otherDate: (target === 'from' ? salesDateTo : salesDateFrom),
+    selectedYear: getSalesSelectedYear,
+    onSelect: function(iso) {
+      if (target === 'from') {
+        salesDateFrom = iso;
+        if (salesDateTo && salesDateFrom > salesDateTo) salesDateTo = salesDateFrom;
+      } else {
+        salesDateTo = iso;
+        if (salesDateFrom && salesDateTo < salesDateFrom) salesDateFrom = salesDateTo;
+      }
+      syncSalesDateInputs();
+      renderSalesHistoryTable();
+    }
+  });
 }
 
 function updateSalesDatePresetsUI() {
@@ -20,6 +56,31 @@ function updateSalesDatePresetsUI() {
       btn.classList.remove('active');
     }
   });
+
+  // Sync Year dropdown: Preserve selected year! Never reset to custom!
+  const yearSelect = document.getElementById('sh-year-select');
+  if (yearSelect) {
+    if (!salesDateFrom && !salesDateTo) {
+      yearSelect.value = 'all';
+      salesYearFilter = 'all';
+    } else if (salesYearFilter && salesYearFilter !== 'custom') {
+      yearSelect.value = salesYearFilter;
+    } else {
+      yearSelect.value = 'current';
+      salesYearFilter = 'current';
+    }
+  }
+
+  // Sync Historical Records button
+  const histBtn = document.getElementById('sh-historical-btn');
+  if (histBtn) {
+    if (isHistoricalView(salesDateFrom, salesDateTo)) {
+      histBtn.classList.add('active');
+    } else {
+      histBtn.classList.remove('active');
+    }
+  }
+
   const summaryEl = document.getElementById('sh-date-summary');
   if (summaryEl) {
     summaryEl.innerHTML = formatDateRangeSummary(salesDateFrom, salesDateTo, 'Date filter:');
@@ -34,37 +95,80 @@ function syncSalesDateInputs() {
   const fromEl = document.getElementById('sh-date-from');
   const toEl = document.getElementById('sh-date-to');
   if (fromEl) {
-    fromEl.value = salesDateFrom || '';
-    fromEl.max = salesDateTo || '';
+    fromEl.value = formatDateInputMMDDYYYY(salesDateFrom);
   }
   if (toEl) {
-    toEl.value = salesDateTo || '';
-    toEl.min = salesDateFrom || '';
+    toEl.value = formatDateInputMMDDYYYY(salesDateTo);
   }
   updateSalesDatePresetsUI();
 }
 
+function onSalesYearChange(val) {
+  closeAppMonthDayPicker();
+  const curY = getCurrentYear();
+  if (val === 'all') {
+    salesDateFrom = '';
+    salesDateTo = '';
+    salesYearFilter = 'all';
+  } else {
+    const targetYear = (val === 'current') ? curY : (parseInt(val, 10) || curY);
+    salesYearFilter = (val === 'current') ? 'current' : String(targetYear);
+    salesDateFrom = updateDateYearISO(salesDateFrom, targetYear, '01-01');
+    salesDateTo = updateDateYearISO(salesDateTo, targetYear, (targetYear === curY ? todayISO().slice(5) : '12-31'));
+    if (salesDateFrom && salesDateTo && salesDateFrom > salesDateTo) {
+      salesDateFrom = salesDateTo;
+    }
+  }
+  syncSalesDateInputs();
+  renderSalesHistoryTable();
+}
+
+function toggleSalesHistoricalRecords() {
+  if (isHistoricalView(salesDateFrom, salesDateTo)) {
+    // Return to default current calendar year
+    setSalesDatePreset('year');
+  } else {
+    // Switch to all-time historical sales transactions
+    salesDateFrom = '';
+    salesDateTo = '';
+    salesYearFilter = 'all';
+    syncSalesDateInputs();
+    renderSalesHistoryTable();
+  }
+}
+
 function setSalesDatePreset(preset) {
   const today = todayISO();
+  const curY = getCurrentYear();
   if (preset === 'today') {
     salesDateFrom = today;
     salesDateTo = today;
+    salesYearFilter = 'current';
   } else if (preset === 'yesterday') {
     const yest = daysAgoISO(1);
     salesDateFrom = yest;
     salesDateTo = yest;
+    salesYearFilter = 'current';
   } else if (preset === '7d') {
     salesDateFrom = daysAgoISO(6);
     salesDateTo = today;
+    salesYearFilter = 'current';
   } else if (preset === '30d') {
     salesDateFrom = daysAgoISO(29);
     salesDateTo = today;
+    salesYearFilter = 'current';
   } else if (preset === 'month') {
     salesDateFrom = thisMonthStartISO();
     salesDateTo = today;
+    salesYearFilter = 'current';
+  } else if (preset === 'year') {
+    salesDateFrom = currentYearStartISO(curY);
+    salesDateTo = currentYearEndISO(curY);
+    salesYearFilter = 'current';
   } else if (preset === 'all') {
     salesDateFrom = '';
     salesDateTo = '';
+    salesYearFilter = 'all';
   }
   syncSalesDateInputs();
   renderSalesHistoryTable();
@@ -84,8 +188,6 @@ function onSalesDateRangeChange() {
   }
   salesDateFrom = f;
   salesDateTo = t;
-  if (fromEl) fromEl.max = t || '';
-  if (toEl) toEl.min = f || '';
   updateSalesDatePresetsUI();
   renderSalesHistoryTable();
 }
@@ -110,28 +212,36 @@ function setSalesDateRange(daysAgo) {
 
 function resetAllSalesFilters() {
   salesFilterStatus = 'all';
-  salesDateFrom = '';
-  salesDateTo = '';
+  salesSearchQuery = '';
+  const curY = getCurrentYear();
+  salesDateFrom = currentYearStartISO(curY);
+  salesDateTo = currentYearEndISO(curY);
+  salesYearFilter = 'current';
   const searchEl = document.getElementById('sh-search');
   if (searchEl) searchEl.value = '';
+  resetPaginationPage('sales_history');
   renderPage();
 }
 
 function salesHistoryPage() {
+  const curY = getCurrentYear();
+  const availableYears = getAvailableRecordYears();
+  const selectedYear = getSalesSelectedYear();
   const activePreset = getSalesDatePreset();
   const hasDates = Boolean(salesDateFrom || salesDateTo);
+  const isHistorical = isHistoricalView(salesDateFrom, salesDateTo);
 
   return `
-  <div class="panel" style="padding:0; overflow:hidden;">
+  <div class="panel" id="sales-history-panel" style="padding:0; overflow:hidden;">
     <div class="panel-head row wrap" style="padding:14px 18px 12px; gap:10px;">
       <div>
         <h3 style="margin:0;">Sales History &amp; Aftersales</h3>
-        <span class="muted small">Review customer receipts, process same-day product returns &amp; exchanges (within day only), and issue exchange slips</span>
+        <span class="muted small">Review sales receipts, process same-day product returns &amp; exchanges (within day only), and issue exchange slips</span>
       </div>
       <div class="spacer"></div>
       <div class="row wrap" style="gap:8px; align-items:center;">
-        <input id="sh-search" type="text" placeholder="🔍 Search receipt #, customer, cashier…" style="width:250px;" oninput="renderSalesHistoryTable()">
-        <button type="button" class="btn ghost small" onclick="resetAllSalesFilters()" title="Reset all search and date filters">Reset All</button>
+        <input id="sh-search" type="text" placeholder="🔍 Search receipt #, cashier…" value="${escapeHtml(salesSearchQuery)}" style="width:250px;" oninput="salesSearchQuery=this.value; renderSalesHistoryTable()">
+        <button type="button" class="btn ghost small" onclick="resetAllSalesFilters()" title="Reset all search and date filters to current year">Reset All</button>
       </div>
     </div>
 
@@ -143,20 +253,46 @@ function salesHistoryPage() {
       <button class="btn ghost small filter-tab ${salesFilterStatus === 'refunded' ? 'active' : ''}" onclick="setSalesFilter('refunded')">Returned / Exchanged</button>
     </div>
 
-    <!-- Dedicated Date Range Bar & Quick Presets (matches Audit Log) -->
+    <!-- Dedicated Date Range Bar, Year Selector & Historical Records Option -->
     <div class="audit-date-bar" style="padding:10px 18px; border-top:none; border-bottom:1px solid var(--line-light); background:#FBF9F4;">
       <div class="audit-date-group">
-        <label class="audit-date-label">📅 Date Range:</label>
-        <div class="audit-date-field" title="Start date">
+        <!-- Year Selector (Defaults to Current Year) -->
+        <div class="audit-year-wrap">
+          <label for="sh-year-select" class="audit-date-label">📅 Year:</label>
+          <select id="sh-year-select" class="audit-year-select" onchange="onSalesYearChange(this.value)" title="Filter sales by calendar year">
+            <option value="current" ${salesYearFilter === 'current' ? 'selected' : ''}>${curY} (Current Year)</option>
+            ${availableYears.filter(y => y !== curY).map(y => `<option value="${y}" ${salesYearFilter === String(y) ? 'selected' : ''}>${y}</option>`).join('')}
+            <option value="all" ${salesYearFilter === 'all' ? 'selected' : ''}>All Recorded Years</option>
+          </select>
+        </div>
+
+        <span class="audit-date-sep">|</span>
+
+        <label class="audit-date-label">Date Range:</label>
+        <div class="audit-date-field app-monthday-picker-field" id="sh-date-from-wrap" title="Click to select Month and Day (Year: ${selectedYear})" onclick="openSalesCalendar('from', this, event)">
           <span class="field-tag">From</span>
-          <input id="sh-date-from" type="date" value="${escapeHtml(salesDateFrom)}" max="${escapeHtml(salesDateTo || '')}" onchange="onSalesDateRangeChange()">
+          <input id="sh-date-from"
+            type="text"
+            class="app-monthday-input"
+            placeholder="MM/DD/YYYY"
+            value="${escapeHtml(formatDateInputMMDDYYYY(salesDateFrom))}"
+            readonly
+            onclick="openSalesCalendar('from', this, event)">
+          <button type="button" class="app-cal-trigger-btn" onclick="openSalesCalendar('from', document.getElementById('sh-date-from-wrap'), event)" title="Open calendar (Month and Day)">📅</button>
         </div>
         <span class="audit-date-sep">to</span>
-        <div class="audit-date-field" title="End date">
+        <div class="audit-date-field app-monthday-picker-field" id="sh-date-to-wrap" title="Click to select Month and Day (Year: ${selectedYear})" onclick="openSalesCalendar('to', this, event)">
           <span class="field-tag">To</span>
-          <input id="sh-date-to" type="date" value="${escapeHtml(salesDateTo)}" min="${escapeHtml(salesDateFrom || '')}" onchange="onSalesDateRangeChange()">
+          <input id="sh-date-to"
+            type="text"
+            class="app-monthday-input"
+            placeholder="MM/DD/YYYY"
+            value="${escapeHtml(formatDateInputMMDDYYYY(salesDateTo))}"
+            readonly
+            onclick="openSalesCalendar('to', this, event)">
+          <button type="button" class="app-cal-trigger-btn" onclick="openSalesCalendar('to', document.getElementById('sh-date-to-wrap'), event)" title="Open calendar (Month and Day)">📅</button>
         </div>
-        <button type="button" id="sh-clear-date-btn" class="audit-clear-date-btn" onclick="clearSalesDates()" title="Clear date range" style="display:${hasDates ? 'inline-flex' : 'none'};">✕</button>
+        <button type="button" id="sh-clear-date-btn" class="audit-clear-date-btn" onclick="clearSalesDates()" title="Show all time" style="display:${hasDates ? 'inline-flex' : 'none'};">✕</button>
       </div>
 
       <div class="audit-date-shortcuts">
@@ -165,7 +301,13 @@ function salesHistoryPage() {
         <button type="button" class="audit-date-btn sh-date-btn ${activePreset === '7d' ? 'active' : ''}" data-preset="7d" onclick="setSalesDatePreset('7d')" title="Last 7 days">7D</button>
         <button type="button" class="audit-date-btn sh-date-btn ${activePreset === '30d' ? 'active' : ''}" data-preset="30d" onclick="setSalesDatePreset('30d')" title="Last 30 days">30D</button>
         <button type="button" class="audit-date-btn sh-date-btn ${activePreset === 'month' ? 'active' : ''}" data-preset="month" onclick="setSalesDatePreset('month')" title="This month to date">This Month</button>
-        <button type="button" class="audit-date-btn sh-date-btn ${activePreset === 'all' ? 'active' : ''}" data-preset="all" onclick="setSalesDatePreset('all')" title="Show all transactions">All</button>
+        <button type="button" class="audit-date-btn sh-date-btn ${activePreset === 'year' ? 'active' : ''}" data-preset="year" onclick="setSalesDatePreset('year')" title="Current year transactions">This Year (${curY})</button>
+        <button type="button" class="audit-date-btn sh-date-btn ${activePreset === 'custom' ? 'active' : ''}" data-preset="custom" onclick="openSalesCalendar('from', document.getElementById('sh-date-from-wrap'), event)" title="Custom date range">Custom Range</button>
+
+        <!-- Separate Historical Records viewing option for authorized users -->
+        <button type="button" id="sh-historical-btn" class="audit-historical-btn ${isHistorical ? 'active' : ''}" onclick="toggleSalesHistoricalRecords()" title="View complete historical records across all years">
+          🏛️ Historical Records
+        </button>
       </div>
 
       <div class="audit-date-info" id="sh-date-summary">
@@ -181,20 +323,30 @@ function salesHistoryPage() {
 
 function setSalesFilter(status) {
   salesFilterStatus = status;
-  renderSalesHistoryTable();
+  resetPaginationPage('sales_history');
+  renderSalesHistoryTable(true);
   // Update tab visual state
   document.querySelectorAll('.filter-tab').forEach(btn => {
     btn.classList.toggle('active', btn.getAttribute('onclick').includes(`'${status}'`));
   });
 }
 
-function renderSalesHistoryTable() {
+function renderSalesHistoryTable(keepPage = false) {
+  if (!keepPage) {
+    resetPaginationPage('sales_history');
+  }
   const el = document.getElementById('sales-history-table');
   if (el) el.innerHTML = salesHistoryTableHtml();
 }
 
 function saleStatusBadge(status) {
-  const s = status || 'completed';
+  const s = String(status || 'completed').trim().toLowerCase();
+  if (s === 'voided' || s === 'void') {
+    return `<span class="badge out">Voided</span>`;
+  }
+  if (s === 'cancelled' || s === 'canceled') {
+    return `<span class="badge out">Cancelled</span>`;
+  }
   if (s === 'refunded' || s === 'exchanged' || s === 'returned') {
     return `<span class="badge sale-refunded">Returned / Exchanged</span>`;
   }
@@ -226,18 +378,21 @@ function isSaleReturnWithinDay(sale) {
 }
 
 function salesHistoryTableHtml() {
-  const q = (document.getElementById('sh-search') ? document.getElementById('sh-search').value : '').toLowerCase();
-  const fromEl = document.getElementById('sh-date-from');
-  const toEl = document.getElementById('sh-date-to');
-  const fromDate = fromEl ? fromEl.value : salesDateFrom;
-  const toDate = toEl ? toEl.value : salesDateTo;
+  const searchEl = document.getElementById('sh-search');
+  if (searchEl) salesSearchQuery = searchEl.value;
+  const q = String(salesSearchQuery || '').trim().toLowerCase();
+  const fromDate = salesDateFrom;
+  const toDate = salesDateTo;
   let list = [...db.sales].sort((a, b) => new Date(b.date) - new Date(a.date));
 
   if (salesFilterStatus !== 'all') {
     list = list.filter(s => (s.status || 'completed') === salesFilterStatus);
   }
   if (q) {
-    list = list.filter(s => (getReceiptNo(s) + ' ' + (s.customerName || '') + ' ' + (s.cashierName || '')).toLowerCase().includes(q));
+    list = list.filter(s => {
+      const itemsText = (s.items || []).map(it => it.name || it.productName || '').join(' ');
+      return (getReceiptNo(s) + ' ' + (s.cashierName || '') + ' ' + itemsText).toLowerCase().includes(q);
+    });
   }
   if (fromDate) {
     list = list.filter(s => s.date.slice(0, 10) >= fromDate);
@@ -246,14 +401,44 @@ function salesHistoryTableHtml() {
     list = list.filter(s => s.date.slice(0, 10) <= toDate);
   }
 
+  const pag = paginateArray(list, 'sales_history', {
+    onUpdate: () => renderSalesHistoryTable(true),
+    scrollTarget: '#sales-history-panel',
+    recordLabel: 'transactions'
+  });
+  const pagedList = pag.pagedItems;
+
+  const isHistorical = isHistoricalView(fromDate, toDate);
+  const curY = getCurrentYear();
+  let histLabel = 'All-Time Historical Records';
+  if (fromDate && toDate && fromDate.slice(0, 4) === toDate.slice(0, 4)) {
+    histLabel = `Historical Records (Year ${fromDate.slice(0, 4)})`;
+  } else if (fromDate && toDate) {
+    histLabel = `Historical Period (${formatDateReadable(fromDate)} – ${formatDateReadable(toDate)})`;
+  } else if (fromDate) {
+    histLabel = `Historical Records from ${formatDateReadable(fromDate)}`;
+  } else if (toDate) {
+    histLabel = `Historical Records until ${formatDateReadable(toDate)}`;
+  }
+
   return `
+  ${isHistorical ? `
+    <div class="historical-records-banner">
+      <div>
+        🏛️ <b>${escapeHtml(histLabel)}:</b> <b>${list.length}</b> transaction(s) found. All historical business records are permanently retained in the database.
+      </div>
+      <button type="button" class="btn ghost small" onclick="setSalesDatePreset('year')" style="color:#7B4F09; border-color:#D19A42; background:#fff;">Return to Current Year (${curY}) &rarr;</button>
+    </div>
+  ` : ''}
+  ${typeof renderSalesHistorySummaryAndBreakdownsHtml === 'function'
+    ? `<div style="padding:14px 18px 0;">${renderSalesHistorySummaryAndBreakdownsHtml(list, fromDate, toDate)}</div>`
+    : ''}
   <table>
     <thead>
       <tr>
         <th>Receipt #</th>
         <th>Date &amp; Time</th>
         <th>Cashier</th>
-        <th>Customer</th>
         <th>Items</th>
         <th class="center">Status</th>
         <th class="right">Total / Net</th>
@@ -261,7 +446,7 @@ function salesHistoryTableHtml() {
       </tr>
     </thead>
     <tbody>
-      ${list.length ? list.map(s => {
+      ${pagedList.length ? pagedList.map(s => {
     const status = s.status || 'completed';
     const returnedVal = getSaleReturnedValue(s);
     const exchangeTotal = getSaleExchangeTotal(s);
@@ -275,7 +460,6 @@ function salesHistoryTableHtml() {
           <td><code style="color:var(--teal); font-weight:700;">${escapeHtml(getReceiptNo(s))}</code></td>
           <td>${formatDateTime(s.date)}</td>
           <td>${escapeHtml(s.cashierName)}</td>
-          <td>${escapeHtml(s.customerName) || '<span class="muted">—</span>'}</td>
           <td>${s.items.length} item${s.items.length === 1 ? '' : 's'}</td>
           <td class="center">${saleStatusBadge(status)}</td>
           <td class="right">
@@ -302,9 +486,10 @@ function salesHistoryTableHtml() {
             </div>
           </td>
         </tr>`;
-  }).join('') : `<tr><td colspan="8" class="empty-state">No sales transactions found matching filters.</td></tr>`}
+  }).join('') : `<tr><td colspan="7" class="empty-state">No sales transactions found matching filters.</td></tr>`}
     </tbody>
-  </table>`;
+  </table>
+  ${pag.html}`;
 }
 
 function viewSale(id) {
@@ -330,7 +515,6 @@ function openReturnRefundModal(saleId) {
   exchangePickerQuery = '';
 
   const receiptNo = getReceiptNo(sale);
-  const discountPct = Number(sale.discountPct || 0);
   const saleItems = Array.isArray(sale.items) ? sale.items : [];
   const hasColorMixItems = saleItems.some(it => it.type === 'colormix');
 
@@ -339,14 +523,16 @@ function openReturnRefundModal(saleId) {
     const qtyReturned = Number(item.returnedQty || 0);
     const returnable = Math.max(0, Number((qtyPurchased - qtyReturned).toFixed(2)));
 
-    // Effective price customer paid per unit after discount
+    // Unit price per item
     const rawUnitPrice = Number(item.unitPrice !== undefined ? item.unitPrice : (item.price !== undefined ? item.price : (Number(item.lineTotal || 0) / Math.max(1, Number(item.qty || 1))))) || 0;
-    const effectiveUnitPrice = discountPct > 0
-      ? Number((rawUnitPrice * (1 - discountPct / 100)).toFixed(2))
-      : Number(rawUnitPrice.toFixed(2));
+    const effectiveUnitPrice = Number(rawUnitPrice.toFixed(2));
 
     const isBlend = item.type === 'colormix';
     const hex = isBlend ? (item.hexColor || '#1F6F6B') : getProductHex(productById(item.productId));
+    const prod = !isBlend && item.productId ? productById(item.productId) : null;
+    const variant = prod ? productSizeVariantBySize(prod, item.size) : null;
+    const sizeId = item.sizeId || (variant ? variant.sizeId : null);
+    const prodId = prod ? (prod.productId || prod.id) : item.productId;
     const sizeStr = item.size ? ` · Size: <b>${item.size}L</b>` : '';
     const formulaStr = isBlend && Array.isArray(item.components) && item.components.length
       ? `<div class="muted small" style="font-size:11px; margin-top:2px;">Formula: ${item.components.map(cp => `${cp.percentage}% ${escapeHtml(cp.name)} (${formatStock(cp.liters)}L)`).join(' + ')}</div>`
@@ -359,7 +545,14 @@ function openReturnRefundModal(saleId) {
            <span class="badge low" id="ret-cm-badge-${idx}" style="font-size:10px; padding:1px 6px;">🔒 Custom Mix — Final Sale</span>
          </div>
          ${formulaStr}`
-      : `<b>${escapeHtml(item.name)}</b> ${hex ? `<code style="font-family:'Space Grotesk',monospace; font-size:11px; font-weight:600; color:var(--teal);">(${hex})</code>` : ''}${item.color && item.color !== '-' ? ` (${escapeHtml(item.color)})` : ''} <div class="muted small">${escapeHtml(item.brand || '')}${sizeStr}</div>`;
+      : `<div>
+           <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+             <b>${escapeHtml(item.name)}</b>
+             ${hex ? `<code style="font-family:'Space Grotesk',monospace; font-size:11px; font-weight:600; color:var(--teal);">(${hex})</code>` : ''}
+             ${item.color && item.color !== '-' ? `(${escapeHtml(item.color)})` : ''}
+           </div>
+           <div class="muted small">${escapeHtml(item.brand || '')}${sizeStr}</div>
+         </div>`;
 
     // Custom mixes are locked by default unless override is enabled
     const isInputDisabled = returnable === 0 || isBlend;
@@ -374,7 +567,6 @@ function openReturnRefundModal(saleId) {
       </td>
       <td class="right" style="font-family:'Space Grotesk'; font-size:12.5px;">
         ${peso(effectiveUnitPrice)}
-        ${discountPct > 0 ? `<div class="muted small" style="font-size:10px;">(${discountPct}% off)</div>` : ''}
       </td>
       <td style="width:130px;">
         <div style="display:flex; gap:4px; align-items:center;">
@@ -424,11 +616,10 @@ function openReturnRefundModal(saleId) {
     <div style="background:#FAF7F2; border:1px solid var(--line); border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:14px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px;">
       <div>
         <div><span class="muted">Receipt #:</span> <code style="font-weight:700; color:var(--teal);">${escapeHtml(receiptNo)}</code> <span class="badge ok" style="font-size:10.5px; margin-left:6px;">✓ Same-Day Eligible</span></div>
-        <div><span class="muted">Customer:</span> <b>${escapeHtml(sale.customerName) || 'Walk-in Customer'}</b></div>
       </div>
       <div>
         <div><span class="muted">Date of Sale:</span> <b>${formatDateTime(sale.date)}</b></div>
-        <div><span class="muted">Original Payment:</span> <b>${peso(sale.total)}</b></div>
+        <div><span class="muted">Original Total:</span> <b>${peso(sale.total)}</b></div>
       </div>
     </div>
 
@@ -436,7 +627,7 @@ function openReturnRefundModal(saleId) {
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:8px; flex-wrap:wrap;">
       <div>
         <strong style="font-size:13.5px; color:var(--ink);">1. Select Items Being Returned</strong>
-        <div class="muted small">Enter the quantity of paint cans being returned by the customer:</div>
+        <div class="muted small">Enter the quantity of paint cans being returned:</div>
       </div>
       <div class="row wrap" style="gap:6px;">
         <button type="button" class="btn secondary small" onclick="fillAllReturnLines('${sale.id}', true)">⚡ Return All Eligible</button>
@@ -479,12 +670,12 @@ function openReturnRefundModal(saleId) {
       <div class="field">
         <label>Reason for Return / Exchange <span style="color:var(--danger);">*</span></label>
         <select id="ret-reason" required>
-          <option value="Customer exchanging for a different color / shade">Customer exchanging for a different color / shade</option>
+          <option value="Exchanging for a different color / shade">Exchanging for a different color / shade</option>
           <option value="Wrong product or can size purchased (Exchange)">Wrong product or can size purchased (Exchange)</option>
           <option value="Defective / damaged paint can (Replace)">Defective / damaged paint can (Replace)</option>
           <option value="Store mixing error / off-shade formula (Re-Mix Exchange)">Store mixing error / off-shade formula (Re-Mix Exchange)</option>
-          <option value="Customer returned unopened / excess paint cans">Customer returned unopened / excess paint cans</option>
-          <option value="Customer job cancelled / changed mind">Customer job cancelled / changed mind</option>
+          <option value="Returned unopened / excess paint cans">Returned unopened / excess paint cans</option>
+          <option value="Job cancelled / changed mind">Job cancelled / changed mind</option>
           <option value="Other return / exchange reason">Other return / exchange reason</option>
         </select>
       </div>
@@ -703,13 +894,17 @@ function onChangeFixedReplacementProduct(saleId, sourceRowIdx, newProductId) {
     return;
   }
 
-  line.productId = p.id;
+  const variant = productSizeVariantBySize(p, fixedSize);
+  line.productId = p.productId || p.id;
+  line.product_id = p.productId || p.id;
+  line.sizeId = variant ? variant.sizeId : null;
+  line.size_id = variant ? variant.sizeId : null;
   line.name = p.name;
   line.brand = p.brand || '';
   line.color = p.color || '';
   line.unitPrice = (p.id === line.origProductId && line.origUnitPrice)
     ? line.origUnitPrice
-    : Number((p.price * fixedSize).toFixed(2));
+    : (variant ? variant.pricePerCan : Number((p.price * fixedSize).toFixed(2)));
   line.lineTotal = Number((fixedQty * line.unitPrice).toFixed(2));
 
   openExchangePickerRow = null;
@@ -969,7 +1164,7 @@ function openStartReturnPickerModal() {
   const renderPickerList = (filter = '') => {
     const q = filter.trim().toLowerCase();
     const filtered = q
-      ? eligibleSales.filter(s => (getReceiptNo(s) + ' ' + (s.customerName || '') + ' ' + (s.cashierName || '')).toLowerCase().includes(q))
+      ? eligibleSales.filter(s => (getReceiptNo(s) + ' ' + (s.cashierName || '')).toLowerCase().includes(q))
       : eligibleSales.slice(0, 15);
 
     const container = document.getElementById('ret-picker-list');
@@ -986,7 +1181,6 @@ function openStartReturnPickerModal() {
           <tr style="border-bottom:1px solid var(--line); background:#FAF7F2;">
             <th style="padding:8px 10px; text-align:left;">Receipt #</th>
             <th style="padding:8px 10px; text-align:left;">Date &amp; Time</th>
-            <th style="padding:8px 10px; text-align:left;">Customer</th>
             <th style="padding:8px 10px; text-align:right;">Total Paid</th>
             <th style="padding:8px 10px; text-align:right;">Action</th>
           </tr>
@@ -996,7 +1190,6 @@ function openStartReturnPickerModal() {
             <tr style="border-bottom:1px solid #F0EAE0;">
               <td style="padding:8px 10px;"><code style="color:var(--teal); font-weight:700;">${escapeHtml(getReceiptNo(s))}</code></td>
               <td style="padding:8px 10px;">${formatDateTime(s.date)}</td>
-              <td style="padding:8px 10px;">${escapeHtml(s.customerName) || '<span class="muted">—</span>'}</td>
               <td style="padding:8px 10px; text-align:right; font-weight:700; font-family:'Space Grotesk';">${peso(s.total)}</td>
               <td style="padding:8px 10px; text-align:right;">
                 <button type="button" class="btn secondary small" onclick='closeModal(); openReturnRefundModal("${s.id}")'>↩️ Return / Exchange</button>
@@ -1008,19 +1201,20 @@ function openStartReturnPickerModal() {
     `;
   };
 
+  window.onReturnPickerSearch = renderPickerList;
+
   openModal('↩️ Select Same-Day Sale to Process Return &amp; Exchange', `
     <div style="margin-bottom:10px; padding:8px 12px; background:#EDF7F6; border:1px solid #B5D2CD; border-radius:var(--radius-sm); font-size:12.5px; color:var(--ink);">
       <b>Same-Day Return &amp; Exchange Policy:</b> Only sales transactions completed today (<b>${escapeHtml(todayISO())}</b>) are eligible for return or exchange.
     </div>
     <div style="margin-bottom:12px;">
-      <input type="text" id="ret-picker-search" placeholder="Search today's receipt # (e.g. OR-2026...), customer, or cashier..." style="width:100%; padding:9px 12px; font-size:13.5px;" oninput="onReturnPickerSearch(this.value)">
+      <input type="text" id="ret-picker-search" placeholder="Search today's receipt # (e.g. OR-2026...) or cashier..." style="width:100%; padding:9px 12px; font-size:13.5px;" oninput="onReturnPickerSearch(this.value)">
     </div>
     <div id="ret-picker-list" style="max-height:360px; overflow-y:auto; border:1px solid var(--line); border-radius:var(--radius-sm); background:#fff;"></div>
   `, `
     <button class="btn secondary" onclick="closeModal()">Cancel</button>
   `, 'wide');
 
-  window.onReturnPickerSearch = renderPickerList;
   setTimeout(() => renderPickerList(''), 0);
 }
 
@@ -1103,11 +1297,11 @@ function recalcReturnGrandTotal(saleId) {
       settlementValueEl.textContent = '₱0.00 (Even Exchange)';
       settlementValueEl.style.color = 'var(--teal)';
     } else if (exchangeTotal > 0 && diff > 0) {
-      settlementLabelEl.textContent = 'Additional Payment Due from Customer:';
+      settlementLabelEl.textContent = 'Additional Payment Due:';
       settlementValueEl.textContent = `+${peso(diff)}`;
       settlementValueEl.style.color = 'var(--success)';
     } else if (exchangeTotal > 0 && diff < 0) {
-      settlementLabelEl.textContent = 'Remaining Return Credit to Customer:';
+      settlementLabelEl.textContent = 'Remaining Return Credit:';
       settlementValueEl.textContent = peso(Math.abs(diff));
       settlementValueEl.style.color = 'var(--danger)';
     } else {
@@ -1133,7 +1327,7 @@ async function processSaleReturn(saleId) {
     return;
   }
 
-  const reason = document.getElementById('ret-reason') ? document.getElementById('ret-reason').value : 'Customer return / exchange';
+  const reason = document.getElementById('ret-reason') ? document.getElementById('ret-reason').value : 'Return / exchange';
   const note = document.getElementById('ret-note') ? document.getElementById('ret-note').value.trim() : '';
   const restock = document.getElementById('ret-restock') ? document.getElementById('ret-restock').checked : true;
   const date = nowISO();
@@ -1177,9 +1371,17 @@ async function processSaleReturn(saleId) {
       // Update item returned quantity
       item.returnedQty = Number(((item.returnedQty || 0) + qtyToReturn).toFixed(2));
 
+      const prodObj = item.productId ? productById(item.productId) : null;
+      const sizeNum = Number(item.size) || 1;
+      const itemVariant = prodObj ? productSizeVariantBySize(prodObj, sizeNum) : null;
+      const resolvedSizeId = item.sizeId || (itemVariant ? itemVariant.sizeId : null);
+
       returnedItems.push({
         type: item.type || 'product',
-        productId: item.productId || null,
+        productId: prodObj ? (prodObj.productId || prodObj.id) : (item.productId || null),
+        product_id: prodObj ? (prodObj.productId || prodObj.id) : (item.productId || null),
+        sizeId: resolvedSizeId,
+        size_id: resolvedSizeId,
         name: item.name,
         color: item.color || item.colorName || '',
         brand: item.brand || (item.type === 'colormix' ? 'Custom Color Mix' : ''),
@@ -1196,6 +1398,9 @@ async function processSaleReturn(saleId) {
           date,
           type: 'adjustment',
           productId: null,
+          product_id: null,
+          sizeId: null,
+          size_id: null,
           productName: `Miscast / Returned Mix — ${item.name} (${item.colorName || 'Custom'})`,
           qtyChange: 0,
           note: `Custom Mix Return / Exchange: ${receiptNo} (${reason}) [${qtyToReturn}L Miscast/Defective — Not Restocked to Base Cans]${note ? ' — ' + note : ''}`,
@@ -1206,6 +1411,8 @@ async function processSaleReturn(saleId) {
           const product = productById(item.productId);
           if (product) {
             const size = Number(item.size) || 1;
+            const variant = productSizeVariantBySize(product, size);
+            const sizeId = resolvedSizeId || (variant ? variant.sizeId : null);
             const litersRestocked = Number((qtyToReturn * size).toFixed(2));
             const beforeStock = Number(product.stock) || 0;
             const beforeCans = productCanCount(product, size);
@@ -1214,16 +1421,21 @@ async function processSaleReturn(saleId) {
               product.canStock = {};
             }
             product.canStock[size] = (Number(product.canStock[size]) || 0) + qtyToReturn;
+            syncProductVariants(product);
             const afterCans = productCanCount(product, size);
             anySealedRestocked = true;
             db.movements.push({
               id: uid('mv'),
               date,
               type: 'return',
-              productId: product.id,
+              productId: product.productId || product.id,
+              product_id: product.productId || product.id,
+              sizeId: sizeId,
+              size_id: sizeId,
+              container_size: size,
               productName: product.name,
               qtyChange: litersRestocked,
-              note: `Customer Return / Exchange: ${receiptNo} (${reason}) [Return ${qtyToReturn} × ${size}L Restocked · ${size}L Cans: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(product.stock)}L]${note ? ' — ' + note : ''}`,
+              note: `Product Return / Exchange: ${receiptNo} (${reason}) [Return ${qtyToReturn} × ${size}L Restocked · ${size}L Cans: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(product.stock)}L]${note ? ' — ' + note : ''}`,
               staffName: (currentUser && currentUser.name) || 'Cashier'
             });
           }
@@ -1232,14 +1444,20 @@ async function processSaleReturn(saleId) {
         // Damaged return — logged for audit without adding stock
         const product = item.productId ? productById(item.productId) : null;
         const curStock = product ? Number(product.stock || 0) : 0;
+        const variant = product && item.size ? productSizeVariantBySize(product, item.size) : null;
+        const sizeId = resolvedSizeId || (variant ? variant.sizeId : null);
         db.movements.push({
           id: uid('mv'),
           date,
           type: 'adjustment',
-          productId: item.productId || null,
+          productId: product ? (product.productId || product.id) : (item.productId || null),
+          product_id: product ? (product.productId || product.id) : (item.productId || null),
+          sizeId: sizeId,
+          size_id: sizeId,
+          container_size: item.size || null,
           productName: item.name,
           qtyChange: 0,
-          note: `Customer Return / Exchange: ${receiptNo} (${reason}) [Damaged/Not Restocked · Stock: ${formatStock(curStock)}L→${formatStock(curStock)}L]${note ? ' — ' + note : ''}`,
+          note: `Product Return / Exchange: ${receiptNo} (${reason}) [Damaged/Not Restocked · Stock: ${formatStock(curStock)}L→${formatStock(curStock)}L]${note ? ' — ' + note : ''}`,
           staffName: (currentUser && currentUser.name) || 'Cashier'
         });
       }
@@ -1299,6 +1517,8 @@ async function processSaleReturn(saleId) {
       const product = productById(exItem.productId);
       if (product) {
         const size = Number(exItem.size) || 1;
+        const variant = productSizeVariantBySize(product, size);
+        const sizeId = exItem.sizeId || (variant ? variant.sizeId : null);
         const litersIssued = Number((exItem.qty * size).toFixed(2));
         const beforeStock = Number(product.stock) || 0;
         const beforeCans = productCanCount(product, size);
@@ -1307,12 +1527,17 @@ async function processSaleReturn(saleId) {
           product.canStock = {};
         }
         product.canStock[size] = Math.max(0, (Number(product.canStock[size]) || 0) - exItem.qty);
+        syncProductVariants(product);
         const afterCans = productCanCount(product, size);
         db.movements.push({
           id: uid('mv'),
           date,
           type: 'return',
-          productId: product.id,
+          productId: product.productId || product.id,
+          product_id: product.productId || product.id,
+          sizeId: sizeId,
+          size_id: sizeId,
+          container_size: size,
           productName: product.name,
           qtyChange: -litersIssued,
           note: `Exchange Replacement Issued: ${receiptNo} (${reason}) [Exchange ${exItem.qty} × ${size}L Issued · ${size}L Cans: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(product.stock)}L]${note ? ' — ' + note : ''}`,
@@ -1346,6 +1571,36 @@ async function processSaleReturn(saleId) {
   if (!Array.isArray(sale.returns)) sale.returns = [];
   sale.returns.push(returnRecord);
   returnExchangeCart = [];
+
+  const auditAction = allFullyReturned ? 'SALE_REFUND' : 'PARTIAL_REFUND';
+  const retItemSummary = returnedItems.map(it => `${it.qty}${it.size ? '×' + it.size + 'L' : 'L'} ${it.name} (${peso(it.lineRefund)})`).join(', ');
+  const exItemSummary = exchangeItems.length > 0
+    ? exchangeItems.map(ex => `${ex.qty}${ex.size ? '×' + ex.size + 'L' : 'L'} ${ex.name} (${peso(ex.lineTotal)})`).join(', ')
+    : '';
+  const prevNetTotal = Number((sale.total - (sale.refundTotal - netReduction)).toFixed(2));
+  const newNetTotal = Number((sale.total - sale.refundTotal).toFixed(2));
+  logAudit(
+    auditAction,
+    `Receipt ${receiptNo}`,
+    `${allFullyReturned ? 'Full Sale Refund' : 'Partial Return / Refund'} processed for ${receiptNo} (Voucher ${returnRecord.voucherNo}) — Returned: ${retItemSummary} (${peso(thisRefundAmount)})${exItemSummary ? ' · Exchanged for: ' + exItemSummary + ' (' + peso(thisExchangeAmount) + ')' : ''} · Reason: ${reason}${note ? ' (' + note + ')' : ''}`,
+    {
+      entityName: `Receipt ${receiptNo}`,
+      fieldChanged: allFullyReturned ? 'Full Sale Refund' : (exchangeItems.length > 0 ? 'Partial Return & Exchange' : 'Partial Sale Refund'),
+      oldValue: `Net Sale: ${peso(prevNetTotal)} (Orig: ${peso(sale.total)})`,
+      newValue: `Net Sale: ${peso(newNetTotal)} (Returned: ${peso(thisRefundAmount)}${thisExchangeAmount > 0 ? ', Replacement: ' + peso(thisExchangeAmount) : ''})`,
+      referenceNo: receiptNo,
+      reason: `${reason}${note ? ' — ' + note : ''}`,
+      meta: {
+        voucherNo: returnRecord.voucherNo,
+        receiptNo,
+        refundAmount: thisRefundAmount,
+        exchangeAmount: thisExchangeAmount,
+        restocked: returnRecord.restocked,
+        returnedItems: returnedItems.map(i => ({ name: i.name, qty: i.qty, size: i.size, unitPrice: i.unitPrice, lineRefund: i.lineRefund })),
+        exchangeItems: exchangeItems.map(i => ({ name: i.name, qty: i.qty, size: i.size, unitPrice: i.unitPrice, lineTotal: i.lineTotal }))
+      }
+    }
+  );
 
   await saveDB();
   closeModal();
@@ -1384,12 +1639,18 @@ function showReturnVoucherModal(saleId, voucherId) {
 
   const receiptNo = getReceiptNo(sale);
   const itemsHtml = (voucher.items || []).map(it => {
-    const itHex = it.productId ? getProductHex(productById(it.productId)) : '';
+    const prod = it.productId ? productById(it.productId) : null;
+    const itHex = prod ? getProductHex(prod) : '';
+    const variant = prod && it.size ? productSizeVariantBySize(prod, it.size) : null;
+    const sizeId = it.sizeId || (variant ? variant.sizeId : null);
+    const prodId = prod ? (prod.productId || prod.id) : it.productId;
     return `
     <tr>
       <td>
-        <b>${escapeHtml(it.name)}</b> ${itHex ? `<span class="muted small" style="font-family:monospace; font-weight:600; color:var(--teal);">(${itHex})</span>` : ''}
-        ${it.color ? `<span class="muted small"> (${escapeHtml(it.color)})</span>` : ''}
+        <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+          <b>${escapeHtml(it.name)}</b> ${itHex ? `<span class="muted small" style="font-family:monospace; font-weight:600; color:var(--teal);">(${itHex})</span>` : ''}
+          ${it.color ? `<span class="muted small"> (${escapeHtml(it.color)})</span>` : ''}
+        </div>
         ${it.brand ? `<div class="muted small">${escapeHtml(it.brand || '')}${it.size ? ` · Size: <b>${it.size}L</b>` : ''}</div>` : ''}
       </td>
       <td class="right">${formatStock(it.qty)}</td>
@@ -1434,12 +1695,18 @@ function showReturnVoucherModal(saleId, voucherId) {
               <td class="right" style="font-weight:700; color:var(--teal);">${peso(ex.lineTotal)}</td>
             </tr>`;
     }
-    const exHex = ex.productId ? getProductHex(productById(ex.productId)) : '';
+    const prod = ex.productId ? productById(ex.productId) : null;
+    const exHex = prod ? getProductHex(prod) : '';
+    const variant = prod && ex.size ? productSizeVariantBySize(prod, ex.size) : null;
+    const sizeId = ex.sizeId || (variant ? variant.sizeId : null);
+    const prodId = prod ? (prod.productId || prod.id) : ex.productId;
     return `
           <tr>
             <td>
-              <b>${escapeHtml(ex.name)}</b> ${exHex ? `<span class="muted small" style="font-family:monospace; font-weight:600; color:var(--teal);">(${exHex})</span>` : ''}
-              ${ex.color && ex.color !== '-' ? `<span class="muted small"> (${escapeHtml(ex.color)})</span>` : ''}
+              <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+                <b>${escapeHtml(ex.name)}</b> ${exHex ? `<span class="muted small" style="font-family:monospace; font-weight:600; color:var(--teal);">(${exHex})</span>` : ''}
+                ${ex.color && ex.color !== '-' ? `<span class="muted small"> (${escapeHtml(ex.color)})</span>` : ''}
+              </div>
               <div class="muted small">${escapeHtml(ex.brand || '')}${ex.size ? ` · Size: <b>${ex.size}L</b>` : ''}</div>
             </td>
             <td class="right">${formatStock(ex.qty)}</td>
@@ -1468,7 +1735,6 @@ function showReturnVoucherModal(saleId, voucherId) {
       <div class="row wrap" style="justify-content:space-between; margin-bottom:12px; gap:8px;">
         <div>
           <div><span class="muted">Original Receipt:</span> <b>${escapeHtml(receiptNo)}</b></div>
-          <div><span class="muted">Customer:</span> <b>${escapeHtml(sale.customerName) || 'Walk-in Customer'}</b></div>
           <div><span class="muted">Cashier:</span> <b>${escapeHtml(voucher.cashierName)}</b></div>
         </div>
         <div class="right">
@@ -1482,7 +1748,7 @@ function showReturnVoucherModal(saleId, voucherId) {
         ${voucher.note ? `<br><span class="muted">Notes:</span> <i>${escapeHtml(voucher.note)}</i>` : ''}
       </div>
 
-      <div style="font-weight:700; font-size:11.5px; text-transform:uppercase; color:var(--ink-soft); letter-spacing:0.03em; margin-top:8px;">Items Returned by Customer</div>
+      <div style="font-weight:700; font-size:11.5px; text-transform:uppercase; color:var(--ink-soft); letter-spacing:0.03em; margin-top:8px;">Items Returned</div>
       <table style="width:100%; border-collapse:collapse; margin-top:4px;">
         <thead>
           <tr style="border-bottom:1px solid var(--line); font-size:11px; text-transform:uppercase; color:var(--ink-soft);">
@@ -1510,7 +1776,7 @@ function showReturnVoucherModal(saleId, voucherId) {
             <strong style="font-family:'Space Grotesk'; color:var(--teal);">${peso(exVal)}</strong>
           </div>
           <div style="display:flex; justify-content:space-between; align-items:center; padding-top:6px; border-top:1px solid #ECE4D8;">
-            <span style="font-weight:700; font-size:14px;">${Math.abs(diff) < 0.005 ? 'Exchange Settlement:' : (diff > 0 ? 'Additional Cash Paid by Customer:' : 'Remaining Return Credit:')}</span>
+            <span style="font-weight:700; font-size:14px;">${Math.abs(diff) < 0.005 ? 'Exchange Settlement:' : (diff > 0 ? 'Additional Amount Paid:' : 'Remaining Return Credit:')}</span>
             <span style="font-size:17px; font-weight:700; color:${diff >= 0 ? 'var(--teal)' : 'var(--danger)'}; font-family:'Space Grotesk';">
               ${Math.abs(diff) < 0.005 ? '₱0.00 (Even Exchange)' : (diff > 0 ? `+${peso(diff)}` : peso(Math.abs(diff)))}
             </span>
@@ -1526,7 +1792,7 @@ function showReturnVoucherModal(saleId, voucherId) {
       <div class="row wrap" style="justify-content:space-between; margin-top:30px; padding-top:20px; border-top:1px solid #ECE4D8; gap:20px;">
         <div style="text-align:center; min-width:140px;">
           <div style="border-bottom:1px solid #8A8070; width:100%; height:20px; margin-bottom:4px;"></div>
-          <span class="muted small" style="font-size:11px;">Customer Signature</span>
+          <span class="muted small" style="font-size:11px;">Authorized Signature</span>
         </div>
         <div style="text-align:center; min-width:140px;">
           <div style="border-bottom:1px solid #8A8070; width:100%; height:20px; margin-bottom:4px;"></div>

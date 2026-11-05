@@ -196,7 +196,7 @@ function receivingPage() {
             class="rcv-tab-btn ${currentMovementType === 'colormix' ? 'active' : ''}" 
             id="mv-card-colormix" 
             onclick="selectMovementType('colormix')">
-            🎨 Color Mixing
+            🫙 Opened Containers Shelf
           </button>
         </div>
 
@@ -225,7 +225,7 @@ function receivingPage() {
         ` : ''}
         ${pendingAdjRequests().length > 0 && currentUser && currentUser.role === 'staff' ? `
           <div style="font-size:12px; color:#92400E; font-weight:600; display:flex; align-items:center; gap:6px;">
-            <span>⏳ <b>${pendingAdjRequests().length}</b> adjustment request(s) pending Admin review</span>
+            <span>⏳ <b>${pendingAdjRequests().length}</b> adjustment request(s) awaiting Admin approval</span>
           </div>
         ` : ''}
       </div>
@@ -240,10 +240,13 @@ function receivingPage() {
 </div>
   </div>
   <div class="panel">
-<div class="panel-head row">
-  <h3>Recent Stock Movements</h3>
+<div class="panel-head row wrap" style="gap:8px;">
+  <div>
+    <h3 style="margin:0;">Recent Stock Movements</h3>
+    <span class="muted small">Latest 15 orders / batches</span>
+  </div>
   <div class="spacer"></div>
-  <span class="muted small">Latest 15 orders / batches</span>
+  <button class="btn secondary small audit-historical-btn" onclick="goTo('reports'); if (typeof setReportTab==='function') setReportTab('transactions');" title="Open complete Transaction History in Reports">🏛️ All Historical Transactions &rarr;</button>
 </div>
 <div class="panel-body tight table-scroll">
   ${renderStockMovementsTable(recentStockMoves, { emptyText: 'No stock movements recorded yet.' })}
@@ -381,6 +384,16 @@ async function disposeOpenedStock(productId, size) {
         note: `Disposed ${formatLiters(opened)} leftover from ${canSize}L opened can (${formatLiters(used)} was used) · Opened: ${formatStock(opened)}L→0.00L`,
         staffName: (currentUser && currentUser.name) || 'Staff'
       });
+      if (typeof logAudit === 'function') {
+        logAudit('STOCK_ADJUST', 'Inventory', `Disposed ${formatLiters(opened)} leftover from ${canSize}L opened can of ${p.name}`, {
+          productId: p.id,
+          entityName: p.name,
+          fieldChanged: `Opened / Used Stock (${canSize}L Can)`,
+          oldValue: `${formatLiters(opened)} remaining`,
+          newValue: '0.00 L (Disposed)',
+          reason: 'Dispose Opened / Used Stock'
+        });
+      }
       await saveDB();
       showToast(`Disposed ${formatLiters(opened)} of opened ${p.name}.`, 'ok');
       renderPage();
@@ -435,7 +448,11 @@ function renderReceivingPOPreview() {
       <div class="rcv-item-identity">
         <span class="rcv-item-dot" style="background:${hex};" title="${hex}"></span>
         <div>
-          <div class="rcv-item-name">${escapeHtml(item.productName)}</div>
+          <div class="rcv-item-name">
+            <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+              <span>${escapeHtml(item.productName)}</span>
+            </div>
+          </div>
           <div class="rcv-item-sub">
             <span>${escapeHtml(item.brand || '')}</span>
             <span>·</span>
@@ -712,11 +729,13 @@ function computeBulkAdjRowState(row) {
 
 function switchAdjView(view) {
   adjActiveView = view;
+  resetPaginationPage('adj_requests');
   renderPage();
 }
 
 function setAdjReqFilter(filter) {
   adjRequestFilterStatus = filter;
+  resetPaginationPage('adj_requests');
   renderPage();
 }
 
@@ -787,9 +806,9 @@ function renderBulkAdjustmentView() {
                   <div class="simple-stock-pills">
                     <span class="muted small" style="font-size:11.5px;">Current stock breakdown:</span>
                     ${productSizes(product).map(s => {
-                      const c = productCanCount(product, s);
-                      return `<span class="simple-stock-tag">🥫 ${s}L: <b>${c} can${c === 1 ? '' : 's'}</b></span>`;
-                    }).join('')}
+      const c = productCanCount(product, s);
+      return `<span class="simple-stock-tag">🥫 ${s}L: <b>${c} can${c === 1 ? '' : 's'}</b></span>`;
+    }).join('')}
                     ${productOpenedStock(product) > 0 ? `
                       <span class="simple-stock-tag opened">🫙 ${formatLiters(productOpenedStock(product))} opened leftover</span>
                     ` : ''}
@@ -821,32 +840,33 @@ function renderBulkAdjustmentView() {
                   </label>
                   <div class="simple-size-group">
                     ${state.isOpened ? (
-                      productOpenedEntries(product).length ? productOpenedEntries(product).map(e => {
-                        const isSel = (row.size === openedValueForSize(e.size));
-                        return `
+          productOpenedEntries(product).length ? productOpenedEntries(product).map(e => {
+            const isSel = (row.size === openedValueForSize(e.size));
+            return `
                           <button type="button" class="simple-size-btn ${isSel ? 'active' : ''}" onclick="setAdjRowSize(${index}, '${openedValueForSize(e.size)}')">
                             <span class="simple-size-name">🫙 ${e.size}L Opened</span>
                             <span class="simple-size-stock">${formatLiters(e.left)} leftover</span>
                           </button>
                         `;
-                      }).join('') : `
+          }).join('') : `
                         <div class="muted small" style="padding:6px 0; color:var(--danger);">⚠️ No opened leftover stock available for this product.</div>
                       `
-                    ) : (
-                      productSizes(product).map(s => {
-                        const cur = productCanCount(product, s);
-                        const maxDeduct = maxAllowedAdjQty(product, row.reason, s);
-                        const isSel = (Number(state.sizeNum) === s);
-                        const isDis = (!state.isAdd && maxDeduct <= 0);
-                        return `
+        ) : (
+          productSizes(product).map(s => {
+            const cur = productCanCount(product, s);
+            const maxDeduct = maxAllowedAdjQty(product, row.reason, s);
+            const isSel = (Number(state.sizeNum) === s);
+            const isDis = (!state.isAdd && maxDeduct <= 0);
+            const variant = productSizeVariantBySize(product, s);
+            return `
                           <button type="button" class="simple-size-btn ${isSel ? 'active' : ''} ${isDis ? 'disabled' : ''}" 
                             onclick="setAdjRowSize(${index}, ${s})" ${isDis ? 'disabled' : ''}>
                             <span class="simple-size-name">🥫 ${s}L Can</span>
                             <span class="simple-size-stock">${state.isAdd ? `${cur} in stock` : (maxDeduct >= 1 ? `${cur} in stock · Max -${maxDeduct}` : (cur === 1 ? '1 can (Protected)' : '0 in stock'))}</span>
                           </button>
                         `;
-                      }).join('')
-                    )}
+          }).join('')
+        )}
                   </div>
                 </div>
               ` : `
@@ -950,8 +970,8 @@ function renderBulkAdjustmentView() {
         <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
           <button type="button" id="btn-save-adj" class="btn simple-submit-btn" onclick="confirmAndSubmitAdjustments()" ${hasInvalidRows || validRows.length === 0 ? 'disabled' : ''}>
             ${currentUser && currentUser.role === 'staff'
-              ? `⏳ Submit for Admin Approval${validRows.length > 1 ? ` (${validRows.length} items)` : ''}`
-              : `💾 Save Stock Adjustment${validRows.length > 1 ? ` (${validRows.length} items)` : ''}`}
+      ? `⏳ Submit for Admin Approval${validRows.length > 1 ? ` (${validRows.length} items)` : ''}`
+      : `💾 Save Stock Adjustment${validRows.length > 1 ? ` (${validRows.length} items)` : ''}`}
           </button>
           <button type="button" class="btn secondary small" onclick="addBulkAdjRow()">+ Add Another Product</button>
         </div>
@@ -1222,30 +1242,72 @@ function confirmAndSubmitAdjustments() {
 }
 
 async function submitAdjRequestForApproval(validRows) {
-  if (!db.adjustmentRequests) db.adjustmentRequests = [];
-  const reqNumber = generateAdjReqNumber();
-  const req = {
-    id: uid('adjreq'),
-    reqNumber: reqNumber,
-    date: nowISO(),
-    requestedBy: (currentUser && currentUser.name) || 'Inventory Staff',
-    role: (currentUser && currentUser.role) || 'staff',
-    status: 'pending',
-    rows: validRows.map(r => ({ ...r })),
-    rowsJson: JSON.stringify(validRows),
-    batchNote: '',
-    reviewedBy: null,
-    reviewedAt: null,
-    rejectReason: null
-  };
+  if (window._isSubmittingAdjustment) return;
+  window._isSubmittingAdjustment = true;
+  const btnSave = document.getElementById('btn-save-adj');
+  if (btnSave) btnSave.disabled = true;
 
-  db.adjustmentRequests.unshift(req);
-  logAudit('ADJ_REQUEST_SUBMIT', 'Stock Adjustment', `Staff submitted adjustment request ${reqNumber} (${validRows.length} item${validRows.length === 1 ? '' : 's'}) for Admin approval`);
-  await saveDB();
+  try {
+    if (!db.adjustmentRequests) db.adjustmentRequests = [];
+    const reqNumber = generateAdjReqNumber();
+    const enrichedRows = validRows.map(r => {
+      const p = productById(r.productId);
+      const isAdd = r.reason === 'Count Correction (add)';
+      const isOpened = r.reason === 'Dispose Opened / Used Stock' || (!isAdd && isOpenedSizeValue(r.size));
+      const sizeNum = p ? (isOpened ? openedSizeFromValue(p, r.size) : adjSealedSize(p, r.size)) : r.size;
+      const variant = p && !isOpened ? productSizeVariantBySize(p, sizeNum) : null;
+      return {
+        ...r,
+        productId: p ? (p.productId || p.id) : r.productId,
+        product_id: p ? (p.productId || p.id) : r.productId,
+        sizeId: variant ? variant.sizeId : (r.sizeId || null),
+        size_id: variant ? variant.sizeId : (r.sizeId || null),
+        containerSize: sizeNum
+      };
+    });
+    const req = {
+      id: uid('adjreq'),
+      reqNumber: reqNumber,
+      date: nowISO(),
+      requestedBy: (currentUser && currentUser.name) || 'Inventory Staff',
+      role: (currentUser && currentUser.role) || 'staff',
+      status: 'pending',
+      rows: enrichedRows,
+      rowsJson: JSON.stringify(enrichedRows),
+      batchNote: '',
+      reason: enrichedRows.length === 1 ? enrichedRows[0].reason : (enrichedRows.length > 1 ? `${enrichedRows[0].reason} (+${enrichedRows.length - 1} more)` : 'Stock Adjustment'),
+      reviewedBy: null,
+      reviewedAt: null,
+      rejectReason: null
+    };
 
-  bulkAdjustmentRows = [{ id: uid('adj'), productId: '', reason: 'Damaged', size: 1, qty: 1, note: '' }];
-  showToast(`✓ Submitted Adjustment Request ${reqNumber} for Admin approval!`, 'ok');
-  switchAdjView('requests');
+    db.adjustmentRequests.unshift(req);
+    const reqItemsSummary = enrichedRows.map(r => {
+      const prod = productById(r.productId);
+      const pName = prod ? prod.name : 'Product';
+      return `${pName} (${r.reason}: ${r.qty} × ${r.containerSize || r.size}L)`;
+    }).join(', ');
+    logAudit('ADJ_REQUEST_SUBMIT', 'Stock Adjustment', `Staff submitted adjustment request ${reqNumber} (${validRows.length} item${validRows.length === 1 ? '' : 's'}): ${reqItemsSummary}`, {
+      productId: enrichedRows[0] ? enrichedRows[0].productId : '',
+      entityName: reqNumber,
+      fieldChanged: 'Stock Adjustment Request',
+      oldValue: 'None',
+      newValue: `Pending Approval (${reqItemsSummary})`,
+      referenceNo: reqNumber,
+      reason: enrichedRows.map(r => r.reason).join(', ')
+    });
+    await saveDB();
+
+    bulkAdjustmentRows = [{ id: uid('adj'), productId: '', reason: 'Damaged', size: 1, qty: 1, note: '' }];
+    showToast(`✓ Submitted Adjustment Request ${reqNumber} for Admin approval!`, 'ok');
+    switchAdjView('requests');
+  } catch (err) {
+    console.error('Error submitting adjustment request:', err);
+    showToast('Failed to submit adjustment request.', 'error');
+  } finally {
+    window._isSubmittingAdjustment = false;
+    if (btnSave) btnSave.disabled = false;
+  }
 }
 
 async function executeStockAdjustment(validRows, actorName = null, options = {}) {
@@ -1269,43 +1331,89 @@ async function executeStockAdjustment(validRows, actorName = null, options = {})
       productSizes(p).forEach(s => { pools[s] = productOpenedLiters(p, s); });
       pools[canSize] = newOpened;
       setProductOpenedBySize(p, pools);
+      syncProductVariants(p);
+      const variant = productSizeVariantBySize(p, canSize);
+      const sizeId = row.sizeId || (variant ? variant.sizeId : null);
 
       db.movements.push({
         id: uid('mv'),
         date,
         type: 'adjustment',
-        productId: p.id,
+        productId: p.productId || p.id,
+        product_id: p.productId || p.id,
+        sizeId: sizeId,
+        size_id: sizeId,
+        container_size: canSize,
         productName: `${p.name} [Opened / Used Stock]`,
         qtyChange: 0,
         note: `${row.reason} [Deducted ${formatStock(qty)}L from ${canSize ? canSize + 'L ' : ''}Opened / Used Stock · Opened: ${formatStock(beforeOpened)}L→${formatStock(newOpened)}L]${row.note ? ' — ' + row.note : ''}`,
         staffName: recordedStaff
       });
+      if (typeof logAudit === 'function') {
+        logAudit('STOCK_ADJUST', 'Inventory', `Adjusted opened stock for ${p.name} (${canSize}L Can): ${formatStock(beforeOpened)}L ➔ ${formatStock(newOpened)}L (${row.reason})`, {
+          productId: p.productId || p.id,
+          entityName: p.name,
+          fieldChanged: `Opened / Used Stock (${canSize}L Can)`,
+          oldValue: `${formatStock(beforeOpened)} L`,
+          newValue: `${formatStock(newOpened)} L (-${formatStock(qty)} L)`,
+          reason: row.reason + (row.note ? ` — ${row.note}` : '')
+        });
+      }
     } else {
       const sizeNum = adjSealedSize(p, row.size);
       const cans = Math.floor(Number(row.qty));
       const liters = Number((cans * sizeNum).toFixed(2));
       const deltaLiters = isAdd ? liters : -liters;
-      const beforeStock = Number(p.stock) || 0;
       const beforeCans = productCanCount(p, sizeNum);
       const afterCans = isAdd ? (beforeCans + cans) : Math.max(0, beforeCans - cans);
+      const beforeStock = productHasCanBreakdown(p) ? canBreakdownLiters(p) : (Number(p.stock) || 0);
 
       if (!p.canStock || Array.isArray(p.canStock) || typeof p.canStock !== 'object') {
         p.canStock = {};
       }
       p.canStock[sizeNum] = afterCans;
-      p.stock = Math.max(0, Number((beforeStock + deltaLiters).toFixed(2)));
+      p.canStock[String(sizeNum)] = afterCans;
+      const variant = productSizeVariantBySize(p, sizeNum);
+      if (variant) {
+        variant.sealedQuantity = afterCans;
+      }
+      syncProductVariants(p);
       normalizeProductOpenedStock(p);
+      const afterStock = productHasCanBreakdown(p) ? canBreakdownLiters(p) : Math.max(0, Number((beforeStock + deltaLiters).toFixed(2)));
+      p.stock = afterStock;
+      syncProductVariants(p);
+      const sizeId = row.sizeId || (variant ? variant.sizeId : null);
 
       db.movements.push({
         id: uid('mv'),
         date,
         type: 'adjustment',
-        productId: p.id,
+        productId: p.productId || p.id,
+        product_id: p.productId || p.id,
+        sizeId: sizeId,
+        size_id: sizeId,
+        container_size: sizeNum,
         productName: p.name,
         qtyChange: deltaLiters,
         note: `${row.reason} [${isAdd ? 'Added' : 'Deducted'} ${cans} × ${sizeNum}L (${isAdd ? '+' : '-'}${formatStock(liters)}L) · ${sizeNum}L Cans: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(p.stock)}L]${row.note ? ' — ' + row.note : ''}`,
         staffName: recordedStaff
       });
+      if (typeof logAudit === 'function') {
+        const auditAction = isAdd ? 'STOCK_INCREASE' : 'STOCK_DECREASE';
+        logAudit(
+          auditAction,
+          'Inventory',
+          `${isAdd ? 'Increased' : 'Decreased'} stock for ${p.name} (${cans} × ${sizeNum}L = ${isAdd ? '+' : '-'}${formatStock(liters)}L) — Reason: ${row.reason}`,
+          {
+            productId: p.productId || p.id,
+            entityName: p.name,
+            fieldChanged: `Sealed Stock (${sizeNum}L Can)`,
+            oldValue: `${beforeCans} cans (${formatStock(beforeStock)} L total)`,
+            newValue: `${afterCans} cans (${formatStock(p.stock)} L total)`,
+            reason: row.reason + (row.note ? ` — ${row.note}` : '')
+          }
+        );
+      }
     }
   }
 
@@ -1397,7 +1505,14 @@ async function approveAdjRequest(reqId) {
   req.reviewedBy = (currentUser && currentUser.name) || 'Administrator';
   req.reviewedAt = nowISO();
 
-  logAudit('ADJ_REQUEST_APPROVE', 'Stock Adjustment', `Approved adjustment request ${req.reqNumber} (submitted by ${req.requestedBy})`);
+  logAudit('ADJ_REQUEST_APPROVE', 'Stock Adjustment', `Approved adjustment request ${req.reqNumber} (submitted by ${req.requestedBy})`, {
+    entityName: req.reqNumber,
+    fieldChanged: 'Adjustment Request Status',
+    oldValue: 'Pending Approval',
+    newValue: 'Approved & Applied',
+    referenceNo: req.reqNumber,
+    reason: req.batchNote || `Submitted by ${req.requestedBy}`
+  });
   await saveDB();
   showToast(`✓ Approved adjustment request ${req.reqNumber} and updated stock!`, 'ok');
   renderPage();
@@ -1422,7 +1537,14 @@ async function rejectAdjRequest(reqId, reason) {
   req.reviewedBy = (currentUser && currentUser.name) || 'Administrator';
   req.reviewedAt = nowISO();
 
-  logAudit('ADJ_REQUEST_REJECT', 'Stock Adjustment', `Rejected adjustment request ${req.reqNumber}. Reason: ${req.rejectReason}`);
+  logAudit('ADJ_REQUEST_REJECT', 'Stock Adjustment', `Rejected adjustment request ${req.reqNumber}. Reason: ${req.rejectReason}`, {
+    entityName: req.reqNumber,
+    fieldChanged: 'Adjustment Request Status',
+    oldValue: 'Pending Approval',
+    newValue: 'Rejected',
+    referenceNo: req.reqNumber,
+    reason: req.rejectReason
+  });
   await saveDB();
   showToast(`Rejected adjustment request ${req.reqNumber}.`, 'ok');
   renderPage();
@@ -1447,10 +1569,17 @@ function viewAdjRequestDetails(reqId) {
         ? `<span style="color:#9A6216; font-weight:700;">🫙 Dispose ${formatLiters(r.qty)}</span>`
         : `<span style="color:var(--danger); font-weight:700;">🔻 Deduct ${r.qty} × ${sizeNum}L</span>`);
 
+    const variant = p && !isOpened ? productSizeVariantBySize(p, sizeNum) : null;
+    const sizeId = r.sizeId || (variant ? variant.sizeId : null);
+    const prodId = p ? (p.productId || p.id) : r.productId;
+
     return `
       <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:#FAF7F2; border-radius:6px; margin-bottom:8px; border:1px solid var(--line);">
         <div>
-          <div style="font-weight:700; color:var(--ink);">${escapeHtml(p ? p.name : 'Unknown Product')} <span style="font-weight:normal; font-size:12px; color:var(--ink-soft);">${p ? `(${p.brand})` : ''}</span></div>
+          <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            <span style="font-weight:700; color:var(--ink);">${escapeHtml(p ? p.name : 'Unknown Product')}</span>
+            <span style="font-weight:normal; font-size:12px; color:var(--ink-soft);">${p ? `(${p.brand})` : ''}</span>
+          </div>
           <div class="muted small" style="margin-top:2px;">Reason: <b>${escapeHtml(r.reason)}</b>${r.note ? ` — "${escapeHtml(r.note)}"` : ''}</div>
         </div>
         <div style="text-align:right;">
@@ -1510,6 +1639,11 @@ function renderAdjRequestsViewHtml() {
   }
 
   const isAdmin = currentUser && currentUser.role === 'admin';
+  const reqPag = paginateArray(list, 'adj_requests', {
+    onUpdate: renderBulkAdjustmentView,
+    scrollTarget: '#bulk-adj-container',
+    recordLabel: 'requests'
+  });
 
   return `
     <div class="panel" style="margin-top:0; border:none; box-shadow:none;">
@@ -1548,7 +1682,7 @@ function renderAdjRequestsViewHtml() {
             </tr>
           </thead>
           <tbody>
-            ${list.length ? list.map(req => {
+            ${(reqPag.pagedItems || reqPag.pageItems || []).length ? (reqPag.pagedItems || reqPag.pageItems || []).map(req => {
     const rows = Array.isArray(req.rows) ? req.rows : (req.rowsJson ? JSON.parse(req.rowsJson) : []);
     const dateStr = formatDateShort(req.date);
     const isPending = req.status === 'pending';
@@ -1557,7 +1691,7 @@ function renderAdjRequestsViewHtml() {
 
     let statusBadge = '';
     if (isPending) {
-      statusBadge = '<span class="badge" style="background:#FEF3C7; color:#92400E; border:1px solid #FCD34D;">⏳ Pending Approval</span>';
+      statusBadge = '<span class="badge" style="background:#FEF3C7; color:#92400E; border:1px solid #FCD34D;">⏳ Awaiting Admin Approval</span>';
     } else if (isApproved) {
       statusBadge = `<span class="badge ok" title="Approved at ${formatDateShort(req.reviewedAt)}">✅ Approved ${req.reviewedBy ? 'by ' + escapeHtml(req.reviewedBy) : ''}</span>`;
     } else {
@@ -1614,6 +1748,7 @@ function renderAdjRequestsViewHtml() {
           </tbody>
         </table>
       </div>
+      ${reqPag.html}
     </div>
   `;
 }

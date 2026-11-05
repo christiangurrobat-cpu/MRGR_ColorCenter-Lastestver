@@ -2,6 +2,15 @@
    10. POINT OF SALE
    ============================================================ */
 let posCategoryFilter = '';
+let posCurrentPage = 1;
+const POS_PAGE_SIZE = 8;
+
+function setPosPage(newPage) {
+  const target = parseInt(newPage, 10);
+  if (isNaN(target)) return;
+  posCurrentPage = target;
+  renderPosProductList();
+}
 
 function setPosCategoryFilter(cat) {
   posCategoryFilter = cat;
@@ -13,125 +22,175 @@ function setPosCategoryFilter(cat) {
 function clearPosSearch() {
   const input = document.getElementById('pos-search');
   if (input) { input.value = ''; input.focus(); }
+  posCurrentPage = 1;
   renderPosProductList();
 }
 
-function setPosCustomer(val) {
-  const input = document.getElementById('pos-customer');
-  if (input) { input.value = val; input.focus(); }
+function clearPosCart() {
+  if (!cart.length) return;
+  if (!confirm('Are you sure you want to clear all items from Current Sale?')) return;
+  cart = [];
+  refreshCartUI();
+  showToast('Current Sale cart has been cleared.', 'info');
 }
 
 function posPage() {
   const categories = ['Automotive Paint', 'House Paint', 'Specialty Paint'];
   const cartItemCount = cart.reduce((sum, item) => sum + (item.qty || 1), 0);
+  const totalActive = activeProducts().length;
+
+  setTimeout(() => {
+    updateCheckoutButtonState();
+  }, 20);
 
   return `
   <div class="pos-grid">
-<div>
-  <div class="panel">
-    <div class="panel-head row wrap" style="justify-content:space-between; gap:10px;">
-      <div class="row" style="gap:8px;">
-        <span style="font-size:20px;">🛒</span>
-        <div>
-          <h3 style="margin:0;">Product Catalog</h3>
-          <div class="muted small">Hover to preview color shade · Click to add to cart</div>
+    <div>
+      <div class="panel">
+        <div class="panel-head row wrap" style="justify-content:space-between; gap:10px;">
+          <div class="row" style="gap:8px;">
+            <span style="font-size:20px;">🛒</span>
+            <div>
+              <h3 style="margin:0;">Product Catalog</h3>
+              <div class="muted small">Select paint products or formulation to add to cart</div>
+            </div>
+          </div>
+          <button class="btn small" style="background:linear-gradient(135deg, #1F6F6B 0%, #298C87 100%); box-shadow:0 2px 8px rgba(31,111,107,0.25);" onclick="openColorMixModal(true)">
+            🎨 + Add Custom Color Mix
+          </button>
         </div>
-      </div>
-      <button class="btn small" style="background:linear-gradient(135deg, #1F6F6B 0%, #298C87 100%); box-shadow:0 2px 8px rgba(31,111,107,0.25);" onclick="openColorMixModal(true)">
-        🎨 + Add Custom Color Mix
-      </button>
-    </div>
-    <div class="panel-body" style="padding-bottom:10px;">
-      <!-- Search Box with Clear Button -->
-      <div style="position:relative; margin-bottom:12px;">
-        <span style="position:absolute; left:12px; top:50%; transform:translateY(-50%); font-size:14px; opacity:0.6;">🔍</span>
-        <input id="pos-search" type="text" placeholder="Search by paint name, brand, color, or size…" style="padding-left:34px; padding-right:32px; border-radius:var(--radius-sm); font-size:13.5px;" oninput="renderPosProductList()">
-        <button type="button" onclick="clearPosSearch()" style="position:absolute; right:10px; top:50%; transform:translateY(-50%); background:none; border:none; color:var(--ink-soft); font-size:14px; cursor:pointer; padding:2px;" title="Clear search">✕</button>
-      </div>
+        <div class="panel-body" style="padding-bottom:10px;">
+          <!-- Search Box with Clear Button -->
+          <div class="pos-search-wrap">
+            <span class="pos-search-icon">🔍</span>
+            <input id="pos-search" type="text" class="pos-search-input" placeholder="Search by paint name, brand, color, or size…" oninput="renderPosProductList()">
+            <button type="button" class="pos-search-clear" onclick="clearPosSearch()" title="Clear search">✕</button>
+          </div>
 
-      <!-- Category Filter Pills -->
-      <div class="pos-cat-pills">
-        <button class="pos-cat-pill ${posCategoryFilter === '' ? 'active' : ''}" data-cat="" onclick="setPosCategoryFilter('')">🌈 All Products (${activeProducts().filter(p => Number(p.stock) > 0).length})</button>
-        ${categories.map(cat => {
-    const count = activeProducts().filter(p => p.type === cat && Number(p.stock) > 0).length;
-    return `<button class="pos-cat-pill ${posCategoryFilter === cat ? 'active' : ''}" data-cat="${escapeHtml(cat)}" onclick="setPosCategoryFilter('${escapeHtml(cat)}')">${escapeHtml(cat)} (${count})</button>`;
+          <!-- Category Filter Pills -->
+          <div class="pos-cat-pills">
+            <button class="pos-cat-pill ${posCategoryFilter === '' ? 'active' : ''}" data-cat="" onclick="setPosCategoryFilter('')">
+              <span>🌈 All Products</span>
+              <span class="pill-count">${totalActive}</span>
+            </button>
+            ${categories.map(cat => {
+    const count = activeProducts().filter(p => p.type === cat).length;
+    return `
+              <button class="pos-cat-pill ${posCategoryFilter === cat ? 'active' : ''}" data-cat="${escapeHtml(cat)}" onclick="setPosCategoryFilter('${escapeHtml(cat)}')">
+                <span>${escapeHtml(cat)}</span>
+                <span class="pill-count">${count}</span>
+              </button>`;
   }).join('')}
-      </div>
-    </div>
-    <div class="panel-body tight" id="pos-product-list" style="border-top:1px solid var(--line); max-height:460px; overflow-y:auto;"></div>
-  </div>
-</div>
-<div>
-  <div class="panel" style="box-shadow:var(--shadow-md);">
-    <div class="panel-head row" style="justify-content:space-between;">
-      <div class="row" style="gap:8px;">
-        <span style="font-size:20px;">🧾</span>
-        <h3 style="margin:0;">Current Sale</h3>
-      </div>
-      <span class="badge ${cart.length ? 'ok' : 'mid'}" id="cart-count-badge" style="font-size:11.5px; padding:3px 10px;">
-        ${cart.length ? `🛒 ${cart.length} item${cart.length === 1 ? '' : 's'} (${cartItemCount} qty)` : 'Cart Empty'}
-      </span>
-    </div>
-    <div class="panel-body">
-      <div class="field">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-          <label for="pos-customer" style="margin:0;">Customer Name (optional)</label>
-          <div class="row wrap" style="gap:4px;">
-            <button type="button" class="btn ghost small" style="padding:1px 6px; font-size:11px;" onclick="setPosCustomer('Walk-in Customer')">Walk-in</button>
-            <button type="button" class="btn ghost small" style="padding:1px 6px; font-size:11px;" onclick="setPosCustomer('VIP Regular')">VIP Regular</button>
-            <button type="button" class="btn ghost small" style="padding:1px 6px; font-size:11px;" onclick="setPosCustomer('Auto Repair Shop')">Auto Shop</button>
           </div>
         </div>
-        <input id="pos-customer" type="text" placeholder="e.g. Juan Dela Cruz / Auto Shop">
-      </div>
-
-      <div id="cart-lines">${cartLinesHtml()}</div>
-
-      <div id="cart-totals">${cartTotalsHtml()}</div>
-
-      <button class="btn block" style="margin-top:14px; padding:12px; font-size:15px; font-weight:700; background:linear-gradient(135deg, #1F6F6B 0%, #165653 100%);" onclick="completeSale()">
-        ✓ Complete &amp; Print Receipt
-      </button>
-      <div class="muted small" style="margin-top:6px; font-size:11px; text-align:center; display:flex; align-items:center; justify-content:center; gap:4px;">
-        <span>🔍 Order review &amp; verification appears before finalizing</span>
+        <div class="panel-body tight" id="pos-product-list"></div>
+        <div id="pos-pagination" class="pos-pagination-bar"></div>
       </div>
     </div>
-  </div>
-</div>
+    <div>
+      <div class="panel" style="box-shadow:var(--shadow-md);">
+        <div class="panel-head row" style="justify-content:space-between;">
+          <div class="row" style="gap:8px;">
+            <span style="font-size:20px;">🧾</span>
+            <h3 style="margin:0;">Current Sale</h3>
+          </div>
+          <div class="row" style="gap:6px; align-items:center;">
+            ${cart.length ? `<button type="button" class="btn ghost small" style="padding:2px 8px; font-size:11px; color:var(--danger);" onclick="clearPosCart()" title="Empty cart">🗑️ Clear</button>` : ''}
+            <span class="badge ${cart.length ? 'ok' : 'mid'}" id="cart-count-badge" style="font-size:11.5px; padding:3px 10px;">
+              ${cart.length ? `🛒 ${cart.length} item${cart.length === 1 ? '' : 's'} (${cartItemCount} qty)` : 'Cart Empty'}
+            </span>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div id="cart-lines">${cartLinesHtml()}</div>
+
+          <div id="cart-totals">${cartTotalsHtml()}</div>
+
+          <button id="btn-complete-sale" class="btn block" onclick="completeSale()" disabled>
+            ✓ Complete &amp; Print Receipt
+          </button>
+          <div id="pos-checkout-hint" class="pos-checkout-hint">
+            <span>🛒 Cart is empty · Add products to continue</span>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>`;
 }
 
 function renderPosProductList() {
   const searchInput = document.getElementById('pos-search');
   const q = (searchInput ? searchInput.value : '').toLowerCase().trim();
-  let list = activeProducts().filter(p => Number(p.stock) > 0);
+  let list = activeProducts();
 
   if (posCategoryFilter) {
     list = list.filter(p => p.type === posCategoryFilter);
   }
 
   if (q) {
-    list = list.filter(p => [p.name, p.brand, p.type, p.color].join(' ').toLowerCase().includes(q));
+    list = list.filter(p => {
+      const searchBlob = [
+        p.name,
+        p.brand,
+        p.type,
+        p.color,
+        p.productId || '',
+        p.product_id || '',
+        p.id || '',
+        productSizeVariants(p).map(v => `${v.sizeId} ${v.containerSize}L`).join(' ')
+      ].join(' ').toLowerCase();
+      return searchBlob.includes(q);
+    });
   }
 
   const container = document.getElementById('pos-product-list');
+  const pagContainer = document.getElementById('pos-pagination');
   if (!container) return;
 
-  if (!list.length) {
+  const totalItems = list.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / POS_PAGE_SIZE));
+
+  // Requirement 5: Automatically recalculate pagination.
+  // If the current page exceeds the available pages after filtering, automatically return to the nearest valid page.
+  if (posCurrentPage > totalPages) {
+    posCurrentPage = totalPages;
+  }
+  if (posCurrentPage < 1) {
+    posCurrentPage = 1;
+  }
+
+  if (!totalItems) {
     container.innerHTML = `
-  <div class="empty-state" style="padding:32px 20px;">
-    <div style="font-size:32px; margin-bottom:8px;">🎨</div>
-    <div style="font-weight:600; margin-bottom:4px; color:var(--ink);">No products found matching your search.</div>
-    <div class="muted small" style="margin-bottom:14px;">Looking for a custom color or pigment blend?</div>
-    <button class="btn secondary small" onclick="openColorMixModal(true)">+ Launch Color Mixing Studio</button>
-  </div>`;
+    <div class="empty-state" style="padding:36px 20px; text-align:center;">
+      <div style="font-size:36px; margin-bottom:8px;">🎨</div>
+      <div style="font-weight:700; margin-bottom:4px; color:var(--ink);">No products found matching your search.</div>
+      <div class="muted small" style="margin-bottom:14px;">Looking for a custom color or pigment blend?</div>
+      <button class="btn secondary small" onclick="openColorMixModal(true)">+ Launch Color Mixing Studio</button>
+    </div>`;
+
+    if (pagContainer) {
+      pagContainer.innerHTML = `
+      <div class="pos-pagination-inner">
+        <div class="pos-pagination-info">
+          <span>Showing <strong>0</strong> of <strong>0</strong> products</span>
+        </div>
+        <div class="pos-pagination-controls">
+          <button type="button" class="pos-pagination-btn nav-prev" id="pos-prev-btn" disabled title="No previous page">‹ Previous</button>
+          <span class="pos-pagination-counter">Page <strong>1</strong> of <strong>1</strong></span>
+          <button type="button" class="pos-pagination-btn nav-next" id="pos-next-btn" disabled title="No next page">Next ›</button>
+        </div>
+      </div>`;
+    }
     return;
   }
 
-  container.innerHTML = list.map(p => {
-    const isOut = p.stock <= 0;
-    const isLow = p.stock > 0 && productHasLowStock(p);
-    const lowSizes = productLowSizes(p);
+  // Requirement 3: Display a maximum of 8-10 products per page
+  const startIndex = (posCurrentPage - 1) * POS_PAGE_SIZE;
+  const endIndex = Math.min(startIndex + POS_PAGE_SIZE, totalItems);
+  const pagedList = list.slice(startIndex, endIndex);
+
+  container.innerHTML = pagedList.map(p => {
+    const isOut = Number(p.stock) <= 0;
     const hex = getProductDefaultColor(p);
     const rgb = hexToRgb(hex);
     const rgbaBg = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.12)`;
@@ -139,57 +198,112 @@ function renderPosProductList() {
     const detected = detectMixedColorName(rgb.r, rgb.g, rgb.b);
     const colorLabel = p.color && p.color !== '-' ? p.color : detected.name;
 
+    // Stock availability status indicator (Only show Out of Stock if 0 available)
+    const stockBadgeHtml = isOut
+      ? `<span>·</span> <span class="pos-stock-tag out-of-stock" title="Out of stock (0L available)"><span class="dot"></span> Out of Stock</span>`
+      : '';
+
     return `
-<div class="pos-product" 
-     style="--prod-color: ${hex}; --prod-color-alpha: ${rgbaBg}; --prod-color-glow: ${rgbaGlow};"
-     title="🎨 ${escapeHtml(p.name)} [${colorLabel}] · Tone: ${detected.family} (${hex})">
-  <span class="hover-color-swatch" style="background-color:${hex};" title="${colorLabel} (${hex})"></span>
-  <div class="pinfo">
-    <div class="pname">
-      <span>${escapeHtml(p.name)} <code style="font-family:'Space Grotesk',monospace; font-size:11px; font-weight:600; color:var(--teal); opacity:0.9;">(${hex})</code></span>
-      <span class="color-presentation-pill" title="Color: ${escapeHtml(colorLabel)} (${detected.family} Tone)">
-        <span class="cm-color-dot" style="background:${hex}; width:8px; height:8px;"></span>
-        ${escapeHtml(colorLabel)}
-      </span>
-    </div>
-    <div class="pmeta">
-      <span>${escapeHtml(p.brand)}</span>
-      <span style="margin:0 4px;">·</span>
-      <span class="muted" style="font-size:11px;">Tone: <b>${detected.family}</b></span>
-      <span style="margin:0 4px;">·</span>
-      ${isOut ? `<span style="color:var(--danger); font-weight:600;">✕ Out of stock</span>` :
-        (isLow ? `<span style="color:#D9622B; font-weight:600;" title="${escapeHtml(productLowSizesSummary(p))}">⚠️ Low (${lowSizes.length ? `${lowSizes.map(s => fmtSize(s)).join(', ')} low` : `${formatLiters(p.stock)} left`})</span>` :
-          `<span style="color:var(--success);">✓ ${formatLiters(p.stock)} in stock</span>`)}
-    </div>
-  </div>
-  <div class="pprice">
-    <span>${peso(p.price)}</span>
-    <span style="font-size:11.5px; font-weight:600; color:var(--ink-soft);">/Liters</span>
-  </div>
-  <div class="pos-size-picker" style="display:flex; flex-direction:column; align-items:flex-end; gap:5px; min-width:250px;">
-    <div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;">
-      ${productSizes(p).map(s => {
-        const hasBreakdown = productHasCanBreakdown(p);
-        const canCount = productCanCount(p, s);
-        const inStock = hasBreakdown ? (canCount > 0 && p.stock >= s) : (p.stock >= s);
-        const countLabel = hasBreakdown ? ` (${canCount})` : '';
-        const priceLabel = peso(p.price * s);
-        return `
-          <button type="button" 
-                  class="pos-size-btn ${inStock ? '' : 'disabled'}" 
-                  ${!inStock ? `disabled title="Out of stock for ${s}L"` : `title="Click to add 1x ${s}L to Current Sale — ${priceLabel}"`}
-                  onclick="addSizeToCart('${p.id}', ${s})">
-            <span class="ps-size-tag">+ ${fmtSize(s)}</span>
-            <span class="ps-stock-tag">${inStock ? countLabel : ' (0)'}</span>
-          </button>`;
-      }).join('')}
-    </div>
-    <div class="pos-can-badge" style="display:${isOut ? 'none' : 'inline-flex'}; font-size:10.5px; padding:2px 8px;">
-      🛒 Click size to add 1 to Current Sale
-    </div>
-  </div>
-</div>`;
+    <div class="pos-product ${isOut ? 'out-of-stock-row' : ''}" 
+         style="--prod-color: ${hex}; --prod-color-alpha: ${rgbaBg}; --prod-color-glow: ${rgbaGlow};"
+         title="${escapeHtml(p.name)} [${colorLabel}] · Brand: ${escapeHtml(p.brand || '')}">
+      <div class="pos-swatch-box" style="background-color:${hex};" title="Color: ${escapeHtml(colorLabel)} (${hex})"></div>
+      <div class="pinfo">
+        <div class="pname">
+          <span>${escapeHtml(p.name)}</span>
+          <span class="pos-color-badge" title="Color: ${escapeHtml(colorLabel)} (${detected.family} tone)">
+            <span class="cm-color-dot" style="background:${hex}; width:8px; height:8px; border-radius:50%; display:inline-block;"></span>
+            <span>${escapeHtml(colorLabel)}</span>
+            <code class="pos-hex-code">(${hex})</code>
+          </span>
+        </div>
+        <div class="pmeta">
+          <span style="font-weight:600; color:var(--ink);">${escapeHtml(p.brand || '')}</span>
+          <span class="muted" style="font-size:11px;">· Tone: <b>${detected.family}</b></span>
+          ${stockBadgeHtml}
+        </div>
+      </div>
+      <div class="pprice">
+        <span class="price-val">${peso(p.price)}</span>
+        <span class="price-unit">/ Liter</span>
+      </div>
+      <div class="pos-size-picker">
+        <div class="pos-size-buttons">
+          ${productSizes(p).map(s => {
+      const variant = productSizeVariantBySize(p, s);
+      const hasBreakdown = productHasCanBreakdown(p);
+      const canCount = productCanCount(p, s);
+      const inStock = hasBreakdown ? (canCount > 0 && p.stock >= s) : (p.stock >= s);
+      const countLabel = hasBreakdown ? `(${canCount})` : '';
+      const canPrice = variant ? variant.pricePerCan : (p.price * s);
+      const priceLabel = peso(canPrice);
+      return `
+              <button type="button" 
+                      class="pos-size-btn ${inStock ? '' : 'disabled'}" 
+                      ${!inStock ? `disabled title="Out of stock for ${fmtSize(s)}"` : `title="Add 1x ${fmtSize(s)} to cart — ${priceLabel}"`}
+                      onclick="addSizeToCart('${p.id}', ${s})">
+                <span class="ps-size-tag">+ ${fmtSize(s)}</span>
+                <span class="ps-stock-tag">${inStock ? countLabel : '(0)'}</span>
+              </button>`;
+    }).join('')}
+        </div>
+        <span class="pos-size-hint">${isOut ? 'Currently unavailable' : 'Click size to add to cart'}</span>
+      </div>
+    </div>`;
   }).join('');
+
+  if (pagContainer) {
+    const isFirstPage = posCurrentPage <= 1;
+    const isLastPage = posCurrentPage >= totalPages;
+
+    let pageButtonsHtml = '';
+    if (totalPages > 1) {
+      const pageNums = typeof buildPaginationPageNumbers === 'function'
+        ? buildPaginationPageNumbers(posCurrentPage, totalPages)
+        : Array.from({ length: totalPages }, (_, i) => i + 1);
+
+      pageButtonsHtml = pageNums.map(pn => {
+        if (pn === '...') {
+          return '<span class="pos-pagination-ellipsis" aria-hidden="true">…</span>';
+        }
+        const isActive = pn === posCurrentPage;
+        return `<button type="button" 
+                        class="pos-pagination-btn pos-page-num ${isActive ? 'active' : ''}" 
+                        ${isActive ? 'aria-current="page"' : ''}
+                        onclick="setPosPage(${pn})" 
+                        title="Page ${pn}">
+                  ${pn}
+                </button>`;
+      }).join('');
+    }
+
+    pagContainer.innerHTML = `
+      <div class="pos-pagination-inner">
+        <div class="pos-pagination-info">
+          <span>Showing <strong>${startIndex + 1}–${endIndex}</strong> of <strong>${totalItems}</strong> products</span>
+        </div>
+        <div class="pos-pagination-controls">
+          <button type="button" 
+                  class="pos-pagination-btn nav-prev" 
+                  id="pos-prev-btn" 
+                  onclick="setPosPage(${posCurrentPage - 1})" 
+                  ${isFirstPage ? 'disabled' : ''} 
+                  title="Previous page">
+            ‹ Previous
+          </button>
+          ${pageButtonsHtml ? `<div class="pos-pagination-pages">${pageButtonsHtml}</div>` : ''}
+          <span class="pos-pagination-counter">Page <strong>${posCurrentPage}</strong> of <strong>${totalPages}</strong></span>
+          <button type="button" 
+                  class="pos-pagination-btn nav-next" 
+                  id="pos-next-btn" 
+                  onclick="setPosPage(${posCurrentPage + 1})" 
+                  ${isLastPage ? 'disabled' : ''} 
+                  title="Next page">
+            Next ›
+          </button>
+        </div>
+      </div>`;
+  }
 }
 
 function addSizeToCart(productId, size = 1) {
@@ -216,8 +330,9 @@ function addSizeToCart(productId, size = 1) {
     }
   }
 
-  const existing = cart.find(c => c.type === 'product' && c.productId === productId && (Number(c.size) || 1) === size);
-  const unitPriceForSize = Number((p.price * size).toFixed(2));
+  const variant = productSizeVariantBySize(p, size);
+  const existing = cart.find(c => c.type === 'product' && (c.productId === p.id || c.productId === p.productId) && (c.sizeId ? c.sizeId === (variant ? variant.sizeId : null) : (Number(c.size) || 1) === size));
+  const unitPriceForSize = variant ? Number(variant.pricePerCan.toFixed(2)) : Number((p.price * size).toFixed(2));
 
   if (existing) {
     existing.qty += 1;
@@ -225,7 +340,11 @@ function addSizeToCart(productId, size = 1) {
   } else {
     cart.push({
       type: 'product',
-      productId: p.id,
+      productId: p.productId || p.id,
+      product_id: p.productId || p.id,
+      sizeId: variant ? variant.sizeId : null,
+      size_id: variant ? variant.sizeId : null,
+      containerSize: size,
       name: p.name,
       brand: p.brand,
       color: p.color,
@@ -237,7 +356,7 @@ function addSizeToCart(productId, size = 1) {
     });
   }
   refreshCartUI();
-  showToast(`Added 1x ${size}L ${p.name} to Current Sale.`, 'ok');
+  showToast(`Added 1x ${fmtSize(size)} ${p.name} to Current Sale.`, 'ok');
 }
 
 // Backward compatibility
@@ -248,17 +367,121 @@ function addToCart(productId, qty = 1, size = 1) {
 function changeCartQty(index, delta) {
   const line = cart[index];
   if (!line) return;
-  setCartQty(index, (Number(line.qty) || 0) + delta);
+  const next = (Number(line.qty) || 0) + delta;
+  if (next <= 0) {
+    cart.splice(index, 1);
+    refreshCartUI();
+    return;
+  }
+  setCartQty(index, next);
+}
+
+function handleCartQtyInput(index, input) {
+  const line = cart[index];
+  if (!line) return;
+  const raw = input.value.trim();
+  if (raw === '') return;
+  let newQty = parseInt(raw, 10);
+  if (isNaN(newQty) || newQty < 1) return;
+
+  if (line.type === 'product') {
+    const p = productById(line.productId);
+    if (p) {
+      const size = Number(line.size) || 1;
+      const otherLiters = cart
+        .filter((c, idx) => idx !== index && c.type === 'product' && c.productId === line.productId)
+        .reduce((sum, c) => sum + (c.qty * (Number(c.size) || 1)), 0);
+
+      const maxAllowed = Math.floor((p.stock - otherLiters) / size);
+      if (newQty > maxAllowed) {
+        showToast(`Not enough stock. Only ${Math.max(0, maxAllowed)} of ${size}L available (${formatLiters(p.stock)} total stock).`, 'error');
+        newQty = Math.max(1, maxAllowed);
+        input.value = newQty;
+      }
+
+      if (productHasCanBreakdown(p)) {
+        const maxCans = productCanCount(p, size);
+        if (newQty > maxCans) {
+          showToast(`Only ${maxCans} in stock for ${size}L.`, 'error');
+          newQty = Math.max(1, maxCans);
+          input.value = newQty;
+        }
+      }
+    }
+  } else {
+    // colormix
+    if (Array.isArray(line.components) && line.components.length) {
+      for (const comp of line.components) {
+        const p = productById(comp.productId);
+        const reqLiters = Number((newQty * ((Number(comp.percentage) || 0) / 100)).toFixed(2));
+        if (p && productMixAvailableStock(p) < reqLiters) {
+          showToast(`Not enough stock for mix ingredient "${comp.name}".`, 'error');
+          return;
+        }
+      }
+      line.components = line.components.map(comp => ({
+        ...comp,
+        liters: Number((newQty * ((Number(comp.percentage) || 0) / 100)).toFixed(2))
+      }));
+    }
+    line.liters = newQty;
+  }
+
+  line.qty = newQty;
+  line.lineTotal = Number((line.qty * line.unitPrice).toFixed(2));
+  updateCartLineDOM(index);
+}
+
+function handleCartQtyChange(index, input) {
+  const line = cart[index];
+  if (!line) return;
+  const raw = input.value.trim();
+  let newQty = parseInt(raw, 10);
+  if (isNaN(newQty) || newQty < 1) {
+    newQty = 1;
+    input.value = 1;
+  }
+  setCartQty(index, newQty);
+}
+
+function handleCartQtyBlur(index, input) {
+  handleCartQtyChange(index, input);
+}
+
+function updateCartLineDOM(index) {
+  const line = cart[index];
+  if (!line) return;
+
+  const priceEl = document.getElementById(`cart-price-${index}`);
+  if (priceEl) {
+    priceEl.innerHTML = `<span>${peso(line.lineTotal)}</span>`;
+  }
+
+  const metaEl = document.getElementById(`cart-meta-${index}`);
+  if (metaEl) {
+    const isMix = line.type === 'colormix';
+    metaEl.innerHTML = isMix
+      ? `Custom Mix · <strong>${line.liters}L</strong> · ${peso(line.unitPrice)}/L`
+      : `${escapeHtml(line.brand || '')} · Size: <strong>${line.size || 1}L</strong> · ${peso(line.unitPrice)} each · <span class="total-liters" style="color:var(--teal); font-weight:600;">${(line.qty * (Number(line.size) || 1)).toFixed(2)} L total</span>`;
+  }
+
+  const cartCountBadge = document.getElementById('cart-count-badge');
+  if (cartCountBadge) {
+    const cartItemCount = cart.reduce((sum, item) => sum + (item.qty || 1), 0);
+    cartCountBadge.className = `badge ${cart.length ? 'ok' : 'mid'}`;
+    cartCountBadge.innerHTML = cart.length ? `🛒 ${cart.length} item${cart.length === 1 ? '' : 's'} (${cartItemCount} qty)` : 'Cart Empty';
+  }
+
+  renderCartTotals();
+  updateCheckoutButtonState();
 }
 
 function setCartQty(index, rawVal) {
   const line = cart[index];
   if (!line) return;
-  const newQty = parseInt(rawVal, 10);
+  let newQty = parseInt(rawVal, 10);
   if (isNaN(newQty) || newQty <= 0) {
-    cart.splice(index, 1);
-    refreshCartUI();
-    return;
+    newQty = 1;
   }
 
   if (line.type === 'product') {
@@ -328,178 +551,172 @@ function setCartQty(index, rawVal) {
 function removeCartLine(index) { cart.splice(index, 1); refreshCartUI(); }
 
 function refreshCartUI() {
+  const activeEl = document.activeElement;
+  let focusedInputId = null;
+  let selectionStart = null;
+  let selectionEnd = null;
+
+  if (activeEl && activeEl.id && activeEl.id.startsWith('cart-qty-input-')) {
+    focusedInputId = activeEl.id;
+    try {
+      selectionStart = activeEl.selectionStart;
+      selectionEnd = activeEl.selectionEnd;
+    } catch (e) {}
+  }
+
   const cartLinesEl = document.getElementById('cart-lines');
   if (cartLinesEl) cartLinesEl.innerHTML = cartLinesHtml();
+
+  const cartCountBadge = document.getElementById('cart-count-badge');
+  if (cartCountBadge) {
+    const cartItemCount = cart.reduce((sum, item) => sum + (item.qty || 1), 0);
+    cartCountBadge.className = `badge ${cart.length ? 'ok' : 'mid'}`;
+    cartCountBadge.innerHTML = cart.length ? `🛒 ${cart.length} item${cart.length === 1 ? '' : 's'} (${cartItemCount} qty)` : 'Cart Empty';
+  }
+
   renderCartTotals();
+  updateCheckoutButtonState();
+
   if (typeof updateNavBadges === 'function') {
     try { updateNavBadges(); } catch (e) { }
   }
-}
 
-
-function tenderFeedbackHtml(t, cash) {
-  if (cash > 0) {
-    const isShort = cash < t.total;
-    const change = Math.max(0, cash - t.total);
-    return `
-      <div style="margin-top:8px; display:flex; justify-content:space-between; align-items:center; padding:7px 10px; border-radius:6px; background:${isShort ? '#FBEAE8' : '#EAF4EC'}; font-size:12.5px; font-weight:700; color:${isShort ? 'var(--danger)' : 'var(--success)'};">
-        <span>${isShort ? '⚠️ Amount Short (Must be higher than total):' : '🪙 Change to Return:'}</span>
-        <span>${peso(isShort ? t.total - cash : change)}</span>
-      </div>`;
+  if (focusedInputId) {
+    const nextInput = document.getElementById(focusedInputId);
+    if (nextInput) {
+      nextInput.focus();
+      try {
+        if (selectionStart !== null && selectionEnd !== null) {
+          nextInput.setSelectionRange(selectionStart, selectionEnd);
+        }
+      } catch (e) {}
+    }
   }
-  if (t.total > 0) {
-    return `
-      <div style="margin-top:6px; font-size:11.5px; color:#A04035; font-weight:600; display:flex; align-items:center; gap:4px;">
-        <span>⚠️ Enter Amount is required (must be higher than or equal to ${peso(t.total)}).</span>
-      </div>`;
-  }
-  return '';
-}
-
-function updateTenderDisplayOnly() {
-  const t = cartTotals();
-  const cash = Number(posCashTendered) || 0;
-  const isShort = cash > 0 && cash < t.total;
-  const isCovered = cash >= t.total && t.total > 0;
-
-  const feedbackEl = document.getElementById('pos-cash-feedback');
-  if (feedbackEl) feedbackEl.innerHTML = tenderFeedbackHtml(t, cash);
-
-  const clearBtn = document.getElementById('pos-cash-clear-btn');
-  if (clearBtn) clearBtn.style.display = cash > 0 ? 'inline-block' : 'none';
-
-  const input = document.getElementById('pos-cash-input');
-  if (input) {
-    input.style.borderColor = isShort ? 'var(--danger)' : (isCovered ? 'var(--success)' : '');
-    input.style.boxShadow = isShort ? '0 0 0 2px rgba(193,68,61,0.18)' : (isCovered ? '0 0 0 2px rgba(63,131,88,0.18)' : '');
-  }
-}
-
-function setExactTender() {
-  const t = cartTotals();
-  posCashTendered = t.total;
-  const input = document.getElementById('pos-cash-input');
-  if (input) input.value = posCashTendered > 0 ? posCashTendered : '';
-  updateTenderDisplayOnly();
-}
-
-function addTenderAmount(amt) {
-  posCashTendered = (Number(posCashTendered) || 0) + amt;
-  const input = document.getElementById('pos-cash-input');
-  if (input) input.value = posCashTendered > 0 ? posCashTendered : '';
-  updateTenderDisplayOnly();
-}
-
-function clearTenderAmount() {
-  posCashTendered = 0;
-  const input = document.getElementById('pos-cash-input');
-  if (input) {
-    input.value = '';
-    input.focus();
-  }
-  updateTenderDisplayOnly();
-}
-
-function onTenderInputChange(val) {
-  posCashTendered = val === '' ? 0 : (Number(val) || 0);
-  updateTenderDisplayOnly();
 }
 
 function cartLinesHtml() {
-  if (!cart.length) return `
-<div class="empty-state" style="padding:28px 14px; text-align:center;">
-  <div style="font-size:32px; margin-bottom:6px;">🎨</div>
-  <div style="font-weight:600; font-size:13.5px; color:var(--ink); margin-bottom:2px;">Your cart is empty</div>
-  <div class="muted small">Pick a product from the left catalog or formulate a custom color blend.</div>
-</div>`;
-  return cart.map((c, i) => `
-<div class="cart-line">
-  <div class="cname">
-    ${c.type === 'colormix' ? `
-      <div style="display:flex; align-items:center; gap:8px;">
-        <span class="cm-color-dot" style="background:${c.hexColor || '#1F6F6B'}; width:16px; height:16px;" title="${c.hexColor}"></span>
-        <span style="font-weight:600;">${escapeHtml(c.name)} — ${escapeHtml(c.colorName)}</span>
-      </div>
-      ${c.components && c.components.length ? `
-        <div class="muted small" style="margin-top:2px; font-size:11px; color:#6B6259;">
-          Formula: ${c.components.map(cp => `${cp.percentage}% ${escapeHtml(cp.name)}`).join(' + ')}
+  if (!cart.length) {
+    return `
+    <div class="empty-cart-state">
+      <div class="empty-cart-icon">🛒</div>
+      <div class="empty-cart-title">Your cart is empty</div>
+      <div class="empty-cart-desc">Pick a product from the left catalog or formulate a custom color blend.</div>
+    </div>`;
+  }
+  return cart.map((c, i) => {
+    const isMix = c.type === 'colormix';
+    const p = c.productId ? productById(c.productId) : null;
+    const hex = c.hexColor || (p ? getProductHex(p) : '#1F6F6B');
+
+    return `
+    <div class="cart-line">
+      <span class="cm-color-dot" style="background:${hex}; width:16px; height:16px; border-radius:50%; flex-shrink:0; border:1px solid rgba(0,0,0,0.15);" title="${hex}"></span>
+      <div class="cname">
+        <div class="cname-title">
+          <span>${escapeHtml(c.name)}</span>
+          ${isMix ? `<span class="badge" style="font-size:10.5px; padding:1px 6px; background:#FAF7F2; border:1px solid var(--line);">${escapeHtml(c.colorName || 'Mix')}</span>` :
+        (c.color && c.color !== '-' ? `<span class="badge" style="font-size:10.5px; padding:1px 6px; background:#FAF7F2; border:1px solid var(--line);">${escapeHtml(c.color)}</span>` : '')}
         </div>
-      ` : ''}
-    ` : `
-      ${escapeHtml(c.name)} ${c.productId && getProductHex(productById(c.productId)) ? `<span style="font-family:monospace; font-size:11px; font-weight:600; color:var(--teal);">(${getProductHex(productById(c.productId))})</span>` : ''} ${c.colorName ? '— ' + escapeHtml(c.colorName) : (c.color && c.color !== '-' ? '— ' + escapeHtml(c.color) : '')}
-    `}
-    <span class="cmeta">
-      ${c.type === 'product' ? `${escapeHtml(c.brand)} · Size: <strong>${c.size || 1}L</strong> · ${peso(c.unitPrice)} each <span class="muted">(${peso(c.pricePerLiter || c.unitPrice)}/L)</span> · <span style="color:var(--teal); font-weight:600;">${(c.qty * (Number(c.size) || 1)).toFixed(2)} L total</span>` : 'Color mix · ' + c.liters + 'L' + (c.baseType ? ' · ' + escapeHtml(c.baseType) : '') + ' · ' + peso(c.unitPrice) + ' /Liters'}
-    </span>
-  </div>
-  <div class="cprice">
-    <span>${peso(c.lineTotal)}</span>
-  </div>
-  <div class="qty-control" style="display:flex; align-items:center; gap:3px;">
-    <button type="button" onclick="changeCartQty(${i},-1)">−</button>
-    <input type="number" min="1" step="1" value="${c.qty}" 
-           style="width:46px; text-align:center; font-weight:700; font-family:'Space Grotesk'; font-size:13px; padding:2px 3px; border:1px solid var(--line); border-radius:4px;"
-           onchange="setCartQty(${i}, this.value)"
-           oninput="setCartQty(${i}, this.value)">
-    <button type="button" onclick="changeCartQty(${i},1)">+</button>
-  </div>
-  <button class="btn ghost small" onclick="removeCartLine(${i})" style="color:var(--danger); font-size:15px; padding:2px 6px;" title="Remove item">✕</button>
-</div>`).join('');
+        <span class="cmeta" id="cart-meta-${i}">
+          ${isMix ? `Custom Mix · <strong>${c.liters}L</strong> · ${peso(c.unitPrice)}/L` :
+        `${escapeHtml(c.brand || '')} · Size: <strong>${c.size || 1}L</strong> · ${peso(c.unitPrice)} each · <span class="total-liters" style="color:var(--teal); font-weight:600;">${(c.qty * (Number(c.size) || 1)).toFixed(2)} L total</span>`}
+        </span>
+      </div>
+      <div class="cprice" id="cart-price-${i}">
+        <span>${peso(c.lineTotal)}</span>
+      </div>
+      <div class="qty-control">
+        <button type="button" onclick="changeCartQty(${i},-1)" title="Decrease quantity">−</button>
+        <input type="number" min="1" step="1" id="cart-qty-input-${i}" value="${c.qty}" 
+               onchange="handleCartQtyChange(${i}, this)"
+               oninput="handleCartQtyInput(${i}, this)"
+               onblur="handleCartQtyBlur(${i}, this)">
+        <button type="button" onclick="changeCartQty(${i},1)" title="Increase quantity">+</button>
+      </div>
+      <button class="btn ghost small" onclick="removeCartLine(${i})" style="color:var(--danger); font-size:14px; padding:3px 6px;" title="Remove item">✕</button>
+    </div>`;
+  }).join('');
 }
 
 function cartTotals() {
-  const subtotal = cart.reduce((t, c) => t + c.lineTotal, 0);
-  const discountPct = Number(document.getElementById('pos-discount') ? document.getElementById('pos-discount').value : 0) || 0;
-  const discount = Math.round(subtotal * discountPct) / 100;
-  const total = subtotal - discount;
-  return { subtotal, discountPct, discount, total };
+  const subtotal = Number(cart.reduce((t, c) => t + (Number(c.lineTotal) || 0), 0).toFixed(2));
+  const total = subtotal;
+  return { subtotal, total };
 }
 
 function cartTotalsHtml() {
   const t = cartTotals();
-  const cash = Number(posCashTendered) || 0;
-  const change = Math.max(0, cash - t.total);
-  const isShort = cash > 0 && cash < t.total;
-  const isCovered = cash >= t.total && t.total > 0;
-
   return `
-<div style="background:#FAF7F2; border:1px solid var(--line); border-radius:var(--radius-sm); padding:12px 14px; margin-top:12px;">
-  <div class="cart-total-row"><span class="muted">Subtotal</span><span>${peso(t.subtotal)}</span></div>
-  <div class="cart-total-row grand"><span>Total Due</span><span style="color:var(--teal);">${peso(t.total)}</span></div>
-
-  <!-- Quick Tender Cash Calculator -->
-  <div style="margin-top:12px; padding-top:10px; border-top:1px dashed var(--line);">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-      <span style="font-size:12px; font-weight:700; color:var(--ink);">💵 Cash Tendered: <span style="color:var(--danger);">*</span></span>
-      <div class="row wrap" style="gap:4px;">
-        <button type="button" class="btn ghost small" style="padding:1px 6px; font-size:11px; background:#fff; border:1px solid var(--line);" onclick="setExactTender()">Exact</button>
-        <button type="button" class="btn ghost small" style="padding:1px 6px; font-size:11px; background:#fff; border:1px solid var(--line);" onclick="addTenderAmount(100)">+₱100</button>
-        <button type="button" class="btn ghost small" style="padding:1px 6px; font-size:11px; background:#fff; border:1px solid var(--line);" onclick="addTenderAmount(500)">+₱500</button>
-        <button type="button" class="btn ghost small" style="padding:1px 6px; font-size:11px; background:#fff; border:1px solid var(--line);" onclick="addTenderAmount(1000)">+₱1k</button>
-      </div>
+  <div class="pos-payment-card">
+    <div class="cart-total-row">
+      <span class="muted">Subtotal</span>
+      <span style="font-weight:600; font-family:'Space Grotesk',monospace;">${peso(t.subtotal)}</span>
     </div>
-    <div style="display:flex; gap:8px; align-items:center;">
-      <input id="pos-cash-input" type="number" min="0" step="any" value="${posCashTendered || ''}" placeholder="Enter Amount (₱)" 
-        style="background:#fff; font-weight:700; font-size:14px; padding:7px 10px; ${isShort ? 'border-color:var(--danger); box-shadow:0 0 0 2px rgba(193,68,61,0.18);' : (isCovered ? 'border-color:var(--success); box-shadow:0 0 0 2px rgba(63,131,88,0.18);' : '')}" 
-        oninput="onTenderInputChange(this.value)"
-        onkeydown="if(event.key==='Enter'){event.preventDefault(); completeSale();}">
-      <button id="pos-cash-clear-btn" type="button" class="btn ghost small" style="padding:6px 8px; color:var(--ink-soft); display:${cash > 0 ? 'inline-block' : 'none'};" onclick="clearTenderAmount()" title="Clear cash">✕</button>
+    <div class="cart-total-row grand">
+      <span>Total Due</span>
+      <span class="total-amount">${peso(t.total)}</span>
     </div>
-
-    <div id="pos-cash-feedback">
-      ${tenderFeedbackHtml(t, cash)}
-    </div>
-  </div>
-</div>`;
+  </div>`;
 }
 
 function renderCartTotals() {
-  const currentInput = document.getElementById('pos-cash-input');
-  if (currentInput && currentInput.value !== '') {
-    posCashTendered = Number(currentInput.value) || 0;
-  }
   const cartTotalsEl = document.getElementById('cart-totals');
   if (cartTotalsEl) cartTotalsEl.innerHTML = cartTotalsHtml();
+}
+
+function updateCheckoutButtonState() {
+  const btn = document.getElementById('btn-complete-sale');
+  const hintEl = document.getElementById('pos-checkout-hint');
+  if (!btn) return;
+
+  const hasItems = cart.length > 0;
+  const t = cartTotals();
+
+  // Stock verification across all items
+  let stockError = '';
+  if (hasItems) {
+    const litersByProd = {};
+    const cansBySize = {};
+    for (const c of cart) {
+      if (c.type === 'product') {
+        const p = productById(c.productId);
+        if (!p || p.stock <= 0) {
+          stockError = `"${c.name}" is out of stock.`;
+          break;
+        }
+        const size = Number(c.size) || 1;
+        const qty = Number(c.qty) || 0;
+        litersByProd[p.id] = (litersByProd[p.id] || 0) + (qty * size);
+        if (litersByProd[p.id] > p.stock) {
+          stockError = `Not enough stock for "${p.name}".`;
+          break;
+        }
+        if (productHasCanBreakdown(p)) {
+          const key = `${p.id}_${size}`;
+          cansBySize[key] = (cansBySize[key] || 0) + qty;
+          if (cansBySize[key] > productCanCount(p, size)) {
+            stockError = `Not enough ${size}L cans for "${p.name}".`;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  const isStockValid = !stockError;
+  const canCheckout = hasItems && isStockValid && !window._isCompletingSale;
+
+  btn.disabled = !canCheckout;
+
+  if (hintEl) {
+    if (!hasItems) {
+      hintEl.innerHTML = `<span style="opacity:0.7;">🛒 Cart is empty · Add products to continue</span>`;
+    } else if (!isStockValid) {
+      hintEl.innerHTML = `<span style="color:var(--danger); font-weight:600;">⚠️ ${escapeHtml(stockError)}</span>`;
+    } else {
+      hintEl.innerHTML = `<span style="color:var(--teal); font-weight:600;">✓ Ready to complete sale · Click to review &amp; print receipt</span>`;
+    }
+  }
 }
 
 function posConfirmKeyHandler(e) {
@@ -521,7 +738,7 @@ function promptCustomerPurchaseConfirmation(data) {
     window.removeEventListener('keydown', posConfirmKeyHandler);
     window.addEventListener('keydown', posConfirmKeyHandler);
 
-    const { customerName, cashierName, items, totals, cash, change } = data;
+    const { cashierName, items, totals } = data;
 
     const totalCount = items.reduce((sum, i) => sum + (Number(i.qty) || 1), 0);
     const totalLiters = items.reduce((sum, i) => {
@@ -565,6 +782,8 @@ function promptCustomerPurchaseConfirmation(data) {
       const p = productById(i.productId);
       const hex = (p && getProductHex(p)) || '#1F6F6B';
       const size = Number(i.size) || 1;
+      const variant = p ? productSizeVariantBySize(p, size) : null;
+      const sizeId = i.sizeId || (variant ? variant.sizeId : null);
       const sizeUnit = size <= 1 ? 'Can' : (size <= 4 ? 'Gallon' : 'Drum');
       const totalL = (Number(i.qty) * size).toFixed(2);
       const colorLabel = i.colorName || (i.color && i.color !== '-' ? i.color : (p && p.color && p.color !== '-' ? p.color : ''));
@@ -575,8 +794,10 @@ function promptCustomerPurchaseConfirmation(data) {
             <div style="display:flex; align-items:center; gap:8px;">
               <span class="cm-color-dot" style="background:${hex}; width:16px; height:16px; border-radius:50%; flex-shrink:0; box-shadow:0 1px 3px rgba(0,0,0,0.2);" title="${hex}"></span>
               <div>
-                <div style="font-weight:600; color:var(--ink);">${escapeHtml(i.name)} <code style="font-family:'Space Grotesk',monospace; font-size:11px; font-weight:600; color:var(--teal);">(${hex})</code></div>
-                <div class="muted small" style="font-size:11px;">
+                <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                  <span style="font-weight:600; color:var(--ink);">${escapeHtml(i.name)} <code style="font-family:'Space Grotesk',monospace; font-size:11px; font-weight:600; color:var(--teal);">(${hex})</code></span>
+                </div>
+                <div class="muted small" style="font-size:11px; margin-top:2px;">
                   ${escapeHtml(i.brand || (p && p.brand) || '')}
                   ${colorLabel ? ` · Color: <b>${escapeHtml(colorLabel)}</b>` : ''}
                 </div>
@@ -584,9 +805,11 @@ function promptCustomerPurchaseConfirmation(data) {
             </div>
           </td>
           <td style="text-align:center;">
-            <span class="badge" style="background:#F2EDE4; border:1px solid var(--line); font-size:11.5px; padding:2px 7px; font-weight:600;">
-              ${fmtSize(size)} <span class="muted" style="font-size:10.5px;">(${sizeUnit})</span>
-            </span>
+            <div style="display:flex; flex-direction:column; align-items:center; gap:3px;">
+              <span class="badge" style="background:#F2EDE4; border:1px solid var(--line); font-size:11.5px; padding:2px 7px; font-weight:600;">
+                ${fmtSize(size)} <span class="muted" style="font-size:10.5px;">(${sizeUnit})</span>
+              </span>
+            </div>
           </td>
           <td style="text-align:center;">
             <strong style="font-size:13px;">${i.qty}</strong>
@@ -604,15 +827,12 @@ function promptCustomerPurchaseConfirmation(data) {
           <div style="flex:1;">
             <div class="pcn-title">Order Verification: Are the purchased items accurate?</div>
             <div class="pcn-desc">
-              Please review with the customer to confirm that paint products, color shades, can sizes, quantities, and cash/change are correct before completing the sale and printing the receipt.
+              Please review to confirm that paint products, color shades, can sizes, quantities, and totals are correct before completing the sale and printing the receipt.
             </div>
           </div>
         </div>
 
         <div style="background:#FAF8F5; border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; font-size:12.5px;">
-          <div>
-            <span class="muted">Customer:</span> <strong style="color:var(--ink); font-size:13.5px;">${escapeHtml(customerName)}</strong>
-          </div>
           <div>
             <span class="muted">Cashier:</span> <strong>${escapeHtml(cashierName)}</strong>
           </div>
@@ -643,23 +863,9 @@ function promptCustomerPurchaseConfirmation(data) {
             <span class="muted">Subtotal:</span>
             <span style="font-weight:600;">${peso(totals.subtotal)}</span>
           </div>
-          ${totals.discount > 0 ? `
-            <div style="display:flex; justify-content:space-between; font-size:12.5px; padding:3px 0; color:var(--danger);">
-              <span>Discount (${totals.discountPct}%):</span>
-              <span>-${peso(totals.discount)}</span>
-            </div>
-          ` : ''}
           <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-top:1px dashed var(--line); margin-top:4px;">
             <span style="font-size:13.5px; font-weight:700; color:var(--ink);">Total Due:</span>
             <span style="font-size:18px; font-weight:800; font-family:'Space Grotesk',monospace; color:var(--teal);">${peso(totals.total)}</span>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; font-size:13px; padding:5px 0; border-top:1px dashed var(--line); margin-top:4px;">
-            <span class="muted" style="font-weight:600;">💵 Cash Tendered:</span>
-            <span style="font-weight:700; font-family:'Space Grotesk',monospace; font-size:14.5px;">${peso(cash)}</span>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; font-size:13.5px; font-weight:700; padding:8px 12px; border-radius:8px; background:#EAF4EC; color:var(--success); margin-top:6px; border:1px solid rgba(47,107,65,0.2);">
-            <span>🪙 Change to Return:</span>
-            <span style="font-size:17px; font-family:'Space Grotesk',monospace;">${peso(change)}</span>
           </div>
         </div>
 
@@ -679,7 +885,7 @@ function promptCustomerPurchaseConfirmation(data) {
       </button>
     `;
 
-    openModal('🛒 Confirm Customer Purchase', bodyHtml, footHtml, 'pos-confirm-modal');
+    openModal('🛒 Confirm Purchase', bodyHtml, footHtml, 'pos-confirm-modal');
 
     setTimeout(() => {
       const btn = document.getElementById('btn-submit-pos-confirm');
@@ -713,188 +919,241 @@ function cancelPosConfirm() {
 }
 
 async function completeSale() {
-  if (!cart.length) { showToast('Add at least one item first.', 'error'); return; }
-  const t = cartTotals();
-  const cash = Number(posCashTendered) || 0;
-
-  // Validation: Enter Amount is required
-  if (!cash || cash <= 0) {
-    showToast('Enter Amount is required to complete the sale.', 'error');
-    const cashInput = document.getElementById('pos-cash-input');
-    if (cashInput) {
-      cashInput.focus();
-      cashInput.style.borderColor = 'var(--danger)';
-      cashInput.style.boxShadow = '0 0 0 3px rgba(193, 68, 61, 0.25)';
-    }
-    return;
+  if (window._isCompletingSale) return;
+  window._isCompletingSale = true;
+  const completeBtn = document.getElementById('btn-complete-sale');
+  if (completeBtn) {
+    completeBtn.disabled = true;
+    completeBtn.innerText = '⏳ Processing Sale…';
   }
 
-  // Validation: Amount must be higher than or equal to total due
-  if (cash < t.total) {
-    showToast(`Amount short by ${peso(t.total - cash)}. Enter Amount must be higher than or equal to total due (${peso(t.total)}).`, 'error');
-    const cashInput = document.getElementById('pos-cash-input');
-    if (cashInput) {
-      cashInput.focus();
-      cashInput.style.borderColor = 'var(--danger)';
-      cashInput.style.boxShadow = '0 0 0 3px rgba(193, 68, 61, 0.25)';
-    }
-    return;
-  }
+  try {
+    if (!cart.length) { showToast('Add at least one item first.', 'error'); return; }
+    const t = cartTotals();
+    const items = cart.map(c => ({ ...c }));
 
-  const customerName = document.getElementById('pos-customer').value.trim();
-  const items = cart.map(c => ({ ...c }));
+    // check stock is still sufficient right before saving (accounting for per-size cans, total liters, and mix ingredients)
+    const reqCansByProdSize = {};
+    const reqSealedLitersByProd = {};
+    const reqMixLitersByProd = {};
 
-  // check stock is still sufficient right before saving (accounting for per-size cans, total liters, and mix ingredients)
-  const reqCansByProdSize = {};
-  const reqSealedLitersByProd = {};
-  const reqMixLitersByProd = {};
-
-  for (const c of items) {
-    if (c.type === 'product') {
-      const p = productById(c.productId);
-      const size = Number(c.size) || 1;
-      const qty = Number(c.qty) || 0;
-      const liters = Number((qty * size).toFixed(2));
-      if (!p) {
-        showToast(`Product "${c.name}" is no longer available.`, 'error');
-        return;
-      }
-      const sizeKey = `${p.id}_${size}`;
-      reqCansByProdSize[sizeKey] = (reqCansByProdSize[sizeKey] || 0) + qty;
-      reqSealedLitersByProd[p.id] = Number(((reqSealedLitersByProd[p.id] || 0) + liters).toFixed(2));
-
-      if (productHasCanBreakdown(p) && reqCansByProdSize[sizeKey] > productCanCount(p, size)) {
-        showToast(`Not enough ${size}L cans for ${p.name} (only ${productCanCount(p, size)} in stock).`, 'error');
-        return;
-      }
-      if (reqSealedLitersByProd[p.id] > p.stock) {
-        showToast(`Not enough stock for ${p.name} (${formatLiters(p.stock)} available).`, 'error');
-        return;
-      }
-    } else if (c.type === 'colormix' && c.components && c.components.length) {
-      for (const comp of c.components) {
-        const p = productById(comp.productId);
-        if (p) {
-          reqMixLitersByProd[p.id] = Number(((reqMixLitersByProd[p.id] || 0) + (Number(comp.liters) || 0)).toFixed(2));
-          const remainingAvail = Number((productMixAvailableStock(p) - (reqSealedLitersByProd[p.id] || 0)).toFixed(2));
-          if (remainingAvail < reqMixLitersByProd[p.id]) {
-            showToast(`Not enough stock on ingredient "${comp.name}" (${formatStock(Math.max(0, remainingAvail))}L available, need ${formatStock(reqMixLitersByProd[p.id])}L) for ${c.colorName} mix.`, 'error');
-            return;
-          }
+    for (const c of items) {
+      if (c.type === 'product') {
+        const p = productById(c.productId);
+        const size = Number(c.size) || 1;
+        const qty = Number(c.qty) || 0;
+        const liters = Number((qty * size).toFixed(2));
+        if (!p) {
+          showToast(`Product "${c.name}" is no longer available.`, 'error');
+          return;
         }
-      }
-    }
-  }
+        const sizeKey = `${p.id}_${size}`;
+        reqCansByProdSize[sizeKey] = (reqCansByProdSize[sizeKey] || 0) + qty;
+        reqSealedLitersByProd[p.id] = Number(((reqSealedLitersByProd[p.id] || 0) + liters).toFixed(2));
 
-  const change = Math.max(0, cash - t.total);
-
-  // Prompt cashier to confirm if customer's purchase is correct
-  const isConfirmed = await promptCustomerPurchaseConfirmation({
-    customerName: customerName || 'Walk-in Customer',
-    cashierName: (currentUser && currentUser.name) || 'Cashier',
-    items,
-    totals: t,
-    cash,
-    change
-  });
-
-  if (!isConfirmed) {
-    showToast('Returned to cart. You can review or modify items.', 'info');
-    return;
-  }
-
-  const receiptNo = generateReceiptNo();
-  const sale = {
-    id: uid('sale'),
-    receiptNo,
-    date: nowISO(),
-    cashierName: (currentUser && currentUser.name) || 'Cashier',
-    customerName,
-    items,
-    subtotal: t.subtotal,
-    discountPct: t.discountPct,
-    discount: t.discount,
-    total: t.total,
-    cashTendered: cash,
-    change: change,
-  };
-  db.sales.push(sale);
-
-  items.forEach(c => {
-    if (c.type === 'product') {
-      const p = productById(c.productId);
-      const size = Number(c.size) || 1;
-      const count = Number(c.qty) || 0;
-      const litersDeducted = Number((count * size).toFixed(2));
-      let trailNote = '';
-      if (p) {
-        const beforeStock = Number(p.stock) || 0;
-        const beforeCans = productCanCount(p, size);
-        p.stock = Math.max(0, Number((p.stock - litersDeducted).toFixed(2)));
-        if (!p.canStock || typeof p.canStock !== 'object' || Array.isArray(p.canStock)) {
-          p.canStock = {};
+        if (productHasCanBreakdown(p) && reqCansByProdSize[sizeKey] > productCanCount(p, size)) {
+          showToast(`Not enough ${size}L cans for ${p.name} (only ${productCanCount(p, size)} in stock).`, 'error');
+          return;
         }
-        p.canStock[size] = Math.max(0, (Number(p.canStock[size]) || 0) - count);
-        const afterCans = productCanCount(p, size);
-        trailNote = ` · ${size}L Cans: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(p.stock)}L`;
-      }
-      db.movements.push({
-        id: uid('mv'),
-        date: sale.date,
-        type: 'sale',
-        productId: p ? p.id : null,
-        productName: p ? p.name : c.name,
-        qtyChange: -litersDeducted,
-        note: `Sold via POS (${receiptNo}) [Sold ${count} × ${size}L${trailNote}]`,
-        staffName: (currentUser && currentUser.name) || 'Cashier'
-      });
-    } else {
-      // Color Mix: Deduct constituent ingredient stocks (using Opened / Used Stock first, then sealed cans) and log movement details
-      if (c.components && c.components.length) {
-        c.components.forEach(comp => {
+        if (reqSealedLitersByProd[p.id] > p.stock) {
+          showToast(`Not enough stock for ${p.name} (${formatLiters(p.stock)} available).`, 'error');
+          return;
+        }
+      } else if (c.type === 'colormix' && c.components && c.components.length) {
+        for (const comp of c.components) {
           const p = productById(comp.productId);
           if (p) {
-            const beforeStock = Number(p.stock) || 0;
-            const plan = consumeProductForColorMix(p, comp.liters, comp.preferredCanSize || 0);
-            const mixNoteExtra = formatMixConsumptionNote(plan);
-            db.movements.push({
-              id: uid('mv'),
-              date: sale.date,
-              type: 'colormix',
-              productId: p.id,
-              productName: `${p.name} (for ${c.colorName} mix)`,
-              colorName: c.colorName,
-              qtyChange: -comp.liters,
-              note: `Color mix ingredient: ${comp.percentage}% of ${c.liters}L (${c.colorName}) · Receipt: ${receiptNo}${mixNoteExtra} · Stock: ${formatStock(beforeStock)}L→${formatStock(p.stock)}L`,
-              staffName: (currentUser && currentUser.name) || 'Cashier'
-            });
+            reqMixLitersByProd[p.id] = Number(((reqMixLitersByProd[p.id] || 0) + (Number(comp.liters) || 0)).toFixed(2));
+            const remainingAvail = Number((productMixAvailableStock(p) - (reqSealedLitersByProd[p.id] || 0)).toFixed(2));
+            if (remainingAvail < reqMixLitersByProd[p.id]) {
+              showToast(`Not enough stock on ingredient "${comp.name}" (${formatStock(Math.max(0, remainingAvail))}L available, need ${formatStock(reqMixLitersByProd[p.id])}L) for ${c.colorName} mix.`, 'error');
+              return;
+            }
           }
-        });
+        }
       }
-
-      const formulaSummary = c.components && c.components.length
-        ? c.components.map(cp => `${cp.percentage}% ${cp.name}`).join(' + ')
-        : (c.note || '');
-
-      db.movements.push({
-        id: uid('mv'),
-        date: sale.date,
-        type: 'colormix',
-        productId: null,
-        productName: `Custom Color Mix — ${c.colorName}` + (c.detectedColorName ? ` [${c.detectedColorName}]` : ''),
-        colorName: c.colorName,
-        qtyChange: c.liters,
-        note: `Formula: ${formulaSummary} · Receipt: ${receiptNo}`,
-        staffName: (currentUser && currentUser.name) || 'Cashier'
-      });
     }
-  });
 
-  await saveDB();
-  cart = [];
-  posCashTendered = 0;
-  renderApp();
-  showReceipt(sale);
+    // Prompt cashier to confirm if purchase is correct
+    const isConfirmed = await promptCustomerPurchaseConfirmation({
+      cashierName: (currentUser && currentUser.name) || 'Cashier',
+      items,
+      totals: t
+    });
+
+    if (!isConfirmed) {
+      showToast('Returned to cart. You can review or modify items.', 'info');
+      return;
+    }
+
+    const receiptNo = generateReceiptNo();
+    const sale = {
+      id: uid('sale'),
+      receiptNo,
+      date: nowISO(),
+      cashierName: (currentUser && currentUser.name) || 'Cashier',
+      items,
+      subtotal: t.subtotal,
+      total: t.total,
+      status: 'completed',
+    };
+    db.sales.push(sale);
+
+    const saleStockChanges = [];
+    items.forEach(c => {
+      if (c.type === 'product') {
+        const p = productById(c.productId);
+        const size = Number(c.size) || 1;
+        const count = Number(c.qty) || 0;
+        const litersDeducted = Number((count * size).toFixed(2));
+        const variant = p ? productSizeVariantBySize(p, size) : null;
+        const sizeId = c.sizeId || (variant ? variant.sizeId : null);
+        c.productId = p ? (p.productId || p.id) : c.productId;
+        c.product_id = c.productId;
+        c.sizeId = sizeId;
+        c.size_id = sizeId;
+        let trailNote = '';
+        if (p) {
+          const beforeStock = Number(p.stock) || 0;
+          const beforeCans = productCanCount(p, size);
+          p.stock = Math.max(0, Number((p.stock - litersDeducted).toFixed(2)));
+          if (!p.canStock || typeof p.canStock !== 'object' || Array.isArray(p.canStock)) {
+            p.canStock = {};
+          }
+          p.canStock[size] = Math.max(0, (Number(p.canStock[size]) || 0) - count);
+          syncProductVariants(p);
+          const afterCans = productCanCount(p, size);
+          trailNote = ` · ${size}L Cans: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(p.stock)}L`;
+          saleStockChanges.push({
+            field: `${p.name} (${size}L)`,
+            oldValue: `${beforeCans} cans (${formatStock(beforeStock)}L)`,
+            newValue: `${afterCans} cans (${formatStock(p.stock)}L)`
+          });
+        }
+        db.movements.push({
+          id: uid('mv'),
+          date: sale.date,
+          type: 'sale',
+          productId: p ? (p.productId || p.id) : (c.productId || null),
+          product_id: p ? (p.productId || p.id) : (c.productId || null),
+          sizeId: sizeId,
+          size_id: sizeId,
+          container_size: size,
+          productName: p ? p.name : c.name,
+          qtyChange: -litersDeducted,
+          note: `Sold via POS (${receiptNo}) [Sold ${count} × ${size}L${trailNote}]`,
+          staffName: (currentUser && currentUser.name) || 'Cashier'
+        });
+      } else {
+        // Color Mix: Deduct constituent ingredient stocks (using Opened / Used Stock first, then sealed cans) and log movement details
+        if (c.components && c.components.length) {
+          c.components.forEach(comp => {
+            const p = productById(comp.productId);
+            if (p) {
+              const beforeStock = Number(p.stock) || 0;
+              const plan = consumeProductForColorMix(p, comp.liters, comp.preferredCanSize || 0);
+              const mixNoteExtra = formatMixConsumptionNote(plan);
+              saleStockChanges.push({
+                field: `${p.name} (Mix Ingredient)`,
+                oldValue: `${formatStock(beforeStock)}L`,
+                newValue: `${formatStock(p.stock)}L`
+              });
+              db.movements.push({
+                id: uid('mv'),
+                date: sale.date,
+                type: 'colormix',
+                productId: p.id,
+                productName: `${p.name} (for ${c.colorName} mix)`,
+                colorName: c.colorName,
+                qtyChange: -comp.liters,
+                note: `Color mix ingredient: ${comp.percentage}% of ${c.liters}L (${c.colorName}) · Receipt: ${receiptNo}${mixNoteExtra} · Stock: ${formatStock(beforeStock)}L→${formatStock(p.stock)}L`,
+                staffName: (currentUser && currentUser.name) || 'Cashier'
+              });
+            }
+          });
+        }
+
+        const formulaSummary = c.components && c.components.length
+          ? c.components.map(cp => `${cp.percentage}% ${cp.name}`).join(' + ')
+          : (c.note || '');
+
+        db.movements.push({
+          id: uid('mv'),
+          date: sale.date,
+          type: 'colormix',
+          productId: null,
+          productName: `Custom Color Mix — ${c.colorName}` + (c.detectedColorName ? ` [${c.detectedColorName}]` : ''),
+          colorName: c.colorName,
+          qtyChange: c.liters,
+          note: `Formula: ${formulaSummary} · Receipt: ${receiptNo}`,
+          staffName: (currentUser && currentUser.name) || 'Cashier'
+        });
+
+        logAudit(
+          'MIXING_COMPLETE',
+          c.colorName || 'Custom Color Mix',
+          `Completed ${c.liters}L "${c.colorName}" (${c.detectedColorName || 'Custom'}) color mix for POS Sale ${receiptNo} — Formula: ${formulaSummary} (${peso(c.lineTotal)})`,
+          {
+            entityName: c.colorName || 'Custom Color Mix',
+            fieldChanged: 'Paint Color Mix Formula',
+            oldValue: formulaSummary || 'Base Pigments',
+            newValue: `${c.liters}L ${c.colorName} [${c.hexColor || ''}] (${peso(c.lineTotal)})`,
+            referenceNo: receiptNo,
+            reason: c.note || c.baseType || 'POS Custom Paint Mixing'
+          }
+        );
+      }
+    });
+
+    const itemSummaryText = items.map(i => `${i.qty}${i.size ? '×' + i.size + 'L' : 'L'} ${i.name}${i.colorName ? ' (' + i.colorName + ')' : ''}`).join(', ');
+    logAudit(
+      'SALE',
+      `Receipt ${receiptNo}`,
+      `Completed sale ${receiptNo} — ${items.length} item(s): ${itemSummaryText} · Total: ${peso(sale.total)}`,
+      {
+        entityName: `Receipt ${receiptNo}`,
+        fieldChanged: 'POS Sales Checkout',
+        oldValue: saleStockChanges.length ? saleStockChanges.map(sc => `${sc.field}: ${sc.oldValue}`).join(' · ') : `Subtotal: ${peso(sale.subtotal)}`,
+        newValue: `${peso(sale.total)} — ${items.length} item(s)`,
+        referenceNo: receiptNo,
+        reason: 'POS Sale Checkout',
+        meta: {
+          receiptNo,
+          cashierName: sale.cashierName,
+          subtotal: sale.subtotal,
+          total: sale.total,
+          changes: saleStockChanges,
+          items: items.map(i => ({ name: i.name, qty: i.qty, size: i.size, unitPrice: i.unitPrice, lineTotal: i.lineTotal }))
+        }
+      }
+    );
+
+    logAudit(
+      'RECEIPT_GENERATED',
+      `Receipt ${receiptNo}`,
+      `Official Receipt ${receiptNo} generated — Total: ${peso(sale.total)}`,
+      {
+        entityName: `Receipt ${receiptNo}`,
+        fieldChanged: 'Official Sales Receipt',
+        oldValue: 'Pending Checkout',
+        newValue: `Receipt ${receiptNo} Issued (${peso(sale.total)})`,
+        referenceNo: receiptNo,
+        reason: 'Issued via POS'
+      }
+    );
+
+    await saveDB();
+    cart = [];
+    renderApp();
+    showReceipt(sale);
+  } finally {
+    window._isCompletingSale = false;
+    const btn = document.getElementById('btn-complete-sale');
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '✓ Complete &amp; Print Receipt';
+    }
+  }
 }
 
 function showReceipt(sale) {
@@ -905,98 +1164,106 @@ function showReceipt(sale) {
   const netTotal = Number((sale.total - refundTotal).toFixed(2));
   const status = sale.status || 'completed';
 
-  const itemsHtml = sale.items.map(i => {
+  const itemsHtml = (sale.items || []).map(i => {
+    const p = i.productId ? productById(i.productId) : null;
     const size = Number(i.size) || (i.type === 'product' ? 1 : null);
-    const sizeLabel = size ? ` · ${size}L` : '';
+    const sizeLabel = size ? ` · ${fmtSize(size)}` : '';
     const litersText = size ? ` (${(i.qty * size).toFixed(2)} L)` : '';
+    const hex = i.hexColor || (p ? getProductHex(p) : '');
+    const colorLabel = i.colorName || (i.color && i.color !== '-' ? i.color : (p && p.color && p.color !== '-' ? p.color : ''));
+
     return `
-<tr>
-  <td>
-    <div style="font-weight:600; display:flex; align-items:center; gap:6px;">
-      ${i.type === 'colormix' && i.hexColor ? `<span class="cm-color-dot" style="background:${i.hexColor}; width:13px; height:13px;"></span>` : ''}
-      ${escapeHtml(i.name)} ${i.productId && getProductHex(productById(i.productId)) ? `<span class="muted small" style="font-family:monospace; font-weight:600; color:var(--teal);">(${getProductHex(productById(i.productId))})</span>` : ''}
-    </div>
-    <div class="muted small">
-      ${escapeHtml(i.brand || '')}${sizeLabel}${litersText}
-      ${i.colorName ? ` · Color: <b>${escapeHtml(i.colorName)}</b>` : (i.color && i.color !== '-' ? ` · Color: ${escapeHtml(i.color)}` : '')}
-    </div>
-    ${i.components && i.components.length ? `
-      <div class="muted small" style="font-size:11px; margin-top:2px; color:#6B6259;">
-        Blend Formula: ${i.components.map(cp => `${cp.percentage}% ${escapeHtml(cp.name)} (${formatStock(cp.liters)}L)`).join(', ')}
-      </div>
-    ` : ''}
-    ${i.returnedQty ? `<div style="margin-top:2px;"><span class="badge sale-refunded" style="font-size:10px; padding:1px 6px;">${formatStock(i.returnedQty)} returned / exchanged</span></div>` : ''}
-  </td>
-  <td class="right">${formatStock(i.qty)}${size ? ` (${size}L)` : ''}</td>
-  <td class="right">${peso(i.unitPrice)}</td>
-  <td class="right" style="font-weight:600;">${peso(i.lineTotal)}</td>
-</tr>`;
+    <tr>
+      <td>
+        <div style="font-weight:700; color:#1E1B18; display:flex; align-items:center; gap:6px;">
+          ${hex ? `<span class="cm-color-dot" style="background:${hex}; width:12px; height:12px; border-radius:50%; display:inline-block; border:1px solid rgba(0,0,0,0.15);" title="${hex}"></span>` : ''}
+          ${escapeHtml(i.name)}
+          ${hex ? `<span style="font-family:'Space Grotesk',monospace; font-size:11px; font-weight:600; color:#1F6F6B;">(${hex})</span>` : ''}
+        </div>
+        <div style="font-size:11px; color:#6B6259; margin-top:2px;">
+          <span>${escapeHtml(i.brand || (p && p.brand) || '')}${sizeLabel}${litersText}</span>
+          ${colorLabel ? ` · Color: <b>${escapeHtml(colorLabel)}</b>` : ''}
+        </div>
+        ${i.components && i.components.length ? `
+          <div style="font-size:10.5px; color:#786F66; margin-top:2px;">
+            Blend Formula: ${i.components.map(cp => `${cp.percentage}% ${escapeHtml(cp.name)} (${formatStock(cp.liters)}L)`).join(', ')}
+          </div>
+        ` : ''}
+        ${i.returnedQty ? `<div style="margin-top:2px;"><span class="badge sale-refunded" style="font-size:10px; padding:1px 6px;">${formatStock(i.returnedQty)} returned / exchanged</span></div>` : ''}
+      </td>
+      <td class="right num">${formatStock(i.qty)}${size ? ` (${fmtSize(size)})` : ''}</td>
+      <td class="right num">${peso(i.unitPrice)}</td>
+      <td class="right num" style="font-weight:700;">${peso(i.lineTotal)}</td>
+    </tr>`;
   }).join('');
 
-  openModal('Official Sales Receipt', `
-<div id="printable-receipt" style="background:#fff; border:1px solid var(--line); border-radius:var(--radius-sm); padding:16px 18px; margin-bottom:12px;">
-  <div style="text-align:center; padding-bottom:12px; border-bottom:1px dashed var(--line); margin-bottom:12px;">
-    <div style="font-family:'Space Grotesk'; font-weight:700; font-size:16px; letter-spacing:-0.01em;">MRGR COLOR CENTER</div>
-    <div class="muted small">Sales &amp; Inventory Management System</div>
-    <div style="display:inline-block; margin-top:8px; padding:4px 12px; background:#F4EFE6; border:1px solid var(--line); border-radius:4px; font-family:'Space Grotesk'; font-weight:700; font-size:14px; color:var(--teal);">
-      Official Receipt #: <span>${escapeHtml(receiptNo)}</span>
+  const bodyHtml = `
+  <div id="printable-receipt" class="pos-receipt-card">
+    <div class="pos-receipt-header">
+      <div class="pos-receipt-title">MRGR COLOR CENTER</div>
+      <div class="pos-receipt-sub">Paint &amp; Color Formulation Specialists</div>
+      <div class="pos-receipt-sub" style="font-size:11px; margin-top:2px;">Official Sales Receipt</div>
+      <div class="pos-receipt-badge">Receipt #: <span>${escapeHtml(receiptNo)}</span></div>
     </div>
-  </div>
-  
-  <div class="row wrap" style="justify-content:space-between; font-size:12.5px; margin-bottom:12px; gap:8px;">
-    <div>
-      <div><span class="muted">Date:</span> <b>${formatDateTime(sale.date)}</b></div>
-      <div><span class="muted">Cashier:</span> <b>${escapeHtml(sale.cashierName)}</b></div>
+
+    <div class="pos-receipt-meta">
+      <div>
+        <div><span class="muted">Date &amp; Time:</span> <b>${formatDateTime(sale.date)}</b></div>
+        <div style="margin-top:3px;"><span class="muted">Cashier:</span> <b>${escapeHtml(sale.cashierName)}</b></div>
+      </div>
+      <div class="right">
+        <div><span class="muted">Transaction Status:</span> ${saleStatusBadge(status)}</div>
+      </div>
     </div>
-    <div class="right">
-      <div><span class="muted">Customer:</span> <b>${escapeHtml(sale.customerName) || 'Walk-in Customer'}</b></div>
-      <div><span class="muted">Status:</span> ${saleStatusBadge(status)}</div>
+
+    <table class="pos-receipt-table">
+      <thead>
+        <tr>
+          <th>Product Description</th>
+          <th class="right">Qty</th>
+          <th class="right">Unit Price</th>
+          <th class="right">Line Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${itemsHtml}
+      </tbody>
+    </table>
+
+    <div class="pos-receipt-totals">
+      <div class="pos-receipt-total-row">
+        <span class="muted">Subtotal:</span>
+        <span class="num">${peso(sale.subtotal)}</span>
+      </div>
+      <div class="pos-receipt-total-row ${(returnedVal > 0 || refundTotal > 0) ? '' : 'grand'}">
+        <span>Total Due:</span>
+        <span class="grand-val">${peso(sale.total)}</span>
+      </div>
+      ${(returnedVal > 0 || refundTotal > 0) ? `
+        <div class="pos-receipt-total-row" style="color:var(--danger);"><span class="muted">Returned Credit:</span><span class="num">-${peso(returnedVal || refundTotal)}</span></div>
+        ${exchangeTotal > 0 ? `<div class="pos-receipt-total-row" style="color:var(--teal);"><span class="muted">Replacement Issued:</span><span class="num">+${peso(exchangeTotal)}</span></div>` : ''}
+        <div class="pos-receipt-total-row grand"><span>Net Total:</span><span class="grand-val">${peso(netTotal)}</span></div>
+      ` : ''}
     </div>
-  </div>
 
-  <table style="margin-top:8px;">
-    <thead>
-      <tr>
-        <th>Item</th>
-        <th class="right">Qty</th>
-        <th class="right">Price</th>
-        <th class="right">Total</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${itemsHtml}
-    </tbody>
-  </table>
+    <div class="pos-receipt-footer">
+      <div style="font-weight:600; color:#1E1B18;">Thank you for your purchase at MRGR Color Center!</div>
+      <div style="margin-top:4px;">Please retain this official receipt for warranty and aftersales support. Returns and exchanges are valid within the same day of purchase with original receipt.</div>
+    </div>
+  </div>`;
 
-  <div style="margin-top:12px; padding-top:10px; border-top:1px dashed var(--line);">
-    <div class="cart-total-row"><span class="muted">Subtotal</span><span>${peso(sale.subtotal)}</span></div>
-    ${sale.discount > 0 ? `<div class="cart-total-row"><span class="muted">Discount (${sale.discountPct}%)</span><span>-${peso(sale.discount)}</span></div>` : ''}
-    <div class="cart-total-row ${(returnedVal > 0 || refundTotal > 0) ? '' : 'grand'}"><span>Total Amount</span><span>${peso(sale.total)}</span></div>
-    ${(returnedVal > 0 || refundTotal > 0) ? `
-      <div class="cart-total-row" style="color:var(--danger);"><span class="muted">Returned Credit</span><span>-${peso(returnedVal || refundTotal)}</span></div>
-      ${exchangeTotal > 0 ? `<div class="cart-total-row" style="color:var(--teal);"><span class="muted">Replacement Issued (Exchange)</span><span>+${peso(exchangeTotal)}</span></div>` : ''}
-      <div class="cart-total-row grand"><span>Net Total</span><span style="color:var(--teal);">${peso(netTotal)}</span></div>
-    ` : ''}
-    ${sale.cashTendered ? `
-      <div class="cart-total-row" style="margin-top:6px; padding-top:6px; border-top:1px dashed var(--line);"><span class="muted">Cash Tendered</span><span>${peso(sale.cashTendered)}</span></div>
-      <div class="cart-total-row" style="font-weight:600; color:var(--success);"><span>Change Returned</span><span>${peso(sale.change || 0)}</span></div>
-    ` : ''}
-  </div>
+  const footHtml = `
+    <button type="button" class="btn secondary" onclick="printReceiptSection()">🖨️ Print Receipt</button>
+    <button type="button" class="btn" onclick="closeModal()">Done</button>
+  `;
 
-  <div class="muted center small" style="margin-top:14px; font-size:11px; line-height:1.4;">
-    Thank you for purchasing at MRGR Color Center! Retain this receipt for aftersales support. Returns &amp; exchanges are valid within the same day of purchase only.
-  </div>
-</div>
-  `, `
-<button class="btn secondary" onclick="printReceiptSection()">🖨️ Print Receipt</button>
-<button class="btn" onclick="closeModal()">Done</button>
-  `);
+  openModal('Official Sales Receipt', bodyHtml, footHtml);
 }
 
 function printReceiptSection() {
   const receiptEl = document.getElementById('printable-receipt');
   if (!receiptEl) return;
-  const printWin = window.open('', '_blank', 'width=650,height=750');
+  const printWin = window.open('', '_blank', 'width=680,height=780');
   if (!printWin) {
     showToast('Popup blocker prevented receipt window from opening. Please allow popups.', 'error');
     return;
@@ -1007,16 +1274,27 @@ function printReceiptSection() {
   <head>
     <title>Receipt - MRGR Color Center</title>
     <style>
-      body { font-family: 'Inter', system-ui, sans-serif; font-size: 13px; color: #26211C; padding: 24px; line-height: 1.5; }
-      table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-      th { text-align: left; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #ddd; padding: 6px 8px; }
-      td { padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: middle; }
+      body { font-family: 'Inter', system-ui, -apple-system, sans-serif; font-size: 13px; color: #26211C; padding: 24px; line-height: 1.45; background: #fff; }
+      .pos-receipt-card { border: none !important; box-shadow: none !important; max-width: 100% !important; padding: 0 !important; }
+      .pos-receipt-header { text-align: center; border-bottom: 2px dashed #222; padding-bottom: 12px; margin-bottom: 14px; }
+      .pos-receipt-title { font-size: 18px; font-weight: bold; letter-spacing: 0.02em; }
+      .pos-receipt-sub { font-size: 11px; color: #555; }
+      .pos-receipt-badge { display: inline-block; padding: 4px 12px; border: 1.5px solid #222; margin-top: 8px; font-weight: bold; font-family: monospace; font-size: 13px; }
+      .pos-receipt-meta { display: flex; justify-content: space-between; font-size: 12px; border-bottom: 1px solid #ddd; padding-bottom: 10px; margin-bottom: 12px; }
+      table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+      th { text-align: left; font-size: 11px; text-transform: uppercase; border-bottom: 1.5px solid #222; padding: 6px 4px; }
+      td { padding: 7px 4px; border-bottom: 1px solid #eee; vertical-align: top; }
       .right { text-align: right; }
-      .center { text-align: center; }
-      .muted { color: #666; font-size: 12px; }
-      .grand { font-size: 16px; font-weight: bold; border-top: 1px dashed #333; margin-top: 8px; padding-top: 8px; }
-      .cart-total-row { display: flex; justify-content: space-between; padding: 3px 0; }
-      .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; background: #eaf4ec; color: #2f6b41; }
+      .num { font-family: monospace; font-weight: bold; }
+      .pos-receipt-totals { border-top: 2px dashed #222; margin-top: 14px; padding-top: 10px; }
+      .pos-receipt-total-row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12.5px; }
+      .pos-receipt-total-row.grand { font-size: 15px; font-weight: bold; border-top: 1.5px solid #222; margin-top: 6px; padding-top: 6px; }
+      .pos-receipt-total-row.grand .grand-val { font-size: 17px; }
+      .pos-receipt-footer { text-align: center; font-size: 11px; color: #555; margin-top: 18px; border-top: 1px dashed #222; padding-top: 10px; }
+      @media print {
+        body { padding: 0; }
+        @page { margin: 8mm; }
+      }
     </style>
   </head>
   <body>

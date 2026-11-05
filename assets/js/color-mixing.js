@@ -170,6 +170,9 @@ function isLightColor(hex) {
 
 function getProductDefaultColor(product) {
   if (!product) return '#FFFFFF';
+  if (product.colorHex && /^#[0-9A-Fa-f]{6}$/i.test(product.colorHex)) {
+    return product.colorHex;
+  }
   const str = `${product.color || ''} ${product.name || ''}`.toLowerCase();
   if (product.color && product.color.startsWith('#') && (product.color.length === 4 || product.color.length === 7)) {
     return product.color;
@@ -366,11 +369,23 @@ function openColorMixModal(isPos = true) {
   colorMixStudioState.isPosMode = (isPos !== false);
   const totalLiters = colorMixStudioState.totalLiters || 1;
   const grandTotal = totalLiters * (colorMixStudioState.pricePerLiter || 0);
+  logAudit(
+    'MIXING_START',
+    'Paint Color Mixing Studio',
+    `Started Color Mixing session in ${isPos ? 'POS Checkout Mode' : 'Direct Inventory Mode'} (Default: ${totalLiters}L ${colorMixStudioState.baseType || 'Automotive Paint'})`,
+    {
+      entityName: 'Paint Color Mixing Studio',
+      fieldChanged: 'Mixing Studio Session',
+      oldValue: 'Idle',
+      newValue: `Started (${isPos ? 'POS Mode' : 'Inventory Mode'}, ${totalLiters}L)`,
+      reason: isPos ? 'Customer custom paint mix order' : 'Direct inventory color mix batch'
+    }
+  );
   openModal(
     '🎨 Paint Color Mixing Studio',
     `<div id="colormix-studio-root">${colorMixStudioHtml()}</div>`,
     `
-  <button class="btn secondary" onclick="closeModal()">Cancel</button>
+  <button class="btn secondary" onclick="cancelColorMixModal()">Cancel</button>
   <button id="cm-submit-btn" class="btn" style="background:linear-gradient(135deg, #1F6F6B 0%, #2A8C87 100%); font-weight:700;" onclick="submitColorMix()">
     ${isPos ? `+ Add ${totalLiters}L Mixed Color (${peso(grandTotal)}) to Sale` : `✓ Confirm & Log ${totalLiters}L Movement`}
   </button>
@@ -378,6 +393,25 @@ function openColorMixModal(isPos = true) {
     'xl'
   );
   if (typeof syncColorMixVisuals === 'function') syncColorMixVisuals();
+}
+
+function cancelColorMixModal() {
+  const s = colorMixStudioState || {};
+  const colorName = (document.getElementById('cm-color-name') ? document.getElementById('cm-color-name').value.trim() : s.colorName) || 'Unsaved Custom Mix';
+  const liters = Number(s.totalLiters) || 1;
+  logAudit(
+    'MIXING_CANCEL',
+    colorName,
+    `Cancelled Color Mixing session for "${colorName}" (${liters}L ${s.baseType || 'Automotive Paint'})`,
+    {
+      entityName: colorName,
+      fieldChanged: 'Mixing Studio Session',
+      oldValue: `In Progress (${liters}L ${colorName})`,
+      newValue: 'Cancelled',
+      reason: 'User cancelled Color Mixing Studio modal'
+    }
+  );
+  closeModal();
 }
 
 function renderColorMixStudio() {
@@ -1785,6 +1819,7 @@ async function submitColorMix() {
   });
 
   const isPos = s.isPosMode !== false;
+  const formulaSummary = componentsData.map(cp => `${cp.percentage}% ${cp.name} (${cp.liters}L)`).join(' + ');
   if (isPos) {
     cart.push({
       type: 'colormix',
@@ -1801,18 +1836,37 @@ async function submitColorMix() {
       components: componentsData
     });
 
+    logAudit(
+      'MIXING_COMPLETE',
+      colorName,
+      `Composed ${liters}L "${colorName}" [${detected.name} · ${mixed.hex}] (${baseType}) and queued to POS Cart — Formula: ${formulaSummary} · Total: ${peso(liters * price)}`,
+      {
+        entityName: colorName,
+        fieldChanged: 'Paint Color Mix Formula',
+        oldValue: formulaSummary,
+        newValue: `${liters}L ${colorName} [${detected.name} · ${mixed.hex}] (${peso(liters * price)})`,
+        reason: note || `${baseType} (Added to POS Cart)`
+      }
+    );
+
     closeModal();
     refreshCartUI();
     showToast(`Added ${liters}L "${colorName}" (${detected.name}) mix to sale.`, 'ok');
   } else {
     // Direct movement logging from Stock Movements page
     const date = nowISO();
+    const ingredientChanges = [];
     componentsData.forEach(comp => {
       const p = productById(comp.productId);
       if (p) {
         const beforeStock = Number(p.stock) || 0;
         const plan = consumeProductForColorMix(p, comp.liters, comp.preferredCanSize || 0);
         const mixNoteExtra = formatMixConsumptionNote(plan);
+        ingredientChanges.push({
+          field: `${p.name} (${comp.percentage}%)`,
+          oldValue: `${formatStock(beforeStock)}L`,
+          newValue: `${formatStock(p.stock)}L`
+        });
         db.movements.push({
           id: uid('mv'),
           date,
@@ -1827,7 +1881,7 @@ async function submitColorMix() {
       }
     });
 
-    const formulaSummary = componentsData.map(cp => `${cp.percentage}% ${cp.name}`).join(' + ');
+    const shortFormulaSummary = componentsData.map(cp => `${cp.percentage}% ${cp.name}`).join(' + ');
     db.movements.push({
       id: uid('mv'),
       date,
@@ -1836,9 +1890,23 @@ async function submitColorMix() {
       productName: `Color Mix — ${colorName} [${detected.name}]`,
       colorName,
       qtyChange: liters,
-      note: `${note ? note + ' · ' : ''}Formula: ${formulaSummary}`,
+      note: `${note ? note + ' · ' : ''}Formula: ${shortFormulaSummary}`,
       staffName: (currentUser && currentUser.name) || 'Staff'
     });
+
+    logAudit(
+      'MIXING_COMPLETE',
+      colorName,
+      `Completed ${liters}L "${colorName}" [${detected.name} · ${mixed.hex}] (${baseType}) mixing service — Formula: ${formulaSummary} · Value: ${peso(liters * price)}`,
+      {
+        entityName: colorName,
+        fieldChanged: 'Paint Color Mix & Ingredient Stock',
+        oldValue: formulaSummary,
+        newValue: `${liters}L ${colorName} [${detected.name} · ${mixed.hex}] (${peso(liters * price)})`,
+        reason: note || `${baseType} (Direct Inventory Mix)`,
+        meta: { changes: ingredientChanges }
+      }
+    );
 
     await saveDB();
     closeModal();

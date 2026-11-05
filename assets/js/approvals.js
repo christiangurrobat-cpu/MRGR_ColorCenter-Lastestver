@@ -6,35 +6,175 @@
 
 let currentApprovalsTab = 'adjustments'; // 'adjustments' | 'products' | 'purchaseOrders' | 'history'
 let approvalsSearchQuery = '';
+let approvalsAdjStatusFilter = 'pending'; // 'pending' | 'approved' | 'rejected' | 'all'
 let approvalsHistoryFilter = 'all'; // 'all' | 'approved' | 'rejected'
-let approvalsDateFrom = '';
-let approvalsDateTo = '';
+let approvalsDateFrom = currentYearStartISO();
+let approvalsDateTo = currentYearEndISO();
+let approvalsYearFilter = 'current';
 
 function getApprovalsDatePreset() {
   return getDateRangePreset(approvalsDateFrom, approvalsDateTo);
 }
 
+function getApprovalsSelectedYear() {
+  const curY = getCurrentYear();
+  if (approvalsYearFilter === 'current' || !approvalsYearFilter) return curY;
+  const y = parseInt(approvalsYearFilter, 10);
+  if (!isNaN(y)) return y;
+  if (approvalsDateFrom && approvalsDateFrom.length >= 4) {
+    const yf = parseInt(approvalsDateFrom.slice(0, 4), 10);
+    if (!isNaN(yf)) return yf;
+  }
+  return curY;
+}
+
+function openApprovalsCalendar(target, anchorEl, event) {
+  openAppMonthDayPicker({
+    target: target,
+    anchorEl: anchorEl || document.getElementById(target === 'from' ? 'appr-date-from-wrap' : 'appr-date-to-wrap'),
+    event: event,
+    currentDate: (target === 'from' ? approvalsDateFrom : approvalsDateTo),
+    otherDate: (target === 'from' ? approvalsDateTo : approvalsDateFrom),
+    selectedYear: getApprovalsSelectedYear,
+    onSelect: function (iso) {
+      if (target === 'from') {
+        approvalsDateFrom = iso;
+        if (approvalsDateTo && approvalsDateFrom > approvalsDateTo) approvalsDateTo = approvalsDateFrom;
+      } else {
+        approvalsDateTo = iso;
+        if (approvalsDateFrom && approvalsDateTo < approvalsDateFrom) approvalsDateFrom = approvalsDateTo;
+      }
+      syncApprovalsDateInputs();
+      const contentEl = document.getElementById('approvals-tab-content');
+      if (contentEl) contentEl.innerHTML = renderHistoryTab();
+      else renderPage();
+    }
+  });
+}
+
+function updateApprovalsDatePresetsUI() {
+  const activePreset = getApprovalsDatePreset();
+  document.querySelectorAll('.appr-date-btn').forEach(btn => {
+    const p = btn.getAttribute('data-preset');
+    if (p === activePreset) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+
+  // Sync Year select dropdown: Preserve selected year! Never reset to custom!
+  const yearSelect = document.getElementById('appr-year-select');
+  if (yearSelect) {
+    if (!approvalsDateFrom && !approvalsDateTo) {
+      yearSelect.value = 'all';
+      approvalsYearFilter = 'all';
+    } else if (approvalsYearFilter && approvalsYearFilter !== 'custom') {
+      yearSelect.value = approvalsYearFilter;
+    } else {
+      yearSelect.value = 'current';
+      approvalsYearFilter = 'current';
+    }
+  }
+
+  // Sync Historical Records button
+  const histBtn = document.getElementById('appr-historical-btn');
+  if (histBtn) {
+    if (isHistoricalView(approvalsDateFrom, approvalsDateTo)) {
+      histBtn.classList.add('active');
+    } else {
+      histBtn.classList.remove('active');
+    }
+  }
+
+  const summaryEl = document.getElementById('appr-date-summary');
+  if (summaryEl) {
+    summaryEl.innerHTML = formatDateRangeSummary(approvalsDateFrom, approvalsDateTo, 'Decision date:');
+  }
+  const clearBtn = document.getElementById('appr-clear-date-btn');
+  if (clearBtn) {
+    clearBtn.style.display = (approvalsDateFrom || approvalsDateTo) ? 'inline-flex' : 'none';
+  }
+}
+
+function syncApprovalsDateInputs() {
+  const fromEl = document.getElementById('appr-date-from');
+  const toEl = document.getElementById('appr-date-to');
+  if (fromEl) {
+    fromEl.value = formatDateInputMMDDYYYY(approvalsDateFrom);
+  }
+  if (toEl) {
+    toEl.value = formatDateInputMMDDYYYY(approvalsDateTo);
+  }
+  updateApprovalsDatePresetsUI();
+}
+
+function onApprovalsYearChange(val) {
+  closeAppMonthDayPicker();
+  const curY = getCurrentYear();
+  if (val === 'all') {
+    approvalsDateFrom = '';
+    approvalsDateTo = '';
+    approvalsYearFilter = 'all';
+  } else {
+    const targetYear = (val === 'current') ? curY : (parseInt(val, 10) || curY);
+    approvalsYearFilter = (val === 'current') ? 'current' : String(targetYear);
+    approvalsDateFrom = updateDateYearISO(approvalsDateFrom, targetYear, '01-01');
+    approvalsDateTo = updateDateYearISO(approvalsDateTo, targetYear, (targetYear === curY ? todayISO().slice(5) : '12-31'));
+    if (approvalsDateFrom && approvalsDateTo && approvalsDateFrom > approvalsDateTo) {
+      approvalsDateFrom = approvalsDateTo;
+    }
+  }
+  const contentEl = document.getElementById('approvals-tab-content');
+  if (contentEl) contentEl.innerHTML = renderHistoryTab();
+  else renderPage();
+}
+
+function toggleApprovalsHistoricalRecords() {
+  if (isHistoricalView(approvalsDateFrom, approvalsDateTo)) {
+    setApprovalsDatePreset('year');
+  } else {
+    approvalsDateFrom = '';
+    approvalsDateTo = '';
+    approvalsYearFilter = 'all';
+    const contentEl = document.getElementById('approvals-tab-content');
+    if (contentEl) contentEl.innerHTML = renderHistoryTab();
+    else renderPage();
+  }
+}
+
 function setApprovalsDatePreset(preset) {
   const today = todayISO();
+  const curY = getCurrentYear();
   if (preset === 'today') {
     approvalsDateFrom = today;
     approvalsDateTo = today;
+    approvalsYearFilter = 'current';
   } else if (preset === 'yesterday') {
     const yest = daysAgoISO(1);
     approvalsDateFrom = yest;
     approvalsDateTo = yest;
+    approvalsYearFilter = 'current';
   } else if (preset === '7d') {
     approvalsDateFrom = daysAgoISO(6);
     approvalsDateTo = today;
+    approvalsYearFilter = 'current';
   } else if (preset === '30d') {
     approvalsDateFrom = daysAgoISO(29);
     approvalsDateTo = today;
+    approvalsYearFilter = 'current';
   } else if (preset === 'month') {
     approvalsDateFrom = thisMonthStartISO();
     approvalsDateTo = today;
+    approvalsYearFilter = 'current';
+  } else if (preset === 'year') {
+    approvalsDateFrom = currentYearStartISO(curY);
+    approvalsDateTo = currentYearEndISO(curY);
+    approvalsYearFilter = 'current';
   } else if (preset === 'all') {
     approvalsDateFrom = '';
     approvalsDateTo = '';
+    approvalsYearFilter = 'all';
   }
   const contentEl = document.getElementById('approvals-tab-content');
   if (contentEl) contentEl.innerHTML = renderHistoryTab();
@@ -55,6 +195,7 @@ function onApprovalsDateChange() {
   }
   approvalsDateFrom = f;
   approvalsDateTo = t;
+  // Preserve selected year; do NOT set to custom
   const contentEl = document.getElementById('approvals-tab-content');
   if (contentEl) contentEl.innerHTML = renderHistoryTab();
   else renderPage();
@@ -64,9 +205,7 @@ function clearApprovalsDates() {
   setApprovalsDatePreset('all');
 }
 
-/* Quick tab navigation helper */
-function switchApprovalsTab(tab) {
-  currentApprovalsTab = tab;
+function refreshApprovalsTabContent() {
   const contentEl = document.getElementById('approvals-tab-content');
   if (contentEl) {
     contentEl.innerHTML = renderApprovalsTabContent();
@@ -76,8 +215,16 @@ function switchApprovalsTab(tab) {
   }
 }
 
+/* Quick tab navigation helper */
+function switchApprovalsTab(tab) {
+  currentApprovalsTab = tab;
+  resetPaginationByPrefix('approvals_');
+  refreshApprovalsTabContent();
+}
+
 function goToApprovalsTab(tab) {
   currentApprovalsTab = tab;
+  resetPaginationByPrefix('approvals_');
   goTo('approvals');
 }
 
@@ -93,6 +240,7 @@ function focusFirstPendingApprovalsTab() {
 
 function setApprovalsSearch(query) {
   approvalsSearchQuery = String(query || '').trim().toLowerCase();
+  resetPaginationByPrefix('approvals_');
   const contentEl = document.getElementById('approvals-tab-content');
   if (contentEl) {
     contentEl.innerHTML = renderApprovalsTabContent();
@@ -101,6 +249,7 @@ function setApprovalsSearch(query) {
 
 function clearApprovalsSearch() {
   approvalsSearchQuery = '';
+  resetPaginationByPrefix('approvals_');
   const inputEl = document.getElementById('approvals-search-input');
   if (inputEl) inputEl.value = '';
   const contentEl = document.getElementById('approvals-tab-content');
@@ -109,8 +258,18 @@ function clearApprovalsSearch() {
   }
 }
 
+function setApprovalsAdjStatusFilter(status) {
+  approvalsAdjStatusFilter = status || 'pending';
+  resetPaginationPage('approvals_adjustments');
+  const contentEl = document.getElementById('approvals-tab-content');
+  if (contentEl) {
+    contentEl.innerHTML = renderApprovalsTabContent();
+  }
+}
+
 function setApprovalsHistoryFilter(filter) {
   approvalsHistoryFilter = filter;
+  resetPaginationPage('approvals_history');
   const contentEl = document.getElementById('approvals-tab-content');
   if (contentEl) {
     contentEl.innerHTML = renderApprovalsTabContent();
@@ -137,15 +296,93 @@ function getPendingProductsList() {
         id: p.id,
         name: p.name,
         brand: p.brand,
-        category: p.type,
+        category: p.type || p.category,
         requestedBy: p.requestedBy || 'Staff',
-        date: p.createdAt || p.updatedAt || nowISO(),
+        date: p.requestedAt || p.createdAt || p.updatedAt || nowISO(),
         detailsHtml: `<span>Initial price: <b>${peso(p.price)}</b> · Sizes: [${(p.sizes || []).map(s => s + 'L').join(', ')}] · Min threshold: ${p.threshold || 5}</span>`
       });
+      return;
     }
 
-    // 2. Price change request
-    if (p.pendingPrice != null && Number(p.pendingPrice) > 0) {
+    // 2. Unified Product Edit Request (submitted by staff)
+    // Note: When staff edits a product, products.js stores the comprehensive request in pendingEdit,
+    // and also mirrors pendingPrice and pendingSizes for auxiliary reference.
+    // They are part of the SAME edit request and must NOT be duplicated.
+    if (p.pendingEdit && typeof p.pendingEdit === 'object') {
+      const edit = p.pendingEdit;
+      const prop = edit.proposed || {};
+      const chg = edit.changes || {};
+      const changeParts = [];
+
+      // Price change summary
+      if (chg.price || (prop.price !== undefined && Number(prop.price) !== Number(p.price))) {
+        const oldP = chg.price ? Number(chg.price.old) : Number(p.price);
+        const newP = chg.price ? Number(chg.price.new) : Number(prop.price);
+        const diff = newP - oldP;
+        const pct = oldP > 0 ? ((diff / oldP) * 100).toFixed(1) : '0';
+        const pctClass = diff >= 0 ? 'up' : 'down';
+        const pctSign = diff >= 0 ? '+' : '';
+        changeParts.push(`
+          <div class="price-diff-box" style="display:inline-flex; margin-right:8px;">
+            <span class="price-diff-old">${peso(oldP)}</span>
+            <span class="price-diff-arrow">➔</span>
+            <span class="price-diff-new">${peso(newP)}</span>
+            <span class="price-diff-percent ${pctClass}">${pctSign}${pct}%</span>
+          </div>
+        `);
+      }
+
+      // Sizes addition summary
+      const addedSizes = (chg.sizes && chg.sizes.added) ? chg.sizes.added : (Array.isArray(p.pendingSizes) && p.pendingSizes.length > 0 ? p.pendingSizes : []);
+      if (addedSizes && addedSizes.length > 0) {
+        changeParts.push(`<span>Adding: <b style="color:var(--teal);">+[${addedSizes.map(s => s + 'L').join(', ')}]</b></span>`);
+      }
+
+      // Other attribute changes
+      const otherChanges = [];
+      if (prop.name && prop.name !== p.name) otherChanges.push(`Name: "${escapeHtml(prop.name)}"`);
+      if (prop.brand && prop.brand !== p.brand) otherChanges.push(`Brand: "${escapeHtml(prop.brand)}"`);
+      if (prop.type && prop.type !== p.type) otherChanges.push(`Type: "${escapeHtml(prop.type)}"`);
+      if (prop.color && prop.color !== p.color) otherChanges.push(`Color: "${escapeHtml(prop.color)}"`);
+      if (prop.threshold !== undefined && Number(prop.threshold) !== Number(p.threshold)) {
+        otherChanges.push(`Min threshold: ${p.threshold} ➔ ${prop.threshold}`);
+      }
+      if (otherChanges.length > 0) {
+        changeParts.push(`<span>${otherChanges.join(' · ')}</span>`);
+      }
+
+      const hasPriceChg = Boolean(chg.price || (prop.price !== undefined && Number(prop.price) !== Number(p.price)));
+      const hasSizeChg = addedSizes.length > 0;
+      const hasOtherChg = otherChanges.length > 0;
+
+      let typeLabel = 'Product Edit';
+      let typeBadgeClass = 'ghost';
+      if (hasPriceChg && !hasSizeChg && !hasOtherChg) {
+        typeLabel = 'Price Change';
+        typeBadgeClass = 'mustard';
+      } else if (hasSizeChg && !hasPriceChg && !hasOtherChg) {
+        typeLabel = 'New Sizes';
+        typeBadgeClass = 'teal';
+      }
+
+      list.push({
+        type: 'info_edit',
+        typeLabel: typeLabel,
+        typeBadgeClass: typeBadgeClass,
+        product: p,
+        id: p.id,
+        name: p.name,
+        brand: p.brand,
+        category: p.type || p.category,
+        requestedBy: edit.requestedBy || 'Staff',
+        date: edit.requestedAt || p.updatedAt || nowISO(),
+        detailsHtml: changeParts.length ? changeParts.join('<div style="margin-top:4px;"></div>') : '<span>Product specification revisions</span>'
+      });
+      return;
+    }
+
+    // 3. Standalone Price change request (legacy or direct)
+    if (p.pendingPrice != null && Number(p.pendingPrice) > 0 && Number(p.pendingPrice) !== Number(p.price)) {
       const oldPrice = Number(p.price);
       const newPrice = Number(p.pendingPrice);
       const diff = newPrice - oldPrice;
@@ -161,7 +398,7 @@ function getPendingProductsList() {
         id: p.id,
         name: p.name,
         brand: p.brand,
-        category: p.type,
+        category: p.type || p.category,
         requestedBy: p.pendingPriceBy || p.updatedBy || 'Staff',
         date: p.pendingPriceAt || p.updatedAt || nowISO(),
         detailsHtml: `
@@ -173,9 +410,10 @@ function getPendingProductsList() {
           </div>
         `
       });
+      return;
     }
 
-    // 3. New sizes request
+    // 4. Standalone New sizes request (legacy or direct)
     if (Array.isArray(p.pendingSizes) && p.pendingSizes.length > 0) {
       list.push({
         type: 'sizes_add',
@@ -185,38 +423,14 @@ function getPendingProductsList() {
         id: p.id,
         name: p.name,
         brand: p.brand,
-        category: p.type,
+        category: p.type || p.category,
         requestedBy: p.pendingSizesBy || p.updatedBy || 'Staff',
         date: p.pendingSizesAt || p.updatedAt || nowISO(),
         detailsHtml: `
           <span>Existing: <b>[${(p.sizes || []).map(s => s + 'L').join(', ')}]</b> ➔ Adding: <b style="color:var(--teal); font-weight:700;">+ [${p.pendingSizes.map(s => s + 'L').join(', ')}]</b></span>
         `
       });
-    }
-
-    // 4. Product info edit
-    if (p.pendingEdit && typeof p.pendingEdit === 'object') {
-      const prop = p.pendingEdit.proposed || {};
-      const changes = [];
-      if (prop.name && prop.name !== p.name) changes.push(`Name: "${escapeHtml(prop.name)}"`);
-      if (prop.brand && prop.brand !== p.brand) changes.push(`Brand: "${escapeHtml(prop.brand)}"`);
-      if (prop.threshold !== undefined && Number(prop.threshold) !== Number(p.threshold)) {
-        changes.push(`Min threshold: ${p.threshold} ➔ ${prop.threshold}`);
-      }
-
-      list.push({
-        type: 'info_edit',
-        typeLabel: 'Details Edit',
-        typeBadgeClass: 'ghost',
-        product: p,
-        id: p.id,
-        name: p.name,
-        brand: p.brand,
-        category: p.type,
-        requestedBy: p.pendingEdit.requestedBy || 'Staff',
-        date: p.pendingEdit.requestedAt || p.updatedAt || nowISO(),
-        detailsHtml: `<span>${changes.length ? changes.join(' · ') : 'Product specification revisions'}</span>`
-      });
+      return;
     }
   });
 
@@ -330,7 +544,17 @@ function approvalsPage() {
         ${renderApprovalsTabButtons(adjList.length, prodList.length, poList.length)}
       </div>
 
-      <div style="display:flex; align-items:center; gap:8px;">
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+        ${currentApprovalsTab === 'adjustments' ? `
+          <select id="approvals-status-filter" onchange="setApprovalsAdjStatusFilter(this.value)"
+                  style="padding:6px 10px; border:1px solid var(--line); border-radius:6px; font-size:13px; background:#fff; cursor:pointer;"
+                  title="Filter stock adjustments by status">
+            <option value="pending" ${approvalsAdjStatusFilter === 'pending' ? 'selected' : ''}>⏳ Pending Review</option>
+            <option value="approved" ${approvalsAdjStatusFilter === 'approved' ? 'selected' : ''}>✅ Approved</option>
+            <option value="rejected" ${approvalsAdjStatusFilter === 'rejected' ? 'selected' : ''}>✕ Rejected</option>
+            <option value="all" ${approvalsAdjStatusFilter === 'all' ? 'selected' : ''}>All Adjustments</option>
+          </select>
+        ` : ''}
         <div style="position:relative; display:inline-flex; align-items:center;">
           <input type="search" id="approvals-search-input" placeholder="Search requests..." value="${escapeHtml(approvalsSearchQuery)}"
                  oninput="setApprovalsSearch(this.value)"
@@ -396,7 +620,19 @@ function renderApprovalsTabContent() {
    Tab 1: Stock Adjustments
    ------------------------------------------------------------ */
 function renderAdjustmentsTab() {
-  let list = getPendingAdjustmentRequests();
+  let list = [];
+  const allReqs = (db.adjustmentRequests || []).slice();
+
+  if (approvalsAdjStatusFilter === 'all') {
+    list = allReqs;
+  } else if (approvalsAdjStatusFilter === 'approved') {
+    list = allReqs.filter(r => r.status === 'approved');
+  } else if (approvalsAdjStatusFilter === 'rejected') {
+    list = allReqs.filter(r => r.status === 'rejected');
+  } else {
+    // Default: 'pending'
+    list = allReqs.filter(r => r.status === 'pending');
+  }
 
   if (approvalsSearchQuery) {
     const q = approvalsSearchQuery;
@@ -404,16 +640,18 @@ function renderAdjustmentsTab() {
       const basicMatch = (r.reqNumber || '').toLowerCase().includes(q) ||
         (r.requestedBy || '').toLowerCase().includes(q) ||
         (r.reason || '').toLowerCase().includes(q) ||
-        (r.batchNote || '').toLowerCase().includes(q);
+        (r.batchNote || '').toLowerCase().includes(q) ||
+        (r.status || '').toLowerCase().includes(q);
       if (basicMatch) return true;
       const rows = Array.isArray(r.rows) ? r.rows : (r.rowsJson ? JSON.parse(r.rowsJson) : []);
       return rows.some(row => {
         const p = productById(row.productId);
         const pName = p ? p.name.toLowerCase() : '';
         const pBrand = p ? p.brand.toLowerCase() : '';
+        const pColor = p ? (p.color || '').toLowerCase() : '';
         const reason = (row.reason || '').toLowerCase();
         const note = (row.note || '').toLowerCase();
-        return pName.includes(q) || pBrand.includes(q) || reason.includes(q) || note.includes(q);
+        return pName.includes(q) || pBrand.includes(q) || pColor.includes(q) || reason.includes(q) || note.includes(q);
       });
     });
   }
@@ -422,13 +660,16 @@ function renderAdjustmentsTab() {
     const totalPending = getTotalPendingApprovalsCount();
     return `
       <div class="approvals-empty-state">
-        <div class="approvals-empty-icon">🎉</div>
-        <div class="approvals-empty-title">No pending Stock Adjustment requests!</div>
+        <div class="approvals-empty-icon">${approvalsAdjStatusFilter === 'pending' ? '🎉' : '📂'}</div>
+        <div class="approvals-empty-title">
+          ${approvalsSearchQuery ? 'No stock adjustments match your search' : (approvalsAdjStatusFilter === 'pending' ? 'No pending Stock Adjustment requests!' : `No ${approvalsAdjStatusFilter} adjustment requests found`)}
+        </div>
         <div class="approvals-empty-desc">
-          All damage, spoilage, and recount discrepancy requests submitted by warehouse staff have been reviewed and resolved.
+          ${approvalsSearchQuery ? `No requests matching "${escapeHtml(approvalsSearchQuery)}" were found.` : (approvalsAdjStatusFilter === 'pending' ? 'All damage, spoilage, and recount discrepancy requests submitted by warehouse staff have been reviewed and resolved.' : `There are currently no requests with "${approvalsAdjStatusFilter}" status recorded.`)}
         </div>
         <div style="display:flex; justify-content:center; gap:10px; margin-top:16px; flex-wrap:wrap;">
-          <button type="button" class="btn secondary small" onclick="switchApprovalsTab('history')">📜 View Decision History</button>
+          ${approvalsSearchQuery ? '<button type="button" class="btn secondary small" onclick="clearApprovalsSearch()">Clear Search</button>' : ''}
+          ${approvalsAdjStatusFilter !== 'pending' ? '<button type="button" class="btn secondary small" onclick="setApprovalsAdjStatusFilter(\'pending\')">View Pending Requests</button>' : '<button type="button" class="btn secondary small" onclick="switchApprovalsTab(\'history\')">📜 View Decision History</button>'}
           ${totalPending > 0 ? `<button type="button" class="btn small" onclick="focusFirstPendingApprovalsTab()">⚡ Check Other Pending Items (${totalPending}) &rarr;</button>` : ''}
           <button type="button" class="btn ghost small" onclick="goTo('dashboard')">📊 Back to Dashboard</button>
         </div>
@@ -436,16 +677,25 @@ function renderAdjustmentsTab() {
     `;
   }
 
+  const adjPag = paginateArray(list, 'approvals_adjustments', {
+    onUpdate: refreshApprovalsTabContent,
+    scrollTarget: '#approvals-tab-content',
+    recordLabel: 'requests'
+  });
+
+  const pagedList = adjPag.pagedItems || adjPag.pageItems || [];
+  const pendingCountInList = list.filter(r => r.status === 'pending').length;
+
   return `
     <div class="panel">
-      <div class="panel-head row" style="background:#FAF8F5;">
+      <div class="panel-head row wrap" style="background:#FAF8F5; gap:10px;">
         <div style="font-weight:700; font-size:13.5px; color:var(--ink);">
-          Awaiting Review (${list.length} request${list.length === 1 ? '' : 's'})
+          ${approvalsAdjStatusFilter === 'pending' ? 'Stock Adjustment Requests Awaiting Review' : 'Stock Adjustment Requests'} (${list.length} record${list.length === 1 ? '' : 's'})
         </div>
         <div class="spacer"></div>
-        ${list.length > 1 ? `
+        ${pendingCountInList > 1 ? `
           <button type="button" class="btn secondary small" onclick="approveAllPendingAdjustmentsBatch()" style="font-size:12px; margin-right:8px;">
-            ✓ Approve All Adjustments (${list.length})
+            ✓ Approve All Pending (${pendingCountInList})
           </button>
         ` : ''}
         <span class="muted small">Staff cannot modify stock until you approve these requests.</span>
@@ -455,20 +705,63 @@ function renderAdjustmentsTab() {
           <thead>
             <tr>
               <th>Request #</th>
-              <th>Date Submitted</th>
-              <th>Staff Requester</th>
-              <th>Category / Reason</th>
-              <th>Items & Qty Impact</th>
+              <th>Date &amp; Time</th>
+              <th>Requesting Staff</th>
+              <th>Reason / Category</th>
+              <th>Product &amp; Variant</th>
+              <th>Container Size</th>
+              <th>Adjustment Qty</th>
+              <th>Status</th>
               <th>Staff Notes</th>
               <th class="right">Action</th>
             </tr>
           </thead>
           <tbody>
-            ${list.map(r => {
+            ${pagedList.map(r => {
     const rows = Array.isArray(r.rows) ? r.rows : (r.rowsJson ? JSON.parse(r.rowsJson) : []);
     const totalItems = rows.length;
     let totalCans = 0;
     rows.forEach(row => { totalCans += Math.abs(Number(row.qty) || 0); });
+
+    let prodNameVariant = '—';
+    let containerSizeStr = '—';
+    let qtyStr = '—';
+
+    if (rows.length === 1) {
+      const singleRow = rows[0];
+      const p = productById(singleRow.productId);
+      const colorText = p && p.color && p.color !== '-' ? ` · <span style="font-weight:normal; color:var(--ink-soft);">${escapeHtml(p.color)}</span>` : '';
+      prodNameVariant = p ? `<div style="font-weight:600; color:var(--ink);">${escapeHtml(p.name)}${colorText}</div>` : '<span class="muted">Unknown Product</span>';
+      containerSizeStr = `<span class="badge ghost small" style="font-weight:600;">${singleRow.containerSize || singleRow.size || (p && p.sizes && p.sizes[0]) || 1}L</span>`;
+      const isAdd = singleRow.reason === 'Count Correction (add)';
+      const isOpened = singleRow.reason === 'Dispose Opened / Used Stock' || (!isAdd && (typeof isOpenedSizeValue === 'function' ? isOpenedSizeValue(singleRow.size) : String(singleRow.size).endsWith('_opened')));
+      const qtyNum = Math.abs(Number(singleRow.qty) || 0);
+      const sign = isAdd ? '+' : '-';
+      const unitStr = isOpened ? 'L' : ` can${qtyNum === 1 ? '' : 's'}`;
+      qtyStr = `<span style="font-weight:700; color:${isAdd ? 'var(--success)' : 'var(--danger)'};">${sign}${qtyNum}${unitStr}</span>`;
+    } else if (rows.length > 1) {
+      const firstRow = rows[0];
+      const p = productById(firstRow.productId);
+      const colorText = p && p.color && p.color !== '-' ? ` · <span style="font-weight:normal; color:var(--ink-soft);">${escapeHtml(p.color)}</span>` : '';
+      prodNameVariant = `
+        <div style="font-weight:600; color:var(--ink);">${p ? escapeHtml(p.name) : 'Item'}${colorText}</div>
+        <div class="muted small" style="margin-top:2px;">+ ${rows.length - 1} other item${rows.length - 1 === 1 ? '' : 's'}</div>
+      `;
+      containerSizeStr = `<span class="badge ghost small" style="font-weight:600;">${firstRow.containerSize || firstRow.size || 1}L</span> <span class="muted small">(+others)</span>`;
+      const allAdd = rows.every(rw => rw.reason === 'Count Correction (add)');
+      const allDeduct = rows.every(rw => rw.reason !== 'Count Correction (add)');
+      const sign = allAdd ? '+' : (allDeduct ? '-' : '');
+      const color = allAdd ? 'var(--success)' : (allDeduct ? 'var(--danger)' : 'var(--ink)');
+      qtyStr = `<span style="font-weight:700; color:${color};">${sign}${totalCans} cans total</span>`;
+    }
+
+    const statusBadge = r.status === 'pending'
+      ? '<span class="badge" style="background:#FEF3C7; color:#92400E; border:1px solid #FCD34D; font-weight:600;">⏳ Pending</span>'
+      : (r.status === 'approved'
+        ? '<span class="badge ok" style="font-weight:600;">✅ Approved</span>'
+        : '<span class="badge danger" style="font-weight:600;">✕ Rejected</span>');
+
+    const isPending = r.status === 'pending';
 
     return `
                 <tr>
@@ -485,34 +778,41 @@ function renderAdjustmentsTab() {
                   </td>
                   <td>
                     <div style="font-weight:600; color:var(--ink);">${escapeHtml(r.requestedBy)}</div>
-                    <span class="badge ghost small" style="font-size:10px;">Staff</span>
+                    <span class="badge ghost small" style="font-size:10px;">${escapeHtml(r.role || 'Staff')}</span>
                   </td>
                   <td>
                     <span class="badge mustard" style="font-weight:600;">
-                      ${escapeHtml(r.reason || 'Stock Adjustment')}
+                      ${escapeHtml((rows.length === 1 && rows[0].reason) ? rows[0].reason : (r.reason || (rows.length > 1 ? `${rows[0].reason || 'Stock Adjustment'} (+${rows.length - 1})` : 'Stock Adjustment')))}
                     </span>
                   </td>
-                  <td>
-                    <div style="font-weight:600; color:var(--ink);">${totalItems} item${totalItems === 1 ? '' : 's'} (${totalCans} cans)</div>
-                    <div class="muted small">${rows.map(x => {
-      const p = productById(x.productId);
-      return p ? p.name : 'Item';
-    }).slice(0, 2).join(', ')}${totalItems > 2 ? '…' : ''}</div>
+                  <td style="max-width:220px;">
+                    ${prodNameVariant}
                   </td>
-                  <td style="max-width:200px; font-size:12.5px; color:var(--ink-soft);">
-                    ${r.batchNote ? `"${escapeHtml(r.batchNote)}"` : '<span class="muted">-</span>'}
+                  <td style="text-align:center;">
+                    ${containerSizeStr}
+                  </td>
+                  <td>
+                    ${qtyStr}
+                  </td>
+                  <td>
+                    ${statusBadge}
+                  </td>
+                  <td style="max-width:180px; font-size:12px; color:var(--ink-soft);">
+                    ${r.batchNote ? `"${escapeHtml(r.batchNote)}"` : (r.rejectReason ? `<span style="color:var(--danger);">${escapeHtml(r.rejectReason)}</span>` : '<span class="muted">-</span>')}
                   </td>
                   <td class="right" style="white-space:nowrap;">
                     <div class="approvals-action-group" style="justify-content:flex-end;">
                       <button type="button" class="btn ghost small" onclick="viewAdjRequestDetails('${r.id}')" title="View breakdown of products and sizes">
                         🔍 Details
                       </button>
-                      <button type="button" class="btn small" onclick="confirmApproveAdjRequest('${r.id}')" title="Approve adjustment and commit inventory change">
-                        ✓ Approve
-                      </button>
-                      <button type="button" class="btn secondary small danger" onclick="openRejectAdjRequestModal('${r.id}')" title="Reject this adjustment request">
-                        ✕ Reject
-                      </button>
+                      ${isPending ? `
+                        <button type="button" class="btn small" onclick="confirmApproveAdjRequest('${r.id}')" title="Approve adjustment and commit inventory change">
+                          ✓ Approve
+                        </button>
+                        <button type="button" class="btn secondary small danger" onclick="openRejectAdjRequestModal('${r.id}')" title="Reject this adjustment request">
+                          ✕ Reject
+                        </button>
+                      ` : ''}
                     </div>
                   </td>
                 </tr>
@@ -521,6 +821,7 @@ function renderAdjustmentsTab() {
           </tbody>
         </table>
       </div>
+      ${adjPag.html}
     </div>
   `;
 }
@@ -560,6 +861,12 @@ function renderProductsTab() {
     `;
   }
 
+  const prodPag = paginateArray(list, 'approvals_products', {
+    onUpdate: refreshApprovalsTabContent,
+    scrollTarget: '#approvals-tab-content',
+    recordLabel: 'product requests'
+  });
+
   return `
     <div class="panel">
       <div class="panel-head row" style="background:#FAF8F5;">
@@ -583,7 +890,7 @@ function renderProductsTab() {
             </tr>
           </thead>
           <tbody>
-            ${list.map(it => {
+            ${(prodPag.pagedItems || prodPag.pageItems || []).map(it => {
     return `
                 <tr>
                   <td>
@@ -620,6 +927,7 @@ function renderProductsTab() {
           </tbody>
         </table>
       </div>
+      ${prodPag.html}
     </div>
   `;
 }
@@ -741,17 +1049,56 @@ async function approveAllPendingProductsBatch() {
       if (p && Array.isArray(p.pendingSizes)) {
         p.sizes = sanitizeSizeList([...(p.sizes || []), ...p.pendingSizes]);
         p.pendingSizes = [];
+        syncProductVariants(p);
       }
     } else if (it.type === 'info_edit') {
       const p = productById(it.id);
-      if (p && p.pendingEdit && p.pendingEdit.proposed) {
-        Object.assign(p, p.pendingEdit.proposed);
+      if (p && p.pendingEdit) {
+        const prop = p.pendingEdit.proposed || {};
+        if (prop.name) p.name = prop.name;
+        if (prop.brand) p.brand = prop.brand;
+        if (prop.type) p.type = prop.type;
+        if (prop.color) p.color = prop.color;
+        if (prop.colorHex) { p.colorHex = prop.colorHex; p.color_hex = prop.colorHex; }
+        if (prop.threshold !== undefined && !isNaN(Number(prop.threshold))) {
+          p.threshold = Number(prop.threshold);
+        }
+        if (prop.thresholdBySize && typeof prop.thresholdBySize === 'object' && !Array.isArray(prop.thresholdBySize)) {
+          p.thresholdBySize = prop.thresholdBySize;
+        }
+        if (Array.isArray(prop.sizes) && prop.sizes.length > 0) {
+          p.sizes = sanitizeSizeList([...(p.sizes || []), ...prop.sizes]);
+        }
+        if (prop.price !== undefined && !isNaN(Number(prop.price))) {
+          const oldP = Number(p.price);
+          const newP = Number(prop.price);
+          if (oldP !== newP) {
+            p.recentPrice = oldP;
+            p.price = newP;
+          }
+        }
         p.pendingEdit = null;
+        p.pendingPrice = null;
+        p.pendingSizes = [];
+        p.reviewedBy = (currentUser && currentUser.name) || 'Administrator';
+        p.reviewedAt = nowISO();
+        syncProductVariants(p);
       }
     }
   }
 
-  logAudit('PRODUCT_BATCH_APPROVE', 'Product', `Batch approved ${list.length} pending product request(s)`);
+  logAudit(
+    'PRODUCT_BATCH_APPROVE',
+    'Product Catalog',
+    `Batch approved ${list.length} pending product request(s): ${list.map(it => `${it.name} (${it.typeLabel})`).join(', ')}`,
+    {
+      entityName: `Product Catalog (${list.length} requests)`,
+      fieldChanged: 'Batch Product Approval',
+      oldValue: `${list.length} Pending Request(s)`,
+      newValue: `${list.length} Approved & Applied`,
+      reason: 'Administrator batch approval in Pending Approvals Hub'
+    }
+  );
   await saveDB();
   showToast(`Successfully approved all ${list.length} product request(s)!`, 'ok');
   renderPage();
@@ -772,13 +1119,25 @@ async function approveAllPendingAdjustmentsBatch() {
 
   for (const req of list) {
     const rows = Array.isArray(req.rows) ? req.rows : (req.rowsJson ? JSON.parse(req.rowsJson) : []);
-    await executeStockAdjustment(rows, req.requestedBy);
+    await executeStockAdjustment(rows, req.requestedBy, { skipSave: true, skipReset: true, skipToast: true, skipRender: true });
     req.status = 'approved';
     req.reviewedBy = (currentUser && currentUser.name) || 'Administrator';
     req.reviewedAt = nowISO();
   }
 
-  logAudit('ADJ_BATCH_APPROVE', 'Stock Adjustment', `Batch approved ${list.length} stock adjustment request(s)`);
+  logAudit(
+    'ADJ_BATCH_APPROVE',
+    'Stock Adjustment',
+    `Batch approved ${list.length} stock adjustment request(s): ${list.map(r => r.reqNumber).join(', ')}`,
+    {
+      entityName: `Stock Adjustments (${list.length} requests)`,
+      fieldChanged: 'Batch Stock Adjustment Approval',
+      oldValue: `${list.length} Pending Request(s)`,
+      newValue: `${list.length} Approved & Committed`,
+      referenceNo: list.map(r => r.reqNumber).join(', '),
+      reason: 'Administrator batch approval in Pending Approvals Hub'
+    }
+  );
   await saveDB();
   showToast(`Approved all ${list.length} adjustment request(s) and updated stock!`, 'ok');
   renderPage();
@@ -818,6 +1177,12 @@ function renderPurchaseOrdersTab() {
     `;
   }
 
+  const poPag = paginateArray(list, 'approvals_pos', {
+    onUpdate: refreshApprovalsTabContent,
+    scrollTarget: '#approvals-tab-content',
+    recordLabel: 'purchase orders'
+  });
+
   return `
     <div class="panel">
       <div class="panel-head row" style="background:#FAF8F5;">
@@ -846,9 +1211,9 @@ function renderPurchaseOrdersTab() {
             </tr>
           </thead>
           <tbody>
-            ${list.map(o => {
+            ${(poPag.pagedItems || poPag.pageItems || []).map(o => {
     const items = Array.isArray(o.items) ? o.items : [];
-    const totalCans = items.reduce((sum, it) => sum + (Number(it.orderedQty) || 0), 0);
+    const totalCans = items.reduce((sum, it) => sum + (Number(it.qty !== undefined ? it.qty : (it.orderedQty || 0))), 0);
 
     return `
                 <tr>
@@ -895,6 +1260,7 @@ function renderPurchaseOrdersTab() {
           </tbody>
         </table>
       </div>
+      ${poPag.html}
     </div>
   `;
 }
@@ -917,7 +1283,19 @@ async function authorizeAllPendingPOsBatch() {
     po.status = 'ordered';
   }
 
-  logAudit('PO_BATCH_APPROVE', 'Purchase Order', `Batch authorized ${list.length} purchase order(s)`);
+  logAudit(
+    'PO_BATCH_APPROVE',
+    'Purchase Order',
+    `Batch authorized ${list.length} purchase order(s): ${list.map(o => `${o.poNumber} (${o.supplierName})`).join(', ')} — Total: ${peso(totalSum)}`,
+    {
+      entityName: `Purchase Orders (${list.length} orders)`,
+      fieldChanged: 'Batch PO Authorization',
+      oldValue: `${list.length} Pending Approval`,
+      newValue: `${list.length} Authorized / Ordered (${peso(totalSum)})`,
+      referenceNo: list.map(o => o.poNumber).join(', '),
+      reason: 'Administrator batch authorization in Pending Approvals Hub'
+    }
+  );
   await saveDB();
   showToast(`Authorized all ${list.length} purchase orders!`, 'ok');
   renderPage();
@@ -1009,6 +1387,13 @@ function renderHistoryTab() {
 
   const activePreset = getApprovalsDatePreset();
   const hasDates = Boolean(approvalsDateFrom || approvalsDateTo);
+  const selectedYear = getApprovalsSelectedYear();
+
+  const histPag = paginateArray(filtered, 'approvals_history', {
+    onUpdate: refreshApprovalsTabContent,
+    scrollTarget: '#approvals-tab-content',
+    recordLabel: 'decisions'
+  });
 
   return `
     <div class="panel" style="padding:0; overflow:hidden;">
@@ -1024,37 +1409,77 @@ function renderHistoryTab() {
         </div>
       </div>
 
-      <!-- Dedicated Date Range Bar & Quick Presets (matches Audit Log) -->
+      <!-- Dedicated Date Range Bar, Year Selector & Historical Records Option -->
       <div class="audit-date-bar" style="padding:10px 16px; border-top:1px dashed var(--line-light); border-bottom:1px solid var(--line-light); background:#FBF9F4;">
         <div class="audit-date-group">
-          <label class="audit-date-label">📅 Date Range:</label>
-          <div class="audit-date-field" title="Start date">
+          <!-- Year Selector (Defaults to Current Year) -->
+          <div class="audit-year-wrap">
+            <label for="appr-year-select" class="audit-date-label">📅 Year:</label>
+            <select id="appr-year-select" class="audit-year-select" onchange="onApprovalsYearChange(this.value)" title="Filter decision history by calendar year">
+              <option value="current" ${approvalsYearFilter === 'current' ? 'selected' : ''}>${getCurrentYear()} (Current Year)</option>
+              ${getAvailableRecordYears().filter(y => y !== getCurrentYear()).map(y => `<option value="${y}" ${approvalsYearFilter === String(y) ? 'selected' : ''}>${y}</option>`).join('')}
+              <option value="all" ${approvalsYearFilter === 'all' ? 'selected' : ''}>All Recorded Years</option>
+            </select>
+          </div>
+
+          <span class="audit-date-sep">|</span>
+
+          <label class="audit-date-label">Date Range:</label>
+          <div class="audit-date-field app-monthday-picker-field" id="appr-date-from-wrap" title="Click to select Month and Day (Year: ${selectedYear})" onclick="openApprovalsCalendar('from', this, event)">
             <span class="field-tag">From</span>
-            <input id="appr-date-from" type="date" value="${escapeHtml(approvalsDateFrom)}" max="${escapeHtml(approvalsDateTo || '')}" onchange="onApprovalsDateChange()">
+            <input id="appr-date-from"
+              type="text"
+              class="app-monthday-input"
+              placeholder="MM/DD/YYYY"
+              value="${formatDateInputMMDDYYYY(approvalsDateFrom)}"
+              readonly
+              onclick="openApprovalsCalendar('from', this, event)">
+            <button type="button" class="app-cal-trigger-btn" onclick="openApprovalsCalendar('from', document.getElementById('appr-date-from-wrap'), event)" title="Open calendar (Month and Day)">📅</button>
           </div>
           <span class="audit-date-sep">to</span>
-          <div class="audit-date-field" title="End date">
+          <div class="audit-date-field app-monthday-picker-field" id="appr-date-to-wrap" title="Click to select Month and Day (Year: ${selectedYear})" onclick="openApprovalsCalendar('to', this, event)">
             <span class="field-tag">To</span>
-            <input id="appr-date-to" type="date" value="${escapeHtml(approvalsDateTo)}" min="${escapeHtml(approvalsDateFrom || '')}" onchange="onApprovalsDateChange()">
+            <input id="appr-date-to"
+              type="text"
+              class="app-monthday-input"
+              placeholder="MM/DD/YYYY"
+              value="${formatDateInputMMDDYYYY(approvalsDateTo)}"
+              readonly
+              onclick="openApprovalsCalendar('to', this, event)">
+            <button type="button" class="app-cal-trigger-btn" onclick="openApprovalsCalendar('to', document.getElementById('appr-date-to-wrap'), event)" title="Open calendar (Month and Day)">📅</button>
           </div>
-          <button type="button" id="appr-clear-date-btn" class="audit-clear-date-btn" onclick="clearApprovalsDates()" title="Clear date range" style="display:${hasDates ? 'inline-flex' : 'none'};">✕</button>
+          <button type="button" id="appr-clear-date-btn" class="audit-clear-date-btn" onclick="clearApprovalsDates()" title="Show all time" style="display:${hasDates ? 'inline-flex' : 'none'};">✕</button>
         </div>
 
         <div class="audit-date-shortcuts">
-          <button type="button" class="audit-date-btn ${activePreset === 'today' ? 'active' : ''}" data-preset="today" onclick="setApprovalsDatePreset('today')" title="Decisions made today">Today</button>
-          <button type="button" class="audit-date-btn ${activePreset === 'yesterday' ? 'active' : ''}" data-preset="yesterday" onclick="setApprovalsDatePreset('yesterday')" title="Decisions made yesterday">Yesterday</button>
-          <button type="button" class="audit-date-btn ${activePreset === '7d' ? 'active' : ''}" data-preset="7d" onclick="setApprovalsDatePreset('7d')" title="Last 7 days">7D</button>
-          <button type="button" class="audit-date-btn ${activePreset === '30d' ? 'active' : ''}" data-preset="30d" onclick="setApprovalsDatePreset('30d')" title="Last 30 days">30D</button>
-          <button type="button" class="audit-date-btn ${activePreset === 'month' ? 'active' : ''}" data-preset="month" onclick="setApprovalsDatePreset('month')" title="This month to date">This Month</button>
-          <button type="button" class="audit-date-btn ${activePreset === 'all' ? 'active' : ''}" data-preset="all" onclick="setApprovalsDatePreset('all')" title="Show all decision history">All</button>
+          <button type="button" class="audit-date-btn appr-date-btn ${activePreset === 'today' ? 'active' : ''}" data-preset="today" onclick="setApprovalsDatePreset('today')" title="Decisions made today">Today</button>
+          <button type="button" class="audit-date-btn appr-date-btn ${activePreset === 'yesterday' ? 'active' : ''}" data-preset="yesterday" onclick="setApprovalsDatePreset('yesterday')" title="Decisions made yesterday">Yesterday</button>
+          <button type="button" class="audit-date-btn appr-date-btn ${activePreset === '7d' ? 'active' : ''}" data-preset="7d" onclick="setApprovalsDatePreset('7d')" title="Last 7 days">7D</button>
+          <button type="button" class="audit-date-btn appr-date-btn ${activePreset === '30d' ? 'active' : ''}" data-preset="30d" onclick="setApprovalsDatePreset('30d')" title="Last 30 days">30D</button>
+          <button type="button" class="audit-date-btn appr-date-btn ${activePreset === 'month' ? 'active' : ''}" data-preset="month" onclick="setApprovalsDatePreset('month')" title="This month to date">This Month</button>
+          <button type="button" class="audit-date-btn appr-date-btn ${activePreset === 'year' ? 'active' : ''}" data-preset="year" onclick="setApprovalsDatePreset('year')" title="Current year decisions">This Year (${getCurrentYear()})</button>
+          <button type="button" class="audit-date-btn appr-date-btn ${activePreset === 'custom' ? 'active' : ''}" data-preset="custom" onclick="openApprovalsCalendar('from', document.getElementById('appr-date-from-wrap'), event)" title="Custom date range">Custom Range</button>
+
+          <!-- Separate Historical Records viewing option for authorized users -->
+          <button type="button" id="appr-historical-btn" class="audit-historical-btn ${isHistoricalView(approvalsDateFrom, approvalsDateTo) ? 'active' : ''}" onclick="toggleApprovalsHistoricalRecords()" title="View complete historical approval decisions across all years">
+            🏛️ Historical Records
+          </button>
         </div>
 
         <div class="audit-date-info" id="appr-date-summary">
           ${formatDateRangeSummary(approvalsDateFrom, approvalsDateTo, 'Decision date:')}
         </div>
       </div>
+      ${isHistoricalView(approvalsDateFrom, approvalsDateTo) ? `
+        <div class="historical-records-banner">
+          <div>
+            🏛️ <b>Historical Approval Decisions:</b> Showing ${!approvalsDateFrom && !approvalsDateTo ? 'All-Time' : (approvalsDateFrom.slice(0, 4) === approvalsDateTo.slice(0, 4) ? `Year ${approvalsDateFrom.slice(0, 4)}` : `${formatDateReadable(approvalsDateFrom)} – ${formatDateReadable(approvalsDateTo)}`)} decisions (<b>${filtered.length}</b> records). All approval audit records are permanently retained in the database.
+          </div>
+          <button type="button" class="btn ghost small" onclick="setApprovalsDatePreset('year')" style="color:#7B4F09; border-color:#D19A42; background:#fff;">Return to Current Year (${getCurrentYear()}) &rarr;</button>
+        </div>
+      ` : ''}
       <div class="panel-body tight table-scroll">
-        ${filtered.length === 0 ? `
+        ${(histPag.pagedItems || histPag.pageItems || []).length === 0 ? `
           <div style="text-align:center; padding:36px; color:var(--ink-soft);">
             No past approval decisions found matching this filter.
           </div>
@@ -1073,7 +1498,7 @@ function renderHistoryTab() {
               </tr>
             </thead>
             <tbody>
-              ${filtered.slice(0, 50).map(e => `
+              ${(histPag.pagedItems || histPag.pageItems || []).map(e => `
                 <tr>
                   <td style="font-size:12.5px; color:var(--ink-soft); white-space:nowrap;">
                     ${formatDateTime(e.date)}
@@ -1107,6 +1532,7 @@ function renderHistoryTab() {
           </table>
         `}
       </div>
+      ${histPag.html}
     </div>
   `;
 }
@@ -1197,7 +1623,9 @@ function openProductApprovalPreviewModal(productId) {
         <div style="display:flex; align-items:center; gap:12px;">
           <div style="width:36px; height:36px; border-radius:8px; background:${hex}; border:1px solid rgba(0,0,0,0.15); box-shadow:0 1px 3px rgba(0,0,0,0.1); flex-shrink:0;"></div>
           <div>
-            <div style="font-size:17px; font-weight:700; color:var(--ink);">${escapeHtml(p.name)}</div>
+            <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+              <div style="font-size:17px; font-weight:700; color:var(--ink);">${escapeHtml(p.name)}</div>
+            </div>
             <div class="muted small">${escapeHtml(p.brand || '')} · ${escapeHtml(p.type || '')} ${p.color ? `· ${escapeHtml(p.color)}` : ''}</div>
           </div>
         </div>
@@ -1241,6 +1669,12 @@ function openProductApprovalPreviewModal(productId) {
         <button class="btn secondary danger" onclick="closeModal(); rejectPendingProduct('${p.id}')">✕ Reject & Delete</button>
         <button class="btn" onclick="closeModal(); approvePendingProduct('${p.id}')">✓ Approve & Activate</button>
       `;
+    } else if (hasEdit) {
+      footHtml = `
+        <button class="btn secondary" onclick="closeModal()">Close</button>
+        <button class="btn secondary danger" onclick="closeModal(); rejectProductPendingEdits('${p.id}')">✕ Reject Edits</button>
+        <button class="btn" onclick="closeModal(); approveProductPendingEdits('${p.id}')">✓ Approve Edits</button>
+      `;
     } else if (hasPrice) {
       footHtml = `
         <button class="btn secondary" onclick="closeModal()">Close</button>
@@ -1252,12 +1686,6 @@ function openProductApprovalPreviewModal(productId) {
         <button class="btn secondary" onclick="closeModal()">Close</button>
         <button class="btn secondary danger" onclick="closeModal(); confirmRejectProductSizes('${p.id}')">✕ Reject Sizes</button>
         <button class="btn" onclick="closeModal(); approvePendingProductSizes('${p.id}')">✓ Approve Sizes</button>
-      `;
-    } else if (hasEdit) {
-      footHtml = `
-        <button class="btn secondary" onclick="closeModal()">Close</button>
-        <button class="btn secondary danger" onclick="closeModal(); rejectProductPendingEdits('${p.id}')">✕ Reject Edits</button>
-        <button class="btn" onclick="closeModal(); approveProductPendingEdits('${p.id}')">✓ Approve Edits</button>
       `;
     }
   }
@@ -1275,7 +1703,9 @@ function openPOPreviewModal(poId) {
   const items = Array.isArray(po.items) ? po.items : [];
   const isPending = po.status === 'pending';
 
-  const rowsHtml = items.map((it, idx) => `
+  const rowsHtml = items.map((it, idx) => {
+    const itemQty = Number(it.qty !== undefined ? it.qty : (it.orderedQty !== undefined ? it.orderedQty : 1));
+    return `
     <tr>
       <td>${idx + 1}</td>
       <td>
@@ -1283,11 +1713,12 @@ function openPOPreviewModal(poId) {
         <div class="muted small">${escapeHtml(it.brand || '')}</div>
       </td>
       <td><span class="badge ghost">${it.size ? `${it.size}L` : 'Standard'}</span></td>
-      <td class="right">${it.orderedQty || 1} cans</td>
+      <td class="right">${itemQty} cans</td>
       <td class="right">${peso(it.unitCost || 0)}</td>
-      <td class="right" style="font-weight:600;">${peso(it.subtotal || ((it.orderedQty || 1) * (it.unitCost || 0)))}</td>
+      <td class="right" style="font-weight:600;">${peso(it.subtotal || (itemQty * (it.unitCost || 0)))}</td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 
   const bodyHtml = `
     <div>

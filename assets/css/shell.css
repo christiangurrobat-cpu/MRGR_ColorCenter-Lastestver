@@ -7,7 +7,7 @@
 }
 
 .sidebar {
-  width: 240px;
+  width: 252px;
   flex-shrink: 0;
   background: linear-gradient(180deg, #26211C 0%, #1A1613 100%);
   color: #EFE9DE;
@@ -20,6 +20,7 @@
   align-self: flex-start;
   box-shadow: 2px 0 10px rgba(0, 0, 0, 0.05);
   z-index: 55;
+  transition: width 0.22s cubic-bezier(0.4, 0, 0.2, 1), transform 0.22s cubic-bezier(0.4, 0, 0.2, 1), padding 0.22s ease;
 }
 
 .sidebar .brand {
@@ -29,13 +30,16 @@
   padding: 4px 8px 18px 8px;
   border-bottom: 1px solid #3a352e;
   margin-bottom: 14px;
+  overflow: hidden;
 }
 
 .sidebar .brand-text {
-  font-family: 'Space Grotesk';
+  font-family: 'Space Grotesk', system-ui, sans-serif;
   font-weight: 700;
   font-size: 15px;
   line-height: 1.2;
+  white-space: nowrap;
+  transition: opacity 0.15s ease;
 }
 
 .sidebar .brand-text small {
@@ -53,7 +57,7 @@
   padding: 9px 12px;
   border-radius: var(--radius-sm);
   color: #D9D2C4;
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 500;
   margin-bottom: 3px;
   cursor: pointer;
@@ -63,6 +67,19 @@
   text-align: left;
   transition: all 0.14s ease;
   position: relative;
+  text-decoration: none;
+}
+
+.nav-icon {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  flex-shrink: 0;
+  text-align: center;
+  line-height: 1;
 }
 
 .nav-item:hover {
@@ -78,12 +95,141 @@
   box-shadow: 0 2px 8px rgba(31, 111, 107, 0.35);
 }
 
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 3.5px;
+  background: #FFFFFF;
+  border-radius: 0 3px 3px 0;
+}
+
 .nav-item .nav-label {
   flex: 1;
   text-align: left;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+/* Sidebar toggle button in topbar */
+.sidebar-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  background: #FAF7F2;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 16px;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.sidebar-toggle-btn:hover {
+  background: #EDE6D8;
+  border-color: #D2C7B5;
+  color: var(--teal);
+}
+
+/* Collapsed Desktop State */
+.shell.sidebar-collapsed .sidebar {
+  width: 68px;
+  padding: 20px 8px;
+}
+
+.shell.sidebar-collapsed .sidebar .brand {
+  justify-content: center;
+  padding: 4px 0 16px 0;
+}
+
+.shell.sidebar-collapsed .sidebar .brand-text,
+.shell.sidebar-collapsed .sidebar .nav-label,
+.shell.sidebar-collapsed .sidebar .system-status-text span:last-child {
+  display: none !important;
+}
+
+.shell.sidebar-collapsed .sidebar .nav-item {
+  justify-content: center;
+  padding: 10px 0;
+  gap: 0;
+}
+
+.shell.sidebar-collapsed .sidebar .nav-item:hover {
+  transform: none;
+}
+
+.shell.sidebar-collapsed .sidebar .nav-badge {
+  position: absolute;
+  top: 3px;
+  right: 6px;
+  min-width: 16px;
+  height: 16px;
+  font-size: 9.5px;
+  padding: 0 4px;
+}
+
+/* Mobile Overlay Drawer State */
+.sidebar-backdrop {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 260px !important;
+    height: 100vh;
+    transform: translateX(-100%);
+    z-index: 1000;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.35);
+  }
+
+  .shell.mobile-open .sidebar {
+    transform: translateX(0);
+  }
+
+  .sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 17, 13, 0.55);
+    backdrop-filter: blur(3px);
+    z-index: 999;
+    animation: fadeIn 0.15s ease-out;
+  }
+
+  .shell.mobile-open .sidebar-backdrop {
+    display: block;
+  }
+
+  .topbar {
+    padding: 12px 16px !important;
+  }
+
+  .content {
+    padding: 16px 14px 40px 14px !important;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 /* Red circle notification badges for modules */
@@ -147,38 +293,49 @@
   z-index: 50;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
-  padding: 14px 28px;
+  padding: 12px 28px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  box-shadow: var(--shadow-sm);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
 }
 
 .topbar h1 {
-  font-size: 19px;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -0.015em;
+  line-height: 1.25;
 }
 
 .topbar .date {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--ink-soft);
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  gap: 6px;
 }
 
 .topbar-clock {
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum';
-  font-weight: 600;
-  color: var(--ink);
-  letter-spacing: 0.2px;
+  font-family: 'Space Grotesk', monospace;
+  font-weight: 700;
+  color: var(--teal);
+  background: #FAF7F2;
+  border: 1px solid var(--line);
+  padding: 1px 7px;
+  border-radius: 5px;
+  letter-spacing: 0.3px;
+  font-size: 12px;
 }
 
 .topbar-actions {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   margin-left: auto;
 }
 
@@ -188,22 +345,24 @@
   gap: 10px;
   background: #FAF7F2;
   border: 1px solid var(--line);
-  padding: 5px 12px 5px 6px;
-  border-radius: 24px;
+  padding: 4px 14px 4px 5px;
+  border-radius: 28px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
 }
 
 .user-avatar {
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
-  background: var(--teal);
+  background: linear-gradient(135deg, #1F6F6B 0%, #165653 100%);
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 700;
-  font-size: 13px;
+  font-size: 13.5px;
   box-shadow: 0 1px 4px rgba(31, 111, 107, 0.25);
+  flex-shrink: 0;
 }
 
 .user-badge-info {
@@ -213,14 +372,22 @@
 }
 
 .user-badge-info .who {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--ink);
 }
 
 .user-badge-info .role {
-  font-size: 11px;
-  color: var(--ink-soft);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--teal);
+  background: #EAF4F3;
+  padding: 1px 7px;
+  border-radius: 10px;
+  display: inline-block;
+  margin-top: 2px;
+  width: fit-content;
+  letter-spacing: 0.02em;
 }
 
 .content {
