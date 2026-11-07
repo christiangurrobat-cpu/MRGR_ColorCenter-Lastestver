@@ -11,6 +11,8 @@ let reportSupplierFilter = 'all';
 let reportTxTypeFilter = 'all';
 let reportSearchQuery = '';
 let salesHistoryBreakdownsExpanded = true;
+let reportMixingSortField = 'date';
+let reportMixingSortAsc = false;
 
 function calculateCurrentInventoryValue() {
   let totalVal = 0;
@@ -63,6 +65,52 @@ function setReportSearch(val) {
   resetPaginationByPrefix('rep_');
   renderReportBody();
 }
+
+function setMixingSort(field) {
+  if (reportMixingSortField === field) {
+    reportMixingSortAsc = !reportMixingSortAsc;
+  } else {
+    reportMixingSortField = field;
+    reportMixingSortAsc = (field === 'date') ? false : true;
+  }
+  if (typeof resetPaginationPage === 'function') {
+    resetPaginationPage('rep_color_mixing');
+  }
+  renderReportBody();
+}
+window.setMixingSort = setMixingSort;
+
+function openMixingReceiptModal(receiptRef) {
+  if (!receiptRef) return;
+  if (!currentUser || currentUser.role !== 'admin') {
+    if (typeof showToast === 'function') {
+      showToast('Viewing sales transactions is restricted to administrators.', 'error');
+    }
+    return;
+  }
+  const ref = String(receiptRef).trim();
+  const sale = (db.sales || []).find(s => 
+    s.id === ref || 
+    s.receiptNo === ref || 
+    (typeof getReceiptNo === 'function' && getReceiptNo(s) === ref)
+  ) || (db.sales || []).find(s => {
+    return (s.receiptNo && s.receiptNo.toLowerCase() === ref.toLowerCase()) ||
+           (s.items || []).some(it => it.receiptNo === ref);
+  });
+
+  if (sale) {
+    if (typeof viewSale === 'function') {
+      viewSale(sale.id);
+    } else if (typeof showReceipt === 'function') {
+      showReceipt(sale);
+    }
+  } else {
+    if (typeof showToast === 'function') {
+      showToast(`Sales transaction "${ref}" was not found in records.`, 'info');
+    }
+  }
+}
+window.openMixingReceiptModal = openMixingReceiptModal;
 
 function exportActiveReportCSV() {
   const table = document.querySelector('#report-body table');
@@ -328,6 +376,8 @@ function resetAllReportFilters() {
   reportSupplierFilter = 'all';
   reportTxTypeFilter = 'all';
   reportSearchQuery = '';
+  reportMixingSortField = 'date';
+  reportMixingSortAsc = false;
   const searchInput = document.getElementById('rep-search-input');
   if (searchInput) searchInput.value = '';
   const prodSelect = document.getElementById('rep-product-filter');
@@ -1060,7 +1110,7 @@ function renderTopProductsSectionHtml(sales) {
                       ${escapeHtml(p.brand)}
                     </td>
                     <td class="right" style="vertical-align:middle; font-weight:700; font-family:'Space Grotesk',sans-serif; font-size:13px; color:var(--ink);">
-                      ${p.totalQty.toLocaleString()} <span style="font-size:11px; font-weight:normal; color:var(--ink-soft);">cans</span>
+                      ${p.totalQty.toLocaleString()} <span style="font-size:11px; font-weight:normal; color:var(--ink-soft);">units</span>
                     </td>
                     <td class="right" style="vertical-align:middle; font-weight:700; font-family:'Space Grotesk',sans-serif; font-size:13px; color:var(--teal);">
                       ${peso(p.totalRevenue)}
@@ -1094,7 +1144,7 @@ function renderTopProductsSectionHtml(sales) {
                             </span>
                           </div>
                           <div class="muted small" style="font-size:11.5px; background:#FAF8F5; padding:2px 8px; border-radius:4px; border:1px solid #ECE6DB;">
-                            Reconciled Total: <b>${p.totalQty}</b> cans &bull; <b>${peso(p.totalRevenue)}</b> &bull; <b>${p.transactionCount}</b> distinct transactions
+                            Reconciled Total: <b>${p.totalQty}</b> units &bull; <b>${peso(p.totalRevenue)}</b> &bull; <b>${p.transactionCount}</b> distinct transactions
                           </div>
                         </div>
 
@@ -1119,7 +1169,7 @@ function renderTopProductsSectionHtml(sales) {
                                   ${formatContainerSizeBadge(v.size, v.sizeId)}
                                 </td>
                                 <td style="padding:7px 12px; text-align:right; font-weight:700; font-family:'Space Grotesk',sans-serif; vertical-align:middle;">
-                                  ${v.qty.toLocaleString()} <span style="font-size:11px; font-weight:normal; color:var(--ink-soft);">cans</span>
+                                  ${v.qty.toLocaleString()} <span style="font-size:11px; font-weight:normal; color:var(--ink-soft);">units</span>
                                 </td>
                                 <td style="padding:7px 12px; text-align:right; vertical-align:middle;">
                                   ${formatHistoricalPrices(v.unitPricesList)}
@@ -1139,7 +1189,7 @@ function renderTopProductsSectionHtml(sales) {
                                 &Sigma; Reconciled Subtotal for ${escapeHtml(p.name)}:
                               </td>
                               <td style="padding:8px 12px; text-align:right; font-family:'Space Grotesk',sans-serif; font-size:12.5px;">
-                                ${p.totalQty.toLocaleString()} cans
+                                ${p.totalQty.toLocaleString()} units
                               </td>
                               <td style="padding:8px 12px; text-align:right; color:var(--ink-soft); font-weight:normal; font-size:11px;">
                                 (Preserved per variation)
@@ -1164,7 +1214,7 @@ function renderTopProductsSectionHtml(sales) {
                   Overall Total (${products.length} Products &bull; ${allVariants.length} Variations):
                 </td>
                 <td class="right" style="padding:10px 14px; font-family:'Space Grotesk',sans-serif; font-size:13.5px;">
-                  ${overallQty.toLocaleString()} cans
+                  ${overallQty.toLocaleString()} units
                 </td>
                 <td class="right" style="padding:10px 14px; font-family:'Space Grotesk',sans-serif; font-size:13.5px; color:var(--teal);">
                   ${peso(overallRevenue)}
@@ -1213,7 +1263,7 @@ function renderTopProductsSectionHtml(sales) {
                     ${formatContainerSizeBadge(v.size, v.sizeId)}
                   </td>
                   <td class="right" style="vertical-align:middle; font-weight:700; font-family:'Space Grotesk',sans-serif; font-size:13px; color:var(--ink);">
-                    ${v.qty.toLocaleString()} <span style="font-size:11px; font-weight:normal; color:var(--ink-soft);">cans</span>
+                    ${v.qty.toLocaleString()} <span style="font-size:11px; font-weight:normal; color:var(--ink-soft);">units</span>
                   </td>
                   <td class="right" style="vertical-align:middle;">
                     ${formatHistoricalPrices(v.unitPricesList)}
@@ -1233,7 +1283,7 @@ function renderTopProductsSectionHtml(sales) {
                   Overall Total (${allVariants.length} Variations across ${products.length} Products):
                 </td>
                 <td class="right" style="padding:10px 14px; font-family:'Space Grotesk',sans-serif; font-size:13.5px;">
-                  ${overallQty.toLocaleString()} cans
+                  ${overallQty.toLocaleString()} units
                 </td>
                 <td class="right" style="padding:10px 14px; color:var(--ink-soft); font-weight:normal; font-size:11.5px;">
                   (Preserved per variant)
@@ -1720,9 +1770,9 @@ function renderSalesHistorySummaryAndBreakdownsHtml(salesList, from, to) {
         <div class="stat-card" id="sh-card-total-items">
           <div class="label">Total Items Sold</div>
           <div class="value" id="sh-val-total-items">
-            ${formatStock(summary.totalItemsSold)} <span style="font-size:13px; font-weight:600; color:var(--ink-soft);">cans</span>
+            ${formatStock(summary.totalItemsSold)} <span style="font-size:13px; font-weight:600; color:var(--ink-soft);">units</span>
           </div>
-          <div class="sub">Individual cans / containers sold (${formatLiters(summary.totalLitersSold)})</div>
+          <div class="sub">Individual units sold (${formatLiters(summary.totalLitersSold)})</div>
         </div>
 
         <div class="stat-card" id="sh-card-avg-transaction">
@@ -1760,7 +1810,7 @@ function renderSalesHistorySummaryAndBreakdownsHtml(salesList, from, to) {
                         ${peso(sz.salesAmount)}
                       </div>
                       <div class="muted small" style="font-size:11px; margin-top:1px;">
-                        <b>${formatStock(sz.qtySold)}</b> ${sz.qtySold === 1 ? 'can' : 'cans'} (${formatLiters(sz.litersSold)})
+                        <b>${formatStock(sz.qtySold)}</b> ${sz.qtySold === 1 ? 'unit' : 'units'} (${formatLiters(sz.litersSold)})
                       </div>
                     </div>
                   `;
@@ -1808,7 +1858,7 @@ function renderSalesHistorySummaryAndBreakdownsHtml(salesList, from, to) {
                         </span>
                       </td>
                       <td style="padding:6px 10px; text-align:right; font-family:'Space Grotesk',sans-serif; font-weight:700; vertical-align:middle; white-space:nowrap;">
-                        ${formatStock(prod.qtySold)} <span style="font-weight:normal; font-size:10.5px; color:var(--ink-soft);">${prod.qtySold === 1 ? 'can' : 'cans'}</span>
+                        ${formatStock(prod.qtySold)} <span style="font-weight:normal; font-size:10.5px; color:var(--ink-soft);">${prod.qtySold === 1 ? 'unit' : 'units'}</span>
                       </td>
                       <td style="padding:6px 10px; text-align:right; font-family:'Space Grotesk',sans-serif; font-weight:700; color:var(--teal); vertical-align:middle; white-space:nowrap;">
                         ${peso(prod.salesAmount)}
@@ -2115,7 +2165,7 @@ function renderInventoryStockReportSectionHtml() {
             <div class="sub">Catalog product models</div>
           </div>
           <div class="stat-card teal">
-            <div class="label">Total Sealed Cans</div>
+            <div class="label">Total Sealed Units</div>
             <div class="value">${totalCans.toLocaleString()}</div>
             <div class="sub">Sealed units in warehouse</div>
           </div>
@@ -2139,9 +2189,9 @@ function renderInventoryStockReportSectionHtml() {
               <th>Brand &amp; Category</th>
               <th>Supplier</th>
               <th style="text-align:center;">Container Size</th>
-              <th class="right">Stock (Cans)</th>
+              <th class="right">Stock (Units)</th>
               <th class="right">Volume (L)</th>
-              <th class="right">Price / Can</th>
+              <th class="right">Price / Unit</th>
               <th class="right">Asset Value</th>
               <th class="center">Status</th>
             </tr>
@@ -2256,7 +2306,7 @@ function renderPurchaseOrderReportSectionHtml(from, to) {
               <th>PO #</th>
               <th>Order Date</th>
               <th>Supplier Name</th>
-              <th>Items &amp; Cans Ordered</th>
+              <th>Items &amp; Units Ordered</th>
               <th class="right">Total Amount</th>
               <th>Status</th>
               <th>Created By</th>
@@ -2280,7 +2330,7 @@ function renderPurchaseOrderReportSectionHtml(from, to) {
                   <td style="font-family:'Space Grotesk',monospace; font-weight:700;">${escapeHtml(o.poNumber)}</td>
                   <td style="font-size:12px; color:var(--ink-soft);">${formatDateShort(o.orderDate)}</td>
                   <td style="font-weight:600; font-size:12.5px;">${escapeHtml(o.supplierName || '—')}</td>
-                  <td style="font-size:12px;">${items.length} item${items.length === 1 ? '' : 's'} (${totalCans} cans)</td>
+                  <td style="font-size:12px;">${items.length} item${items.length === 1 ? '' : 's'} (${totalCans} units)</td>
                   <td class="right" style="font-family:'Space Grotesk',monospace; font-weight:700; font-size:13px;">${peso(o.totalAmount)}</td>
                   <td>${stBadge}</td>
                   <td style="font-size:12px; color:var(--ink-soft);">${escapeHtml(o.createdBy || 'Staff')}</td>
@@ -2570,6 +2620,202 @@ function reportBodyHtml(from, to) {
 
     return pn || 'Color Mix';
   };
+
+  const extractMixingLogRecord = m => {
+    const date = m.date;
+    const staff = m.staffName || 'Staff';
+    const liters = Number(m.qtyChange) || 0;
+    const colorName = mixColorLabel(m);
+    let detectedName = '';
+    let baseType = '';
+
+    const detMatch = String(m.productName || '').match(/\[(.*?)\]/);
+    if (detMatch && detMatch[1]) {
+      detectedName = detMatch[1].trim();
+    }
+
+    let receiptRef = m.receiptNo || '';
+    const noteStr = String(m.note || '');
+    if (!receiptRef) {
+      const rcMatch = noteStr.match(/(?:Receipt:\s*|\b)(OR-\d+-\d+|OR-\d+)/i);
+      if (rcMatch) receiptRef = rcMatch[1].trim();
+    }
+
+    if (!receiptRef) {
+      const sib = (db.movements || []).find(x => x.type === 'colormix' && x.date === m.date && x.staffName === m.staffName && x.productId && x.note);
+      if (sib) {
+        const sibRcMatch = String(sib.note || '').match(/(?:Receipt:\s*|\b)(OR-\d+-\d+|OR-\d+)/i);
+        if (sibRcMatch) receiptRef = sibRcMatch[1].trim();
+      }
+    }
+
+    let sale = null;
+    if (receiptRef) {
+      sale = (db.sales || []).find(s => s.receiptNo === receiptRef || (typeof getReceiptNo === 'function' && getReceiptNo(s) === receiptRef) || s.id === receiptRef);
+    }
+    if (!sale && !receiptRef) {
+      sale = (db.sales || []).find(s => s.date === m.date && (s.items || []).some(it => it.type === 'colormix'));
+      if (sale) {
+        receiptRef = typeof getReceiptNo === 'function' ? getReceiptNo(sale) : (sale.receiptNo || sale.id);
+      }
+    }
+
+    let saleMixItem = null;
+    if (sale && Array.isArray(sale.items)) {
+      saleMixItem = sale.items.find(it => it.type === 'colormix' && it.colorName && it.colorName.toLowerCase() === colorName.toLowerCase()) ||
+                    sale.items.find(it => it.type === 'colormix');
+      if (saleMixItem) {
+        if (saleMixItem.detectedColorName) detectedName = saleMixItem.detectedColorName;
+        if (saleMixItem.baseType) baseType = saleMixItem.baseType;
+      }
+    }
+
+    // Hex Color Preview Resolution
+    let hexColor = m.hexColor || m.hex || '';
+    if (!hexColor && saleMixItem && saleMixItem.hexColor) {
+      hexColor = saleMixItem.hexColor;
+    }
+    if (!hexColor) {
+      const presets = (db.presets || []).concat(
+        (() => {
+          try {
+            return JSON.parse(localStorage.getItem('mrgr_color_mix_presets') || '[]');
+          } catch (e) {
+            return [];
+          }
+        })()
+      );
+      const pMatch = presets.find(p => (p.colorName || '').toLowerCase() === colorName.toLowerCase() || (p.name || '').toLowerCase() === colorName.toLowerCase());
+      if (pMatch && pMatch.hex) hexColor = pMatch.hex;
+    }
+    if (!hexColor) {
+      const audit = (db.auditLogs || []).find(a => (a.action === 'MIXING_COMPLETE' || a.action === 'COLOR_MIX') && (
+        (a.entityName && a.entityName.toLowerCase() === colorName.toLowerCase()) ||
+        (a.details && a.details.toLowerCase().includes(colorName.toLowerCase()))
+      ));
+      if (audit) {
+        const hexMatch = String(audit.newValue || audit.details || '').match(/#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b/);
+        if (hexMatch) hexColor = hexMatch[0];
+      }
+    }
+    if (!hexColor && typeof PAINT_COLOR_DICTIONARY !== 'undefined') {
+      const dict = PAINT_COLOR_DICTIONARY.find(d => d.name.toLowerCase() === colorName.toLowerCase());
+      if (dict) hexColor = dict.hex;
+    }
+    if (hexColor && !/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/i.test(hexColor)) {
+      hexColor = '';
+    }
+
+    // Components & Formula Parsing
+    let components = [];
+    let rawFormula = '';
+    let extraNote = '';
+
+    if (saleMixItem && Array.isArray(saleMixItem.components) && saleMixItem.components.length) {
+      components = saleMixItem.components.map(c => ({
+        productId: c.productId,
+        name: c.name || (typeof productById === 'function' && productById(c.productId) ? productById(c.productId).name : 'Ingredient'),
+        percentage: Number(c.percentage || c.pct || 0) ? `${Number(c.percentage || c.pct)}%` : '',
+        pctNum: Number(c.percentage || c.pct || 0),
+        liters: Number(c.liters || 0) || (liters && c.percentage ? Number((liters * (Number(c.percentage) / 100)).toFixed(2)) : 0),
+        brand: c.brand || (typeof productById === 'function' && productById(c.productId) ? productById(c.productId).brand : '')
+      }));
+      rawFormula = components.map(c => `${c.percentage ? c.percentage + ' ' : ''}${c.name}`).join(' + ');
+    }
+
+    if (!components.length && noteStr) {
+      const fMatch = noteStr.match(/Formula:\s*([^·\r\n]+)/i);
+      if (fMatch) {
+        rawFormula = fMatch[1].trim();
+        const parts = rawFormula.split('+').map(p => p.trim()).filter(Boolean);
+        components = parts.map(part => {
+          let pct = '';
+          let pctNum = 0;
+          let name = part;
+          let compLiters = 0;
+          
+          const m1 = part.match(/^(\d+(?:\.\d+)?%)\s*(.+)$/);
+          const m2 = part.match(/^(.+?)\s*\((\d+(?:\.\d+)?%)\)$/);
+          if (m1) {
+            pct = m1[1];
+            pctNum = parseFloat(pct);
+            name = m1[2].trim();
+          } else if (m2) {
+            pct = m2[2];
+            pctNum = parseFloat(pct);
+            name = m2[1].trim();
+          }
+
+          const litMatch = name.match(/\((\d+(?:\.\d+)?)\s*L\)$/i);
+          if (litMatch) {
+            compLiters = parseFloat(litMatch[1]);
+            name = name.replace(/\s*\(\d+(?:\.\d+)?\s*L\)$/i, '').trim();
+          } else if (pctNum && liters) {
+            compLiters = Number((liters * (pctNum / 100)).toFixed(2));
+          }
+
+          const prod = (db.products || []).find(p => p.name.toLowerCase() === name.toLowerCase() || p.id === name);
+
+          return {
+            productId: prod ? prod.id : null,
+            name: prod ? prod.name : name,
+            percentage: pct,
+            pctNum: pctNum,
+            liters: compLiters,
+            brand: prod ? prod.brand : ''
+          };
+        });
+      }
+    }
+
+    if (!components.length) {
+      const sibs = (db.movements || []).filter(x => x.type === 'colormix' && x.date === m.date && x.staffName === m.staffName && x.productId);
+      if (sibs.length) {
+        const totalDeducted = sibs.reduce((sum, s) => sum + Math.abs(Number(s.qtyChange) || 0), 0);
+        components = sibs.map(s => {
+          const prod = typeof productById === 'function' ? productById(s.productId) : null;
+          const sLiters = Math.abs(Number(s.qtyChange) || 0);
+          const calcPct = totalDeducted > 0 ? Math.round((sLiters / totalDeducted) * 100) : 0;
+          const cleanName = (s.productName || (prod ? prod.name : 'Ingredient')).replace(/\s*\(for\s+.*?\s+mix\)$/i, '').trim();
+          return {
+            productId: s.productId,
+            name: cleanName,
+            percentage: calcPct > 0 ? `${calcPct}%` : '',
+            pctNum: calcPct,
+            liters: sLiters,
+            brand: prod ? prod.brand : ''
+          };
+        });
+        rawFormula = components.map(c => `${c.percentage ? c.percentage + ' ' : ''}${c.name}`).join(' + ');
+      }
+    }
+
+    if (noteStr) {
+      extraNote = noteStr
+        .replace(/Formula:\s*[^·\r\n]+/i, '')
+        .replace(/Receipt:\s*[^·\r\n]+/i, '')
+        .replace(/\bOR-\d+-\d+\b/gi, '')
+        .replace(/^[·\s\-_:,]+|[·\s\-_:,]+$/g, '')
+        .trim();
+    }
+
+    return {
+      rawMove: m,
+      date,
+      staff,
+      liters,
+      colorName,
+      detectedName,
+      baseType,
+      hexColor,
+      receiptRef,
+      sale,
+      components,
+      rawFormula,
+      extraNote,
+      formulaString: rawFormula || components.map(c => `${c.percentage || ''} ${c.name}`).join(' ')
+    };
+  };
   const staffLabel = name => {
     const u = (db.users || []).find(x => x.name === name);
     const role = u ? { admin: 'Admin', cashier: 'Cashier', staff: 'Inventory Staff' }[u.role] : '';
@@ -2668,7 +2914,7 @@ function reportBodyHtml(from, to) {
           <div class="stat-card danger">
             <div class="label">Out of Stock Sizes</div>
             <div class="value">${outOfStockSizesCount}</div>
-            <div class="sub">Zero cans currently available</div>
+            <div class="sub">Zero units currently available</div>
           </div>
         </div>
       </div>
@@ -2680,9 +2926,9 @@ function reportBodyHtml(from, to) {
               <th>Product</th>
               <th>Brand</th>
               <th style="min-width:95px; text-align:center;">Container Size</th>
-              <th class="right" style="min-width:115px;">Stock Quantity (Cans)</th>
+              <th class="right" style="min-width:115px;">Stock Quantity (Units)</th>
               <th class="right" style="min-width:95px;">Stock Volume (L)</th>
-              <th class="right" style="min-width:125px;">Minimum Threshold (Cans)</th>
+              <th class="right" style="min-width:125px;">Minimum Threshold (Units)</th>
               <th class="right" style="min-width:115px;">Threshold Volume (L)</th>
               <th class="center" style="min-width:95px;">Stock Status</th>
             </tr>
@@ -2732,13 +2978,13 @@ function reportBodyHtml(from, to) {
                     </span>
                   </td>
                   <td class="right" style="font-weight:600; font-family:'Space Grotesk',sans-serif; vertical-align:middle; ${borderBottom} ${st === 'out' ? 'color:var(--danger);' : 'color:#B45309;'}">
-                    ${count} ${count === 1 ? 'can' : 'cans'}
+                    ${count} ${count === 1 ? 'unit' : 'units'}
                   </td>
                   <td class="right" style="font-weight:600; font-family:'Space Grotesk',sans-serif; vertical-align:middle; ${borderBottom} ${st === 'out' ? 'color:var(--danger);' : 'color:#B45309;'}">
                     ${formatLiters(stockVol)}
                   </td>
                   <td class="right" style="font-weight:600; font-family:'Space Grotesk',sans-serif; vertical-align:middle; ${borderBottom} color:var(--ink);">
-                    ${thresh} ${thresh === 1 ? 'can' : 'cans'}
+                    ${thresh} ${thresh === 1 ? 'unit' : 'units'}
                   </td>
                   <td class="right" style="font-weight:600; font-family:'Space Grotesk',sans-serif; vertical-align:middle; ${borderBottom} color:var(--ink);">
                     ${formatLiters(threshVol)}
@@ -2766,23 +3012,179 @@ function reportBodyHtml(from, to) {
     </div>`;
 
   // Color Mixing Service Log Section
-  const mixPag = paginateArray(colorMixMoves, 'rep_color_mixing', {
+  const allMixRecords = colorMixMoves.map(m => extractMixingLogRecord(m));
+  const qMix = (reportSearchQuery || '').trim().toLowerCase();
+  const filteredMixRecords = allMixRecords.filter(rec => {
+    if (reportTxTypeFilter !== 'all' && reportTxTypeFilter !== 'colormix') {
+      return false;
+    }
+    if (reportProductFilter !== 'all') {
+      const hasProd = rec.components.some(c => c.productId === reportProductFilter) ||
+        (db.movements || []).some(x => x.type === 'colormix' && x.date === rec.date && x.staffName === rec.staff && x.productId === reportProductFilter);
+      if (!hasProd) return false;
+    }
+    if (reportBrandFilter !== 'all') {
+      const bLower = reportBrandFilter.toLowerCase();
+      const hasBrand = rec.components.some(c => c.brand && c.brand.toLowerCase() === bLower);
+      if (!hasBrand) return false;
+    }
+    if (qMix) {
+      const inColor = rec.colorName.toLowerCase().includes(qMix);
+      const inDet = rec.detectedName.toLowerCase().includes(qMix);
+      const inReceipt = (rec.receiptRef || '').toLowerCase().includes(qMix);
+      const inStaff = (rec.staff || '').toLowerCase().includes(qMix);
+      const inFormula = (rec.formulaString || '').toLowerCase().includes(qMix);
+      const inNote = (rec.extraNote || '').toLowerCase().includes(qMix);
+      const inDate = (rec.date || '').toLowerCase().includes(qMix) || (typeof formatDateTime === 'function' && formatDateTime(rec.date).toLowerCase().includes(qMix));
+      const inLiters = `${rec.liters}l`.includes(qMix) || `${formatStock(rec.liters)}`.includes(qMix);
+      if (!inColor && !inDet && !inReceipt && !inStaff && !inFormula && !inNote && !inDate && !inLiters) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  filteredMixRecords.sort((a, b) => {
+    let valA, valB;
+    switch (reportMixingSortField) {
+      case 'date':
+        valA = new Date(a.date).getTime();
+        valB = new Date(b.date).getTime();
+        break;
+      case 'color':
+        valA = a.colorName.toLowerCase();
+        valB = b.colorName.toLowerCase();
+        break;
+      case 'liters':
+        valA = a.liters;
+        valB = b.liters;
+        break;
+      case 'formula':
+        valA = a.formulaString.toLowerCase();
+        valB = b.formulaString.toLowerCase();
+        break;
+      case 'receipt':
+        valA = (a.receiptRef || '').toLowerCase();
+        valB = (b.receiptRef || '').toLowerCase();
+        break;
+      case 'staff':
+        valA = a.staff.toLowerCase();
+        valB = b.staff.toLowerCase();
+        break;
+      default:
+        valA = new Date(a.date).getTime();
+        valB = new Date(b.date).getTime();
+    }
+    if (valA < valB) return reportMixingSortAsc ? -1 : 1;
+    if (valA > valB) return reportMixingSortAsc ? 1 : -1;
+    return 0;
+  });
+
+  const mixPag = paginateArray(filteredMixRecords, 'rep_color_mixing', {
     onUpdate: renderReportBody,
     scrollTarget: '#rep-color-mixing-panel',
     recordLabel: 'mixing logs'
   });
 
+  const mixSortIcon = field => {
+    if (reportMixingSortField !== field) return '<span class="sort-icon" style="opacity:0.35;">⇅</span>';
+    return `<span class="sort-icon active" style="color:var(--teal); font-weight:700;">${reportMixingSortAsc ? '▲' : '▼'}</span>`;
+  };
+
+  const mixTh = (field, label, extraClass = '', extraStyle = '') => `
+    <th class="sortable-th ${extraClass} ${reportMixingSortField === field ? 'sorted' : ''}" 
+        onclick="setMixingSort('${field}')" 
+        style="cursor:pointer; user-select:none; ${extraStyle}" 
+        title="Click to sort by ${label} (${reportMixingSortField === field && reportMixingSortAsc ? 'ascending' : 'descending'})">
+      <div class="th-content ${extraClass === 'right' ? 'right' : ''}" style="display:inline-flex; align-items:center; gap:5px;">
+        <span>${label}</span>
+        ${mixSortIcon(field)}
+      </div>
+    </th>
+  `;
+
   const mixingHtml = `
     <div class="panel" id="rep-color-mixing-panel">
-      <div class="panel-head row">
-        <h3>Color Mixing Service Log</h3>
+      <div class="panel-head row wrap" style="gap:8px; align-items:center;">
+        <div>
+          <h3 style="margin:0;">Color Mixing Service Log</h3>
+          <span class="muted small">Audited formulation recipes, dispersed volume &amp; linked sales receipts</span>
+        </div>
         <div class="spacer"></div>
-        <span class="muted small">${colorMixMoves.length} mixing log(s)</span>
+        <span class="muted small">${filteredMixRecords.length}${filteredMixRecords.length !== allMixRecords.length ? ` of ${allMixRecords.length}` : ''} mixing log(s)</span>
       </div>
       <div class="panel-body tight table-scroll">
-        <table>
-          <thead><tr><th>Date</th><th>Description</th><th class="right">Liters</th><th>Staff / User</th><th>Note</th></tr></thead>
-          <tbody>${(mixPag.pagedItems || mixPag.pageItems || []).length ? (mixPag.pagedItems || mixPag.pageItems || []).map(m => `<tr><td>${formatDateTime(m.date)}</td><td>${escapeHtml(mixColorLabel(m))}</td><td class="right">${formatStock(m.qtyChange)} L</td><td>${staffLabel(m.staffName)}</td><td class="muted small">${escapeHtml(m.note || '')}</td></tr>`).join('') : `<tr><td colspan="5" class="empty-state">No color mixing services in this range.</td></tr>`}</tbody>
+        <table class="mixing-log-table">
+          <thead>
+            <tr>
+              ${mixTh('date', 'Date &amp; Time', '', 'min-width:130px; width:15%;')}
+              ${mixTh('color', 'Color Description', '', 'min-width:145px; width:18%;')}
+              ${mixTh('liters', 'Liters', 'right', 'min-width:85px; width:10%; text-align:right;')}
+              ${mixTh('formula', 'Formula', '', 'min-width:210px; width:30%;')}
+              ${mixTh('receipt', 'Receipt Reference', '', 'min-width:130px; width:14%;')}
+              ${mixTh('staff', 'Staff / User', '', 'min-width:115px; width:13%;')}
+            </tr>
+          </thead>
+          <tbody>
+            ${(mixPag.pagedItems || mixPag.pageItems || []).length ? (mixPag.pagedItems || mixPag.pageItems || []).map(rec => `
+              <tr>
+                <td style="white-space:nowrap; font-size:12.5px; color:var(--ink);">${formatDateTime(rec.date)}</td>
+                <td>
+                  <div class="mixing-color-cell">
+                    ${rec.hexColor ? `<span class="mixing-color-swatch" style="background:${rec.hexColor};" title="Preview: ${escapeAttr(rec.colorName)} (${rec.hexColor})"></span>` : ''}
+                    <div>
+                      <div style="font-weight:700; color:var(--ink); line-height:1.25;">${escapeHtml(rec.colorName)}</div>
+                      ${rec.detectedName && rec.detectedName.toLowerCase() !== rec.colorName.toLowerCase() ? `<div class="muted small" style="font-size:11px; margin-top:2px;">[${escapeHtml(rec.detectedName)}]</div>` : ''}
+                    </div>
+                  </div>
+                </td>
+                <td class="right" style="font-family:'Space Grotesk',monospace; font-weight:700; font-size:13px; color:var(--teal-dark); text-align:right; white-space:nowrap;">
+                  ${formatStock(rec.liters)} L
+                </td>
+                <td>
+                  <div class="mixing-formula-wrap">
+                    ${rec.components.length ? `
+                      <div class="mixing-formula-chips">
+                        ${rec.components.map((c, idx) => `
+                          ${idx > 0 ? `<span class="formula-plus-sep">+</span>` : ''}
+                          <span class="formula-chip" title="${c.liters ? `${formatStock(c.liters)}L used` : ''}">
+                            ${c.percentage ? `<span class="formula-pct">${escapeHtml(c.percentage)}</span>` : ''}
+                            <span class="formula-name">${escapeHtml(c.name)}</span>
+                            ${c.liters ? `<span class="formula-liters">(${formatStock(c.liters)}L)</span>` : ''}
+                          </span>
+                        `).join('')}
+                      </div>
+                    ` : (rec.rawFormula ? `
+                      <div style="font-size:12px; font-weight:500; color:var(--ink); line-height:1.35;">${escapeHtml(rec.rawFormula)}</div>
+                    ` : `<span class="muted small">—</span>`)}
+                    ${rec.extraNote ? `<div class="mixing-extra-note">Note: ${escapeHtml(rec.extraNote)}</div>` : ''}
+                  </div>
+                </td>
+                <td style="white-space:nowrap;">
+                  ${rec.receiptRef ? (isAdmin ? `
+                    <button type="button" class="receipt-ref-btn" onclick="openMixingReceiptModal('${escapeAttr(rec.receiptRef)}')" title="Click to view sales transaction ${escapeAttr(rec.receiptRef)}">
+                      <span>🧾</span>
+                      <span>${escapeHtml(rec.receiptRef)}</span>
+                    </button>
+                  ` : `
+                    <span class="receipt-ref-static" title="Official Receipt ${escapeAttr(rec.receiptRef)}">
+                      <span>🧾</span>
+                      <span>${escapeHtml(rec.receiptRef)}</span>
+                    </span>
+                  `) : `
+                    <span class="muted small" title="Direct inventory mix (no sales receipt)">—</span>
+                  `}
+                </td>
+                <td style="font-size:12.5px;">${staffLabel(rec.staff)}</td>
+              </tr>
+            `).join('') : `
+              <tr>
+                <td colspan="6" class="empty-state" style="padding:28px 16px; text-align:center; color:var(--ink-soft);">
+                  No color mixing services match the selected date range or filters.
+                </td>
+              </tr>
+            `}
+          </tbody>
         </table>
       </div>
       ${mixPag.html}

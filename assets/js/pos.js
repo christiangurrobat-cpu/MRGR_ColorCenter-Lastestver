@@ -695,7 +695,7 @@ function updateCheckoutButtonState() {
           const key = `${p.id}_${size}`;
           cansBySize[key] = (cansBySize[key] || 0) + qty;
           if (cansBySize[key] > productCanCount(p, size)) {
-            stockError = `Not enough ${size}L cans for "${p.name}".`;
+            stockError = `Not enough ${size}L units for "${p.name}".`;
             break;
           }
         }
@@ -827,7 +827,7 @@ function promptCustomerPurchaseConfirmation(data) {
           <div style="flex:1;">
             <div class="pcn-title">Order Verification: Are the purchased items accurate?</div>
             <div class="pcn-desc">
-              Please review to confirm that paint products, color shades, can sizes, quantities, and totals are correct before completing the sale and printing the receipt.
+              Please review to confirm that paint products, color shades, container sizes, quantities, and totals are correct before completing the sale and printing the receipt.
             </div>
           </div>
         </div>
@@ -952,7 +952,7 @@ async function completeSale() {
         reqSealedLitersByProd[p.id] = Number(((reqSealedLitersByProd[p.id] || 0) + liters).toFixed(2));
 
         if (productHasCanBreakdown(p) && reqCansByProdSize[sizeKey] > productCanCount(p, size)) {
-          showToast(`Not enough ${size}L cans for ${p.name} (only ${productCanCount(p, size)} in stock).`, 'error');
+          showToast(`Not enough ${size}L units for ${p.name} (only ${productCanCount(p, size)} in stock).`, 'error');
           return;
         }
         if (reqSealedLitersByProd[p.id] > p.stock) {
@@ -1023,11 +1023,11 @@ async function completeSale() {
           p.canStock[size] = Math.max(0, (Number(p.canStock[size]) || 0) - count);
           syncProductVariants(p);
           const afterCans = productCanCount(p, size);
-          trailNote = ` · ${size}L Cans: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(p.stock)}L`;
+          trailNote = ` · ${size}L Units: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(p.stock)}L`;
           saleStockChanges.push({
             field: `${p.name} (${size}L)`,
-            oldValue: `${beforeCans} cans (${formatStock(beforeStock)}L)`,
-            newValue: `${afterCans} cans (${formatStock(p.stock)}L)`
+            oldValue: `${beforeCans} units (${formatStock(beforeStock)}L)`,
+            newValue: `${afterCans} units (${formatStock(p.stock)}L)`
           });
         }
         db.movements.push({

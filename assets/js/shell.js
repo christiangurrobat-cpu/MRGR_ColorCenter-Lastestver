@@ -694,7 +694,7 @@ function productLowSizesSummary(p) {
   return lowSizes.map(s => {
     const count = productCanCount(p, s);
     const thresh = productSizeThreshold(p, s);
-    return `${fmtSize(s)}: ${count}/${thresh} cans (${count === 0 ? 'Out' : 'Low'})`;
+    return `${fmtSize(s)}: ${count}/${thresh} units (${count === 0 ? 'Out' : 'Low'})`;
   }).join(' · ');
 }
 
@@ -712,7 +712,7 @@ function productSizeThresholdBadgesHtml(p, options = {}) {
     const thresh = productSizeThreshold(p, s);
     const count = productCanCount(p, s);
     const st = productSizeStatus(p, s);
-    const canWord = thresh === 1 ? 'can' : 'cans';
+    const canWord = thresh === 1 ? 'unit' : 'units';
     const liters = formatLiters(thresh * s);
 
     let bg = '#F7F4EE';
@@ -734,7 +734,7 @@ function productSizeThresholdBadgesHtml(p, options = {}) {
       }
     }
 
-    const title = `${fmtSize(s)}: Minimum threshold is ${thresh} ${canWord} (${liters})${st !== 'ok' ? ' — Stock currently ' + st.toUpperCase() + ' (' + count + ' ' + (count === 1 ? 'can' : 'cans') + ' available)' : ' — Stock healthy (' + count + ' ' + (count === 1 ? 'can' : 'cans') + ' available)'}`;
+    const title = `${fmtSize(s)}: Minimum threshold is ${thresh} ${canWord} (${liters})${st !== 'ok' ? ' — Stock currently ' + st.toUpperCase() + ' (' + count + ' ' + (count === 1 ? 'unit' : 'units') + ' available)' : ' — Stock healthy (' + count + ' ' + (count === 1 ? 'unit' : 'units') + ' available)'}`;
 
     return `<span style="display:inline-flex; align-items:center; gap:3px; padding:2px 6px; background:${bg}; border:1px solid ${border}; border-radius:4px; font-size:11px; font-weight:600; color:${color}; font-family:'Space Grotesk',sans-serif; white-space:nowrap; line-height:1.3;" title="${escapeHtml(title)}">
       <span>${fmtSize(s)}:</span> <span style="font-weight:700;">${thresh} ${canWord}</span> <span style="font-size:10px; opacity:0.8; font-weight:400;">(${liters})</span>${statusLabel ? `<span style="font-size:10px; font-weight:700;">${statusLabel}</span>` : ''}
@@ -884,9 +884,9 @@ function productOpenedEntries(p) {
     .filter(e => e.left > 0);
 }
 
-/* Compact per-size text, e.g. "0.20L (1L can) · 1.25L (4L can)" */
+/* Compact per-size text, e.g. "0.20L (1L container) · 1.25L (4L container)" */
 function productOpenedSizesLabel(p, withCan = true) {
-  return productOpenedEntries(p).map(e => `${formatStock(e.left)}L (${fmtSize(e.size)}${withCan ? ' can' : ''})`).join(' · ');
+  return productOpenedEntries(p).map(e => `${formatStock(e.left)}L (${fmtSize(e.size)}${withCan ? ' container' : ''})`).join(' · ');
 }
 
 /* Largest can size that currently holds opened leftover (0 when nothing is opened). Prefer productOpenedEntries() for display. */
@@ -1173,7 +1173,7 @@ function openedStockBadgeHtml(p) {
       ${entries.map(e => `
       <div style="display:inline-flex; flex-direction:column; align-items:flex-end; gap:1px;">
         <span class="badge" style="background:#FDF4E3; color:#9A6216; border:1px solid #F0D9B5; font-family:'Space Grotesk',sans-serif; font-weight:700;">
-          🫙 ${formatLiters(e.left)} left <span style="opacity:0.85; font-weight:600;">(${fmtSize(e.size)} can)</span>
+          🫙 ${formatLiters(e.left)} left <span style="opacity:0.85; font-weight:600;">(${fmtSize(e.size)} container)</span>
         </span>
         <span style="font-size:11px; color:#8A5A24; font-weight:600; font-family:'Space Grotesk',sans-serif;">
           Used: ${formatLiters(e.used)} of ${fmtSize(e.size)}
@@ -1194,10 +1194,10 @@ function formatMixConsumptionNote(plan) {
     .filter(s => plan.cansOpened[s] > 0)
     .map(s => `${plan.cansOpened[s]}×${fmtSize(s)}`);
   if (openedCansList.length > 0) {
-    parts.push(`Opened ${openedCansList.join(', ')} can${openedCansList.length > 1 || Object.values(plan.cansOpened).some(v => v > 1) ? 's' : ''}`);
+    parts.push(`Opened ${openedCansList.join(', ')} container${openedCansList.length > 1 || Object.values(plan.cansOpened).some(v => v > 1) ? 's' : ''}`);
   }
   if (plan.addedToOpened > 0) {
-    const added = sizes.filter(s => plan.addedToOpenedBySize && plan.addedToOpenedBySize[s] > 0).map(s => `${formatStock(plan.addedToOpenedBySize[s])}L → ${fmtSize(s)} can`).join(', ');
+    const added = sizes.filter(s => plan.addedToOpenedBySize && plan.addedToOpenedBySize[s] > 0).map(s => `${formatStock(plan.addedToOpenedBySize[s])}L → ${fmtSize(s)} container`).join(', ');
     parts.push(`+${formatStock(plan.addedToOpened)}L saved to Opened/Used Stock (${added})`);
   }
   return parts.length ? ` [${parts.join('; ')}]` : '';
@@ -1481,11 +1481,11 @@ function movementLineQtyText(l) {
 function movementBalanceTrail(noteStr) {
   if (!noteStr) return '';
   const str = String(noteStr);
-  const canMatch = str.match(/(\d+(?:\.\d+)?L\s+Cans:\s*\d+\s*(?:→|->)\s*\d+)/i);
+  const canMatch = str.match(/(\d+(?:\.\d+)?L\s+(?:Cans|Units):\s*\d+\s*(?:→|->)\s*\d+)/i);
   const openMatch = str.match(/(Opened(?:\s*Stock)?:\s*[\d.]+L\s*(?:→|->)\s*[\d.]+L)/i);
   const stockMatch = str.match(/(Stock:\s*[\d.]+L\s*(?:→|->)\s*[\d.]+L)/i);
   const parts = [];
-  if (canMatch) parts.push(canMatch[1].replace(/\s*(?:->|→)\s*/g, '→'));
+  if (canMatch) parts.push(canMatch[1].replace(/\s*(?:->|→)\s*/g, '→').replace(/\bCans:/i, 'Units:'));
   if (openMatch) parts.push(openMatch[1].replace(/\s*(?:->|→)\s*/g, '→'));
   if (stockMatch) parts.push(stockMatch[1].replace(/\s*(?:->|→)\s*/g, '→'));
   return parts.join(' · ');
@@ -1504,8 +1504,8 @@ function groupStockMovements(movesList) {
     const balanceTrail = movementBalanceTrail(noteStr);
     const isOpenedEntry = sz.openedLiters > 0 || /\[Opened\s*\/\s*Used\s*Stock\]/i.test(String(m.productName || ''));
     const sizeSuffix = sz.size
-      ? ` — ${sz.size}L Can`
-      : (isOpenedEntry ? ` — 🫙 Opened / Used Stock${sz.openedCanSize ? ' (' + sz.openedCanSize + 'L Can)' : ''}` : '');
+      ? ` — ${sz.size}L Container`
+      : (isOpenedEntry ? ` — 🫙 Opened / Used Stock${sz.openedCanSize ? ' (' + sz.openedCanSize + 'L Container)' : ''}` : '');
     const line = {
       id: m.id,
       productId: m.productId,
@@ -1626,7 +1626,7 @@ function movementLineDeltaBadge(l) {
 
   if (l.size && l.units) {
     const unitsAbs = Math.abs(l.units);
-    const unitText = `${unitsAbs} can${unitsAbs === 1 ? '' : 's'}`;
+    const unitText = `${unitsAbs} unit${unitsAbs === 1 ? '' : 's'}`;
     const literSign = isPos ? '+' : '';
     return `<span class="movement-delta ${signClass}"><span class="delta-units">${sign}${unitText}</span><span class="delta-liters">(${literSign}${formatStock(qty)} L)</span></span>`;
   }
@@ -2404,7 +2404,7 @@ const LowStockService = {
 
       const st = this.getVariantStockStatus(p, s);
       if (st !== 'low' && st !== 'out') {
-        skippedItems.push(`<b>${escapeHtml(p.name)} (${fmtSize(s)})</b> stock is now healthy (${productCanCount(p, s)} cans).`);
+        skippedItems.push(`<b>${escapeHtml(p.name)} (${fmtSize(s)})</b> stock is now healthy (${productCanCount(p, s)} units).`);
         return;
       }
 
@@ -2531,10 +2531,10 @@ const LowStockService = {
                             <span class="badge" style="background:#FFF; border:1px solid #DDD; font-weight:700; padding:2px 7px;">${fmtSize(it.size)}</span>
                           </td>
                           <td style="text-align:right; font-weight:700; color:${it.stock <= 0 ? 'var(--danger)' : '#B45309'};">
-                            ${it.stock} can${it.stock === 1 ? '' : 's'}
+                            ${it.stock} unit${it.stock === 1 ? '' : 's'}
                           </td>
                           <td style="text-align:right; font-weight:600; color:var(--ink);">
-                            ${it.threshold} can${it.threshold === 1 ? '' : 's'}
+                            ${it.threshold} unit${it.threshold === 1 ? '' : 's'}
                           </td>
                           <td style="text-align:center;">
                             <input type="number"
@@ -2867,7 +2867,7 @@ function extractMovementReference(m) {
 function extractMovementBalance(noteStr) {
   if (!noteStr) return null;
   const str = String(noteStr);
-  const canMatch = str.match(/(\d+(?:\.\d+)?L\s+Cans:\s*(\d+)\s*(?:→|->)\s*(\d+))/i);
+  const canMatch = str.match(/(\d+(?:\.\d+)?L\s+(?:Cans|Units):\s*(\d+)\s*(?:→|->)\s*(\d+))/i);
   const stockMatch = str.match(/Stock:\s*([\d.]+L?)\s*(?:→|->)\s*([\d.]+L?)/i);
   const openMatch = str.match(/Opened(?:\s*Stock)?:\s*([\d.]+L?)\s*(?:→|->)\s*([\d.]+L?)/i);
 
@@ -2881,7 +2881,7 @@ function extractMovementBalance(noteStr) {
   if (canMatch) {
     prevCans = parseInt(canMatch[2], 10);
     currCans = parseInt(canMatch[3], 10);
-    cansHtml = `<div class="balance-primary"><b>${prevCans}</b> <span class="balance-arrow">→</span> <b>${currCans}</b> <small>cans</small></div>`;
+    cansHtml = `<div class="balance-primary"><b>${prevCans}</b> <span class="balance-arrow">→</span> <b>${currCans}</b> <small>units</small></div>`;
   }
 
   let litersHtml = '';

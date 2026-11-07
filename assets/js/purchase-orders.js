@@ -1020,8 +1020,8 @@ async function completePOReceiving(po, refNote = '', batchQtys = null) {
         p.stock = afterStock;
         syncProductVariants(p);
         receivedDetailsList.push(`${p.name} (${qtyToReceive} × ${size}L = +${formatStock(liters)}L)`);
-        beforeSummaryList.push(`${p.name} (${size}L): ${beforeCans} cans (${formatStock(beforeStock)}L total)`);
-        afterSummaryList.push(`${p.name} (${size}L): ${afterCans} cans (${formatStock(p.stock)}L total)`);
+        beforeSummaryList.push(`${p.name} (${size}L): ${beforeCans} units (${formatStock(beforeStock)}L total)`);
+        afterSummaryList.push(`${p.name} (${size}L): ${afterCans} units (${formatStock(p.stock)}L total)`);
         db.movements.push({
           id: uid('mv'),
           date,
@@ -1033,7 +1033,7 @@ async function completePOReceiving(po, refNote = '', batchQtys = null) {
           container_size: size,
           productName: p.name,
           qtyChange: liters,
-          note: `PO Delivery: ${po.poNumber} (${po.supplierName}) [Received ${qtyToReceive} × ${size}L (+${formatStock(liters)}L) · ${size}L Cans: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(p.stock)}L, PO: ${newReceivedTotal}/${ordered}]${refNote ? ' — ' + refNote : ''}`,
+          note: `PO Delivery: ${po.poNumber} (${po.supplierName}) [Received ${qtyToReceive} × ${size}L (+${formatStock(liters)}L) · ${size}L Units: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(p.stock)}L, PO: ${newReceivedTotal}/${ordered}]${refNote ? ' — ' + refNote : ''}`,
           staffName: (currentUser && currentUser.name) || 'Staff'
         });
       }
@@ -1248,7 +1248,7 @@ function poCreatePage() {
     <div class="alert-banner warning" style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
       <span style="font-size:18px;">🔍</span>
       <div>
-        <b>Check Low-Stock Order Before Submitting:</b> Low-stock &amp; out-of-stock sizes have been loaded with recommended quantities. Staff can verify can sizes, change quantities, add notes, and submit for approval.
+        <b>Check Low-Stock Order Before Submitting:</b> Low-stock &amp; out-of-stock sizes have been loaded with recommended quantities. Staff can verify container sizes, change quantities, add notes, and submit for approval.
       </div>
     </div>
   ` : ''}
@@ -1447,7 +1447,7 @@ function renderPOItemRows() {
         <div class="po-product-stock-indicators">
           <div style="display:flex; justify-content:space-between; align-items:center;">
             <span style="color:var(--ink-soft);">Total Stock:</span>
-            <span style="font-weight:700; color:var(--ink);">${formatStock(product.stock)}L <span class="muted font-normal">(${totalProductCans} cans)</span></span>
+            <span style="font-weight:700; color:var(--ink);">${formatStock(product.stock)}L <span class="muted font-normal">(${totalProductCans} units)</span></span>
           </div>
           <div style="display:flex; justify-content:space-between; align-items:center;">
             <span style="color:var(--ink-soft);">Requires Restock:</span>
@@ -1522,19 +1522,19 @@ function renderPOItemRows() {
       if (st === 'out') {
         stockBadgeHtml = `
           <div class="po-stock-display">
-            <span class="badge out" title="Out of stock! Threshold is ${thresh} cans">0 cans</span>
+            <span class="badge out" title="Out of stock! Threshold is ${thresh} units">0 units</span>
             <div class="po-shortage-hint">OUT OF STOCK</div>
           </div>`;
       } else if (st === 'low') {
         stockBadgeHtml = `
           <div class="po-stock-display">
-            <span class="badge low" title="Low stock: ${canCount} cans (min threshold: ${thresh} cans)">${canCount} ${canCount === 1 ? 'can' : 'cans'}</span>
+            <span class="badge low" title="Low stock: ${canCount} units (min threshold: ${thresh} units)">${canCount} ${canCount === 1 ? 'unit' : 'units'}</span>
             <div class="po-shortage-hint">LOW STOCK (min ${thresh})</div>
           </div>`;
       } else {
         stockBadgeHtml = `
           <div class="po-stock-display">
-            <span class="badge ok" title="Good stock: ${canCount} cans (threshold: ${thresh} cans)">${canCount} ${canCount === 1 ? 'can' : 'cans'}</span>
+            <span class="badge ok" title="Good stock: ${canCount} units (threshold: ${thresh} units)">${canCount} ${canCount === 1 ? 'unit' : 'units'}</span>
             <div class="po-good-hint">GOOD STOCK</div>
           </div>`;
       }
@@ -1568,7 +1568,7 @@ function renderPOItemRows() {
                      oninput="onPOQtyChange(${index}, ${s}, this.value)"
                      onkeydown="if(['-','e','E','+'].includes(event.key)){event.preventDefault();}">
               <button type="button" class="po-table-qty-btn plus" onclick="stepPOQty(${index}, ${s}, 1)" title="Increase quantity">+</button>
-              <span class="po-table-qty-unit">cans</span>
+              <span class="po-table-qty-unit">units</span>
             </div>
           </td>
           <td class="po-cell-price-l right" style="font-family:'Space Grotesk',sans-serif; font-size:13px; color:var(--ink-soft);">
@@ -1596,7 +1596,7 @@ function renderPOItemRows() {
             <th style="min-width:130px; text-align:center;">Available Stock</th>
             <th style="min-width:160px; text-align:center;">Order Quantity</th>
             <th style="min-width:120px; text-align:right;">Price per Liter</th>
-            <th style="min-width:120px; text-align:right;">Price per Can</th>
+            <th style="min-width:120px; text-align:right;">Price per Unit</th>
             <th style="min-width:130px; text-align:right;">Line Total</th>
             <th style="width:40px; text-align:center;"></th>
           </tr>
@@ -1607,7 +1607,7 @@ function renderPOItemRows() {
 
   if (totalEl) {
     totalEl.innerHTML = `
-      <div><div class="po-grand-label">Grand Total · ${validLineCount} item${validLineCount !== 1 ? 's' : ''} (${totalCans} can${totalCans !== 1 ? 's' : ''})</div></div>
+      <div><div class="po-grand-label">Grand Total · ${validLineCount} item${validLineCount !== 1 ? 's' : ''} (${totalCans} unit${totalCans !== 1 ? 's' : ''})</div></div>
       <div class="po-grand-total" id="po-grand-total-value">${peso(grandTotal)}</div>
     `;
     const grandTotalEl = document.getElementById('po-grand-total-value');
@@ -1676,7 +1676,7 @@ function updatePOGrandTotalDisplay() {
   const totalEl = document.getElementById('po-create-total');
   if (totalEl) {
     totalEl.innerHTML = `
-      <div><div class="po-grand-label">Grand Total · ${validLines} item${validLines !== 1 ? 's' : ''} (${totalCans} can${totalCans !== 1 ? 's' : ''})</div></div>
+      <div><div class="po-grand-label">Grand Total · ${validLines} item${validLines !== 1 ? 's' : ''} (${totalCans} unit${totalCans !== 1 ? 's' : ''})</div></div>
       <div class="po-grand-total" id="po-grand-total-value">${peso(grand)}</div>
     `;
     const grandEl = document.getElementById('po-grand-total-value');

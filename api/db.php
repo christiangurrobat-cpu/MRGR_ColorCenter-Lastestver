@@ -176,6 +176,10 @@ function ensureDBSchemaMigrated($conn, $force = false) {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
+        // Referential integrity healing: reconcile movements with product_sizes and products
+        $conn->query("UPDATE movements m JOIN product_sizes ps ON m.size_id = ps.size_id SET m.product_id = ps.product_id WHERE m.product_id != ps.product_id OR m.product_id IS NULL OR m.product_id = ''");
+        $conn->query("UPDATE movements m JOIN products p ON (m.product_id = p.id OR m.product_id = p.product_id) SET m.product_name = p.name WHERE (m.product_name = 'Unknown product' OR m.product_name = '' OR m.product_name = '0') AND m.type != 'colormix'");
+
         @file_put_contents($flagFile, date('Y-m-d H:i:s'));
     } catch (Throwable $e) { /* ignore */ }
 }
@@ -225,10 +229,10 @@ function getProductBackendDependencies($conn, $productId, $internalId) {
         $stmt->execute();
         if ($invRow = $stmt->get_result()->fetch_assoc()) {
             if ((int)($invRow['sealed_cnt'] ?? 0) > 0 && !in_array("Has remaining sealed stock", $deps)) {
-                $deps[] = "Has " . ((int)$invRow['sealed_cnt']) . " sealed can(s) in warehouse inventory";
+                $deps[] = "Has " . ((int)$invRow['sealed_cnt']) . " sealed unit(s) in warehouse inventory";
             }
             if ((float)($invRow['rem_vol'] ?? 0) > 0) {
-                $deps[] = "Has opened can volume (" . ((float)$invRow['rem_vol']) . " L) in warehouse inventory";
+                $deps[] = "Has opened container volume (" . ((float)$invRow['rem_vol']) . " L) in warehouse inventory";
             }
         }
         $stmt->close();

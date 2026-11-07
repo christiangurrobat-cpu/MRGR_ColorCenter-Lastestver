@@ -842,13 +842,13 @@ function colorMixStudioHtml() {
           <div class="row" style="margin-top:6px; font-size:10.5px; color:var(--ink-soft); justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
             <span>Need: <b id="cm-req-liters-${idx}">${formatStock(reqLiters)}L</b> · <span id="cm-mix-source-${idx}" style="color:var(--teal-dark); font-weight:500;">${formatColorMixSourcePreview(mixPlan)}</span></span>
             <div class="row wrap" style="gap:3px; align-items:center;">
-              <span class="muted" style="font-size:10px;">Can:</span>
-              <button type="button" class="cm-preset-btn ${prefCan === 0 ? 'active' : ''}" style="font-size:9.5px; padding:1px 5px;" onclick="setColorMixPreferredCanSize(${idx}, 0)" title="Automatically choose the best-fitting available can size">Auto</button>
+              <span class="muted" style="font-size:10px;">Size:</span>
+              <button type="button" class="cm-preset-btn ${prefCan === 0 ? 'active' : ''}" style="font-size:9.5px; padding:1px 5px;" onclick="setColorMixPreferredCanSize(${idx}, 0)" title="Automatically choose the best-fitting available container size">Auto</button>
               ${(prodObj ? productSizes(prodObj) : CAN_SIZES).map(sz => {
           const hasBd = prodObj ? productHasCanBreakdown(prodObj) : false;
           const cnt = prodObj ? productCanCount(prodObj, sz) : 0;
           const avail = prodObj ? (hasBd ? cnt > 0 : prodObj.stock >= sz) : false;
-          return `<button type="button" class="cm-preset-btn ${prefCan === sz ? 'active' : ''}" style="font-size:9.5px; padding:1px 5px; ${!avail ? 'opacity:0.4;' : ''}" ${!avail ? 'disabled' : ''} onclick="setColorMixPreferredCanSize(${idx}, ${sz})" title="${hasBd ? `${cnt} × ${sz}L sealed can(s) in stock` : `Open a ${sz}L can`}">${sz}L${hasBd ? ` (${cnt})` : ''}</button>`;
+          return `<button type="button" class="cm-preset-btn ${prefCan === sz ? 'active' : ''}" style="font-size:9.5px; padding:1px 5px; ${!avail ? 'opacity:0.4;' : ''}" ${!avail ? 'disabled' : ''} onclick="setColorMixPreferredCanSize(${idx}, ${sz})" title="${hasBd ? `${cnt} × ${sz}L sealed unit(s) in stock` : `Open a ${sz}L container`}">${sz}L${hasBd ? ` (${cnt})` : ''}</button>`;
         }).join('')}
             </div>
           </div>
@@ -939,7 +939,7 @@ function colorMixStudioHtml() {
       </div>
 
       <div class="field full">
-        <label style="font-size:12px; font-weight:700;">Container / Can Size &amp; Volume:</label>
+        <label style="font-size:12px; font-weight:700;">Container Size &amp; Volume:</label>
         <div class="cm-can-grid">
           <button class="cm-can-btn ${s.totalLiters === 0.5 ? 'active' : ''}" type="button" onclick="onColorMixTotalLitersChange(0.5)">
             <div>🧴 0.5 L</div>
@@ -1273,10 +1273,10 @@ function formatColorMixSourcePreview(mixPlan) {
   const openedParts = (mixPlan.sizes || CAN_SIZES)
     .filter(s => mixPlan.cansOpened && mixPlan.cansOpened[s] > 0)
     .map(s => `${mixPlan.cansOpened[s]}×${fmtSize(s)}`);
-  const cansText = openedParts.length ? `Opens ${openedParts.join(' + ')} can` : 'Opens can';
+  const cansText = openedParts.length ? `Opens ${openedParts.join(' + ')} container` : 'Opens container';
   const usedOpenedPrefix = mixPlan.usedFromOpened > 0 ? `🫙 ${formatStock(mixPlan.usedFromOpened)}L opened + ` : '';
   const leftoverText = mixPlan.addedToOpened > 0
-    ? ` · +${formatStock(mixPlan.addedToOpened)}L leftovers → Opened / Used (${(mixPlan.sizes || CAN_SIZES).filter(s => mixPlan.addedToOpenedBySize && mixPlan.addedToOpenedBySize[s] > 0).map(s => `${fmtSize(s)} can`).join(', ')})`
+    ? ` · +${formatStock(mixPlan.addedToOpened)}L leftovers → Opened / Used (${(mixPlan.sizes || CAN_SIZES).filter(s => mixPlan.addedToOpenedBySize && mixPlan.addedToOpenedBySize[s] > 0).map(s => `${fmtSize(s)} container`).join(', ')})`
     : '';
   return `🥫 ${usedOpenedPrefix}${cansText}${leftoverText}`;
 }
@@ -1385,7 +1385,7 @@ function renderColorMixCardHtml(idx, p, selectedProductId) {
         </div>
         <div class="row wrap" style="gap:4px; margin-top:4px; align-items:center;">
           ${openLiters > 0
-      ? `<span class="badge" style="background:#FDF4E3; color:#9A6216; border:1px solid #F0D9B5; font-size:9.5px; padding:2px 6px; width:100%; text-align:center;" title="Opened cans: ${productOpenedEntries(p).map(e => `${e.size}L can (${formatStock(e.used)}L used)`).join(', ')}">🫙 ${productOpenedSizesLabel(p)} left</span>`
+      ? `<span class="badge" style="background:#FDF4E3; color:#9A6216; border:1px solid #F0D9B5; font-size:9.5px; padding:2px 6px; width:100%; text-align:center;" title="Opened containers: ${productOpenedEntries(p).map(e => `${e.size}L container (${formatStock(e.used)}L used)`).join(', ')}">🫙 ${productOpenedSizesLabel(p)} left</span>`
       : ''}
           <span class="badge" style="background:#EEF6F5; color:#1F6F6B; border:1px solid #CDE4E1; font-size:9.5px; padding:2px 6px; width:100%; text-align:center;">
             🥫 ${canSummary || `${formatStock(p.stock)}L in stock`}
@@ -1416,8 +1416,8 @@ function renderCategorizedAccordionMenusHtml(idx, prods, selectedProductId, sear
     groups.push({
       key: 'Opened / Used Stock',
       icon: '🫙',
-      title: 'Opened / Used Cans (Prioritized)',
-      subtitle: 'Use leftover opened cans first before opening sealed stock',
+      title: 'Opened / Used Containers (Prioritized)',
+      subtitle: 'Use leftover opened containers first before opening sealed stock',
       items: openedList
     });
   }

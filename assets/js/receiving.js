@@ -277,11 +277,11 @@ function openedStockShelfHtml() {
         <div style="font-weight:700; font-size:14px; color:var(--ink); display:flex; align-items:center; gap:8px;">
           <span>🫙 Opened / Used Stock Shelf (For Future Color Mixing)</span>
           <span class="badge" style="background:#FDF4E3; color:#9A6216; border:1px solid #F0D9B5;">
-            ${openedList.length} can${openedList.length === 1 ? '' : 's'} · ${formatLiters(totalLiters)} available
+            ${openedList.length} unit${openedList.length === 1 ? '' : 's'} · ${formatLiters(totalLiters)} available
           </span>
         </div>
         <div class="muted small" style="margin-top:2px;">
-          Leftover paint from previously opened cans during Color Mixing. The Mixing Studio automatically uses these first before opening a new sealed can.
+          Leftover paint from previously opened containers during Color Mixing. The Mixing Studio automatically uses these first before opening a new sealed container.
         </div>
       </div>
     </div>
@@ -292,7 +292,7 @@ function openedStockShelfHtml() {
             <tr>
               <th>Product &amp; Color</th>
               <th>Brand</th>
-              <th class="center">Opened Can Size</th>
+              <th class="center">Opened Container Size</th>
               <th class="right">Stock Used</th>
               <th class="right">Remaining Leftover</th>
               <th class="right">Sealed Stock</th>
@@ -320,14 +320,14 @@ function openedStockShelfHtml() {
                 <td class="right"><span class="badge" style="background:#FDF4E3; color:#9A6216; border:1px solid #F0D9B5; font-weight:700;">🫙 ${formatLiters(opened)} left</span></td>
                 <td class="right">${formatLiters(p.stock)}</td>
                 <td class="right">
-                  <button type="button" class="btn ghost small" style="color:var(--danger); font-size:11.5px;" onclick="disposeOpenedStock('${p.id}', ${canSize})" title="Dispose dried or unusable leftover paint from this ${canSize}L opened can">🗑️ Dispose</button>
+                  <button type="button" class="btn ghost small" style="color:var(--danger); font-size:11.5px;" onclick="disposeOpenedStock('${p.id}', ${canSize})" title="Dispose dried or unusable leftover paint from this ${canSize}L opened container">🗑️ Dispose</button>
                 </td>
               </tr>`;
   }).join('')}
           </tbody>
         </table>
       </div>
-    ` : `<div class="muted small" style="padding:6px 0;">No opened cans on the mixing shelf right now. When a sealed can is opened for a partial color mix, the remaining liters will appear here automatically.</div>`}
+    ` : `<div class="muted small" style="padding:6px 0;">No opened containers on the mixing shelf right now. When a sealed container is opened for a partial color mix, the remaining liters will appear here automatically.</div>`}
   </div>`;
 }
 
@@ -481,7 +481,7 @@ function renderReceivingPOPreview() {
         
         <div id="rcv-stock-preview-${i}" class="rcv-item-pill ${remaining > 0 ? 'add' : 'done'}">
           ${product && remaining > 0
-        ? `➔ ${newCans} cans (+${formatLiters(addedLiters)})`
+        ? `➔ ${newCans} units (+${formatLiters(addedLiters)})`
         : (isDone ? '✓ Fully Received' : 'No change')}
         </div>
       </div>
@@ -496,7 +496,7 @@ function renderReceivingPOPreview() {
         <select id="mv-po" onchange="onReceivingPOChange()" class="rcv-minimal-select">
           ${openPOs.map(o => `<option value="${o.id}" ${o.id === po.id ? 'selected' : ''}>${escapeHtml(o.poNumber)}${o.status === 'partial' ? ' [Partial]' : ''} — ${escapeHtml(o.supplierName)} (${peso(o.totalAmount)})</option>`).join('')}
         </select>
-        <span class="badge" style="background:#EBF5F4; color:#1F6F6B; font-weight:600; font-size:11.5px;">${totalRemainingCans} cans pending</span>
+        <span class="badge" style="background:#EBF5F4; color:#1F6F6B; font-weight:600; font-size:11.5px;">${totalRemainingCans} units pending</span>
       </div>
       <div class="row" style="gap:6px;">
         <button type="button" class="btn ghost small" onclick="fillReceivingPageQtys(true)">⚡ Receive All</button>
@@ -543,10 +543,10 @@ function onReceivingQtyChange(idx, currentStock, size = 1, curCans = 0) {
   const newCans = curCans + val;
   if (val > 0) {
     preview.className = 'rcv-item-pill add';
-    preview.innerHTML = `➔ ${newCans} cans (+${formatLiters(addedLiters)})`;
+    preview.innerHTML = `➔ ${newCans} units (+${formatLiters(addedLiters)})`;
   } else {
     preview.className = 'rcv-item-pill done';
-    preview.innerHTML = `No change (0 cans)`;
+    preview.innerHTML = `No change (0 units)`;
   }
 }
 
@@ -617,7 +617,7 @@ function computeBulkAdjRowState(row) {
       invalidMsg: '',
       previewClass: '',
       headline: 'Select a product to view stock changes',
-      subline: 'Real-time can count and liter changes will be previewed here before saving.'
+      subline: 'Real-time unit count and liter changes will be previewed here before saving.'
     };
   }
 
@@ -655,7 +655,7 @@ function computeBulkAdjRowState(row) {
       invalidMsg,
       previewClass: isInvalid ? 'error' : 'opened',
       headline: isInvalid ? '⚠️ Cannot dispose leftover stock' : `🫙 Disposing ${formatLiters(qtyNum)} of opened paint`,
-      subline: isInvalid ? invalidMsg : `Deducts from the ${openedSize}L leftover pool (${formatLiters(curOpened)} ➔ ${formatLiters(newOpened)}). Sealed cans remain untouched.`
+      subline: isInvalid ? invalidMsg : `Deducts from the ${openedSize}L leftover pool (${formatLiters(curOpened)} ➔ ${formatLiters(newOpened)}). Sealed units remain untouched.`
     };
   }
 
@@ -676,20 +676,20 @@ function computeBulkAdjRowState(row) {
 
   let invalidMsg = '';
   if (!validQty) {
-    invalidMsg = 'Please enter a valid number of cans (1 or more)';
+    invalidMsg = 'Please enter a valid number of units (1 or more)';
   } else if (exceedsAddCap) {
-    invalidMsg = `Maximum +${MAX_ADJ_ADD_CANS} cans allowed per manual adjustment (use Purchase Orders for supplier deliveries)`;
+    invalidMsg = `Maximum +${MAX_ADJ_ADD_CANS} units allowed per manual adjustment (use Purchase Orders for supplier deliveries)`;
   } else if (!isAdd) {
     if (curCans <= 0 || currentStock <= 0) {
-      invalidMsg = `No ${sizeNum}L cans in stock to deduct`;
+      invalidMsg = `No ${sizeNum}L units in stock to deduct`;
     } else if (maxQty <= 0 && curCans === 1) {
-      invalidMsg = `Protected: The last 1 can cannot be deducted (50% safety limit against accidental stockout)`;
+      invalidMsg = `Protected: The last 1 unit cannot be deducted (50% safety limit against accidental stockout)`;
     } else if (exceedsCans) {
-      invalidMsg = `Only ${curCans} can(s) of ${sizeNum}L available in stock`;
+      invalidMsg = `Only ${curCans} unit(s) of ${sizeNum}L available in stock`;
     } else if (exceedsStock) {
       invalidMsg = `Exceeds total available inventory (${formatLiters(currentStock)})`;
     } else if (exceedsDeductCap) {
-      invalidMsg = `Up to ${maxQty} can(s) can be deducted (50% / ${MAX_ADJ_DEDUCT_CANS}-can safety limit)`;
+      invalidMsg = `Up to ${maxQty} unit(s) can be deducted (50% / ${MAX_ADJ_DEDUCT_CANS}-unit safety limit)`;
     }
   }
 
@@ -719,11 +719,11 @@ function computeBulkAdjRowState(row) {
     headline: isInvalid
       ? '⚠️ Adjustment cannot be applied'
       : (isAdd
-        ? `➕ Adding ${qtyNum} × ${sizeNum}L can${qtyNum === 1 ? '' : 's'} (+${formatLiters(litersAbs)})`
-        : `🔻 Deducting ${qtyNum} × ${sizeNum}L can${qtyNum === 1 ? '' : 's'} (-${formatLiters(litersAbs)})`),
+        ? `➕ Adding ${qtyNum} × ${sizeNum}L unit${qtyNum === 1 ? '' : 's'} (+${formatLiters(litersAbs)})`
+        : `🔻 Deducting ${qtyNum} × ${sizeNum}L unit${qtyNum === 1 ? '' : 's'} (-${formatLiters(litersAbs)})`),
     subline: isInvalid
       ? invalidMsg
-      : `📦 ${sizeNum}L Cans: ${curCans} ➔ <b>${newCans} cans</b> (Total stock: ${formatLiters(currentStock)} ➔ <b>${formatLiters(newStock)}</b>)`
+      : `📦 ${sizeNum}L Units: ${curCans} ➔ <b>${newCans} units</b> (Total stock: ${formatLiters(currentStock)} ➔ <b>${formatLiters(newStock)}</b>)`
   };
 }
 
@@ -807,7 +807,7 @@ function renderBulkAdjustmentView() {
                     <span class="muted small" style="font-size:11.5px;">Current stock breakdown:</span>
                     ${productSizes(product).map(s => {
       const c = productCanCount(product, s);
-      return `<span class="simple-stock-tag">🥫 ${s}L: <b>${c} can${c === 1 ? '' : 's'}</b></span>`;
+      return `<span class="simple-stock-tag">🥫 ${s}L: <b>${c} unit${c === 1 ? '' : 's'}</b></span>`;
     }).join('')}
                     ${productOpenedStock(product) > 0 ? `
                       <span class="simple-stock-tag opened">🫙 ${formatLiters(productOpenedStock(product))} opened leftover</span>
@@ -823,7 +823,7 @@ function renderBulkAdjustmentView() {
                     <span>2. Reason for Adjustment:</span>
                   </label>
                   <select class="simple-select" onchange="setAdjRowReason(${index}, this.value)">
-                    <option value="Damaged" ${row.reason === 'Damaged' ? 'selected' : ''}>🔻 Damaged / Leaking Can (Deduct)</option>
+                    <option value="Damaged" ${row.reason === 'Damaged' ? 'selected' : ''}>🔻 Damaged / Leaking Unit (Deduct)</option>
                     <option value="Expired" ${row.reason === 'Expired' ? 'selected' : ''}>🔻 Expired Shelf Life (Deduct)</option>
                     <option value="Count Correction (deduct)" ${row.reason === 'Count Correction (deduct)' ? 'selected' : ''}>🔻 Missing / Inventory Count Shortage (Deduct)</option>
                     <option value="Internal Use" ${row.reason === 'Internal Use' ? 'selected' : ''}>🔻 Store / Internal Use (Deduct)</option>
@@ -832,11 +832,11 @@ function renderBulkAdjustmentView() {
                   </select>
                 </div>
 
-                <!-- Step 3: Can Size -->
+                <!-- Step 3: Container Size -->
                 <div class="simple-form-group">
                   <label class="simple-label">
-                    <span>3. Can Size:</span>
-                    <span class="simple-label-help">${state.isOpened ? 'Opened leftover paint' : 'Sealed paint cans'}</span>
+                    <span>3. Container Size:</span>
+                    <span class="simple-label-help">${state.isOpened ? 'Opened leftover paint' : 'Sealed paint units'}</span>
                   </label>
                   <div class="simple-size-group">
                     ${state.isOpened ? (
@@ -861,8 +861,8 @@ function renderBulkAdjustmentView() {
             return `
                           <button type="button" class="simple-size-btn ${isSel ? 'active' : ''} ${isDis ? 'disabled' : ''}" 
                             onclick="setAdjRowSize(${index}, ${s})" ${isDis ? 'disabled' : ''}>
-                            <span class="simple-size-name">🥫 ${s}L Can</span>
-                            <span class="simple-size-stock">${state.isAdd ? `${cur} in stock` : (maxDeduct >= 1 ? `${cur} in stock · Max -${maxDeduct}` : (cur === 1 ? '1 can (Protected)' : '0 in stock'))}</span>
+                            <span class="simple-size-name">🥫 ${s}L ${s <= 1 ? 'Can' : (s <= 4 ? 'Gallon' : 'Drum')}</span>
+                            <span class="simple-size-stock">${state.isAdd ? `${cur} in stock` : (maxDeduct >= 1 ? `${cur} in stock · Max -${maxDeduct}` : (cur === 1 ? '1 unit (Protected)' : '0 in stock'))}</span>
                           </button>
                         `;
           }).join('')
@@ -872,7 +872,7 @@ function renderBulkAdjustmentView() {
               ` : `
                 <div class="simple-guide-box">
                   <div class="simple-guide-title">ℹ️ How Stock Adjustment Works</div>
-                  <div>Select a paint product from the dropdown above to adjust its inventory count. You can deduct damaged or expired cans, record store use, or add extra counts discovered during physical audits.</div>
+                  <div>Select a paint product from the dropdown above to adjust its inventory count. You can deduct damaged or expired units, record store use, or add extra counts discovered during physical audits.</div>
                 </div>
               `}
             </div>
@@ -884,7 +884,7 @@ function renderBulkAdjustmentView() {
                 <div class="simple-form-group">
                   <label class="simple-label">
                     <span>4. Adjustment Quantity:</span>
-                    <span class="simple-label-help">${state.isOpened ? 'in Liters' : 'in Cans'}</span>
+                    <span class="simple-label-help">${state.isOpened ? 'in Liters' : 'in Units'}</span>
                   </label>
                   <div class="simple-qty-container">
                     <div class="simple-stepper">
@@ -899,16 +899,16 @@ function renderBulkAdjustmentView() {
                         oninput="onBulkAdjQtyInput(${index}, this.value)">
                       <button type="button" class="simple-step-btn" onclick="stepBulkAdjQty(${index}, 1)">+</button>
                     </div>
-                    <span class="simple-qty-unit">${state.isOpened ? 'Liters' : (state.qtyNum === 1 ? 'Can' : 'Cans')}</span>
+                    <span class="simple-qty-unit">${state.isOpened ? 'Liters' : (state.qtyNum === 1 ? 'Unit' : 'Units')}</span>
                     ${state.maxQty > 1 ? `
                       <button type="button" class="simple-btn-pill" onclick="setBulkAdjQtyMax(${index})">Set to Max (${state.maxQty})</button>
                     ` : ''}
                   </div>
                   ${!state.isOpened && !state.isAdd && state.maxQty > 0 && state.maxQty < state.curCans ? `
-                    <div class="simple-safeguard-tip">🛡️ Up to ${state.maxQty} cans can be deducted (50% safety safeguard) to prevent accidental stockout.</div>
+                    <div class="simple-safeguard-tip">🛡️ Up to ${state.maxQty} units can be deducted (50% safety safeguard) to prevent accidental stockout.</div>
                   ` : ''}
                   ${!state.isOpened && state.isAdd ? `
-                    <div class="simple-safeguard-tip">🛡️ Up to 10 cans can be added via manual adjustment. For supplier deliveries, use the Stock Receiving tab.</div>
+                    <div class="simple-safeguard-tip">🛡️ Up to 10 units can be added via manual adjustment. For supplier deliveries, use the Stock Receiving tab.</div>
                   ` : ''}
                 </div>
 
@@ -1174,17 +1174,17 @@ function confirmAndSubmitAdjustments() {
     const isAdd = state.isAdd;
     const isOpened = state.isOpened;
     const changeTag = isAdd
-      ? `<b style="color:var(--success);">+${r.qty} can${r.qty === 1 ? '' : 's'} (+${formatLiters(state.litersAbs)})</b>`
+      ? `<b style="color:var(--success);">+${r.qty} unit${r.qty === 1 ? '' : 's'} (+${formatLiters(state.litersAbs)})</b>`
       : (isOpened
         ? `<b style="color:#9A6216;">Dispose ${formatLiters(r.qty)}</b>`
-        : `<b style="color:var(--danger);">-${r.qty} can${r.qty === 1 ? '' : 's'} (-${formatLiters(state.litersAbs)})</b>`);
+        : `<b style="color:var(--danger);">-${r.qty} unit${r.qty === 1 ? '' : 's'} (-${formatLiters(state.litersAbs)})</b>`);
 
     return `
       <div style="padding:9px 12px; background:#FAF7F2; border:1px solid var(--line); border-radius:6px; margin-bottom:6px; font-size:13px; text-align:left;">
-        <div style="font-weight:700; color:var(--ink);">${escapeHtml(p.name)} (${isOpened ? 'Opened Leftover' : state.sizeNum + 'L Can'})</div>
+        <div style="font-weight:700; color:var(--ink);">${escapeHtml(p.name)} (${isOpened ? 'Opened Leftover' : state.sizeNum + 'L ' + (state.sizeNum <= 1 ? 'Can' : (state.sizeNum <= 4 ? 'Gallon' : 'Drum'))})</div>
         <div style="display:flex; justify-content:space-between; margin-top:2px;">
           <span>${changeTag} · ${escapeHtml(r.reason)}</span>
-          <span class="muted small">${isOpened ? `Leftover: ${formatLiters(Math.max(0, state.curOpened - r.qty))}` : `Stock: ${state.curCans} ➔ ${state.newCans} cans`}</span>
+          <span class="muted small">${isOpened ? `Leftover: ${formatLiters(Math.max(0, state.curOpened - r.qty))}` : `Stock: ${state.curCans} ➔ ${state.newCans} units`}</span>
         </div>
       </div>
     `;
@@ -1350,10 +1350,10 @@ async function executeStockAdjustment(validRows, actorName = null, options = {})
         staffName: recordedStaff
       });
       if (typeof logAudit === 'function') {
-        logAudit('STOCK_ADJUST', 'Inventory', `Adjusted opened stock for ${p.name} (${canSize}L Can): ${formatStock(beforeOpened)}L ➔ ${formatStock(newOpened)}L (${row.reason})`, {
+        logAudit('STOCK_ADJUST', 'Inventory', `Adjusted opened stock for ${p.name} (${canSize}L Container): ${formatStock(beforeOpened)}L ➔ ${formatStock(newOpened)}L (${row.reason})`, {
           productId: p.productId || p.id,
           entityName: p.name,
-          fieldChanged: `Opened / Used Stock (${canSize}L Can)`,
+          fieldChanged: `Opened / Used Stock (${canSize}L Container)`,
           oldValue: `${formatStock(beforeOpened)} L`,
           newValue: `${formatStock(newOpened)} L (-${formatStock(qty)} L)`,
           reason: row.reason + (row.note ? ` — ${row.note}` : '')
@@ -1395,7 +1395,7 @@ async function executeStockAdjustment(validRows, actorName = null, options = {})
         container_size: sizeNum,
         productName: p.name,
         qtyChange: deltaLiters,
-        note: `${row.reason} [${isAdd ? 'Added' : 'Deducted'} ${cans} × ${sizeNum}L (${isAdd ? '+' : '-'}${formatStock(liters)}L) · ${sizeNum}L Cans: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(p.stock)}L]${row.note ? ' — ' + row.note : ''}`,
+        note: `${row.reason} [${isAdd ? 'Added' : 'Deducted'} ${cans} × ${sizeNum}L (${isAdd ? '+' : '-'}${formatStock(liters)}L) · ${sizeNum}L Units: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(p.stock)}L]${row.note ? ' — ' + row.note : ''}`,
         staffName: recordedStaff
       });
       if (typeof logAudit === 'function') {
@@ -1407,9 +1407,9 @@ async function executeStockAdjustment(validRows, actorName = null, options = {})
           {
             productId: p.productId || p.id,
             entityName: p.name,
-            fieldChanged: `Sealed Stock (${sizeNum}L Can)`,
-            oldValue: `${beforeCans} cans (${formatStock(beforeStock)} L total)`,
-            newValue: `${afterCans} cans (${formatStock(p.stock)} L total)`,
+            fieldChanged: `Sealed Stock (${sizeNum}L Container)`,
+            oldValue: `${beforeCans} units (${formatStock(beforeStock)} L total)`,
+            newValue: `${afterCans} units (${formatStock(p.stock)} L total)`,
             reason: row.reason + (row.note ? ` — ${row.note}` : '')
           }
         );
@@ -1454,7 +1454,7 @@ function confirmApproveAdjRequest(reqId) {
         warningHtml = `<div style="color:var(--danger); font-size:11.5px; font-weight:600; margin-top:2px;">⚠️ Warning: Requested disposal (${formatLiters(r.qty)}) exceeds current opened stock (${formatLiters(curOpened)}).</div>`;
       } else if (!isOpened && r.qty > curCans) {
         hasStockDiscrepancy = true;
-        warningHtml = `<div style="color:var(--danger); font-size:11.5px; font-weight:600; margin-top:2px;">⚠️ Warning: Requested deduction (${r.qty} cans) exceeds current stock (${curCans} cans).</div>`;
+        warningHtml = `<div style="color:var(--danger); font-size:11.5px; font-weight:600; margin-top:2px;">⚠️ Warning: Requested deduction (${r.qty} units) exceeds current stock (${curCans} units).</div>`;
       }
     }
 
@@ -1705,7 +1705,7 @@ function renderAdjRequestsViewHtml() {
       const isAdd = r.reason === 'Count Correction (add)';
       const isOpened = r.reason === 'Dispose Opened / Used Stock' || (!isAdd && isOpenedSizeValue(r.size));
       const sign = isAdd ? '+' : '-';
-      const unit = isOpened ? 'L' : (r.qty === 1 ? ' can' : ' cans');
+      const unit = isOpened ? 'L' : (r.qty === 1 ? ' unit' : ' units');
       return `<div style="font-size:12px; line-height:1.3;">• <b>${escapeHtml(pName)}</b>: ${sign}${r.qty}${unit} (${escapeHtml(r.reason)})</div>`;
     }).join('');
     const moreText = rows.length > 2 ? `<div class="muted small" style="margin-top:2px;">+ ${rows.length - 2} more item(s)...</div>` : '';

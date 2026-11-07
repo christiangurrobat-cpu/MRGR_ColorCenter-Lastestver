@@ -68,7 +68,7 @@ function canRemoveContainerSize(p, size) {
   if (canCount > 0) {
     return {
       allowed: false,
-      reason: `Container size ${fmtSize(s)} still holds ${canCount} sealed can(s) in warehouse inventory (${formatLiters(canCount * s)}). Cannot remove.`
+      reason: `Container size ${fmtSize(s)} still holds ${canCount} sealed unit(s) in warehouse inventory (${formatLiters(canCount * s)}). Cannot remove.`
     };
   }
 
@@ -163,10 +163,10 @@ function productSizeGridHtml(p, sizes) {
         <thead>
           <tr style="background:#FAF8F5; border-bottom:1px solid var(--line);">
             <th style="padding:6px 10px; font-size:11px; text-transform:uppercase; color:var(--ink-soft); font-weight:700;">Container Size</th>
-            <th class="right" style="padding:6px 10px; font-size:11px; text-transform:uppercase; color:var(--ink-soft); font-weight:700;">Price / Can</th>
+            <th class="right" style="padding:6px 10px; font-size:11px; text-transform:uppercase; color:var(--ink-soft); font-weight:700;">Price / Unit</th>
             <th class="center" style="padding:6px 10px; font-size:11px; text-transform:uppercase; color:var(--ink-soft); font-weight:700;">Sealed Stock</th>
             <th class="center" style="padding:6px 10px; font-size:11px; text-transform:uppercase; color:var(--ink-soft); font-weight:700;">Opened Stock</th>
-            <th style="padding:6px 10px; font-size:11px; text-transform:uppercase; color:var(--ink-soft); font-weight:700; width:140px;">Min Stock (Cans)</th>
+            <th style="padding:6px 10px; font-size:11px; text-transform:uppercase; color:var(--ink-soft); font-weight:700; width:140px;">Min Stock (Units)</th>
             <th class="center" style="padding:6px 10px; font-size:11px; text-transform:uppercase; color:var(--ink-soft); font-weight:700; width:60px;">Action</th>
           </tr>
         </thead>
@@ -191,7 +191,7 @@ function productSizeGridHtml(p, sizes) {
                 </td>
                 <td class="center" style="padding:8px 10px; vertical-align:middle;">
                   <span style="font-weight:700; font-size:13px; ${count === 0 ? 'opacity:0.4;' : ''}">${count}</span>
-                  <span class="muted small">cans</span>
+                  <span class="muted small">units</span>
                 </td>
                 <td class="center" style="padding:8px 10px; vertical-align:middle;">
                   ${open > 0
@@ -253,10 +253,10 @@ function addProductFormSize() {
   captureProductFormThresholds();
   const input = document.getElementById('pf-size-input');
   const raw = Number(input ? input.value : 0);
-  if (!Number.isInteger(raw)) { showToast('Can size must be a whole number (e.g. 1, 4, 20).', 'error'); return; }
+  if (!Number.isInteger(raw)) { showToast('Container size must be a whole number (e.g. 1, 4, 20).', 'error'); return; }
   const v = normalizeCanSize(raw);
-  if (!v) { showToast('Enter a valid can size in liters (e.g. 1, 4, 20).', 'error'); return; }
-  if (v > 1000) { showToast('Can size is too large.', 'error'); return; }
+  if (!v) { showToast('Enter a valid container size in liters (e.g. 1, 4, 20).', 'error'); return; }
+  if (v > 1000) { showToast('Container size is too large.', 'error'); return; }
   if (productFormSizes.includes(v)) {
     showToast(`Container size ${fmtSize(v)} already exists for this product. Duplicate sizes are not allowed.`, 'error');
     return;
@@ -600,7 +600,7 @@ function openProductModal(id) {
       </div>
     </div>
     <div class="full" style="background:#fff; border:1px solid var(--line); border-radius:var(--radius-sm); padding:12px 14px;">
-      <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); font-weight:600; margin-bottom:8px;">📏 Can Sizes for this Product (Liters)</div>
+      <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); font-weight:600; margin-bottom:8px;">📏 Container Sizes for this Product (Liters)</div>
       <div id="pf-size-chips">${productSizeChipsHtml()}</div>
       <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
         <input id="pf-size-input" type="number" min="1" step="1" inputmode="numeric" placeholder="e.g. 1, 4, 20" style="max-width:170px;" onkeydown="if(event.key==='Enter'){event.preventDefault();addProductFormSize();}">
@@ -611,7 +611,7 @@ function openProductModal(id) {
     <div class="full" style="background:#FAF7F2; border:1px solid var(--line); border-radius:var(--radius-sm); padding:12px 14px;">
       <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); font-weight:600; margin-bottom:8px;">🔒 Stock per Size &amp; Separate Low-Stock Thresholds</div>
       <div id="pf-size-grid">${productSizeGridHtml(p, productFormSizes)}</div>
-      <div style="font-size:11.5px; color:var(--ink-soft); margin-top:8px;">Each size has its own independent low-stock threshold in cans. Sealed cans change when POs are received or items sold.</div>
+      <div style="font-size:11.5px; color:var(--ink-soft); margin-top:8px;">Each size has its own independent low-stock threshold in units. Sealed units change when POs are received or items sold.</div>
     </div>
     <div class="field">
       <label>Calculated Overall Threshold (Total Liters)</label>
@@ -622,7 +622,7 @@ function openProductModal(id) {
         </span>
       </div>
       <div style="font-size:11.5px; color:var(--ink-soft); margin-top:4px;">
-        ℹ️ Automatically computed from the per-size can thresholds above. Reorder alerts and stock monitoring trigger individually per can size.
+        ℹ️ Automatically computed from the per-size unit thresholds above. Reorder alerts and stock monitoring trigger individually per container size.
       </div>
     </div>
     ${stockNoteHtml}
@@ -859,7 +859,7 @@ async function submitProduct(e, id) {
     return false;
   }
   if (!data.sizes.length) {
-    showToast('Add at least one can size for this product.', 'error');
+    showToast('Add at least one container size for this product.', 'error');
     return false;
   }
   const sameKey = p => ['name', 'brand', 'color'].every(k => String(p[k] || '').trim().toLowerCase() === String(data[k] || '').trim().toLowerCase());
@@ -918,7 +918,7 @@ async function submitProduct(e, id) {
     }
 
     if (addedSizes.length > 0 || removedSizes.length > 0) {
-      changes.sizes = { label: 'Can Sizes', old: oldSizes, new: data.sizes, added: addedSizes, removed: removedSizes };
+      changes.sizes = { label: 'Container Sizes', old: oldSizes, new: data.sizes, added: addedSizes, removed: removedSizes };
     }
 
     const oldThresh = Number(existing.threshold);
@@ -1030,8 +1030,8 @@ async function submitProduct(e, id) {
 
       // Record stock threshold changes
       if (changes.threshold || changes.thresholdBySize) {
-        const oldThreshDesc = `${formatLiters(oldThresh)} (${oldSizes.map(s => `${s}L: ${oldTBS[s] ?? 0} cans`).join(', ')})`;
-        const newThreshDesc = `${formatLiters(newThresh)} (${data.sizes.map(s => `${s}L: ${newTBS[s] ?? 0} cans`).join(', ')})`;
+        const oldThreshDesc = `${formatLiters(oldThresh)} (${oldSizes.map(s => `${s}L: ${oldTBS[s] ?? 0} units`).join(', ')})`;
+        const newThreshDesc = `${formatLiters(newThresh)} (${data.sizes.map(s => `${s}L: ${newTBS[s] ?? 0} units`).join(', ')})`;
         logAudit('STOCK_THRESHOLD_CHANGE', 'Inventory', `Updated stock threshold for ${prevProductName} from ${formatLiters(oldThresh)} to ${formatLiters(newThresh)}`, {
           productId: existing.id,
           entityName: prevProductName,
@@ -1705,7 +1705,7 @@ async function getProductDependencies(productId) {
       sealedCans += productCanCount(p, s);
     });
     if (sealedCans > 0) {
-      deps.push(`Has ${sealedCans} sealed can(s) currently in stock (${formatLiters(p.stock)})`);
+      deps.push(`Has ${sealedCans} sealed unit(s) currently in stock (${formatLiters(p.stock)})`);
     }
     const openedVol = productOpenedStock(p);
     if (openedVol > 0) {
@@ -1819,8 +1819,8 @@ function openDeactivateProductModal(id) {
           Total Stock: <span style="color:var(--teal);">${formatLiters(totalStock)}</span>
         </div>
         <div style="font-size:12px; color:var(--ink-soft); margin-top:3px;">
-          Sealed cans: ${sealedBreakdown || '0 cans'}<br>
-          Opened cans: <b>${formatLiters(openedLiters)}</b> in active mixing
+          Sealed units: ${sealedBreakdown || '0 units'}<br>
+          Opened containers: <b>${formatLiters(openedLiters)}</b> in active mixing
         </div>
       </div>
 

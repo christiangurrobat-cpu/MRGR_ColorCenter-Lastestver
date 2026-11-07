@@ -497,9 +497,9 @@ function alertsPage() {
             <th style="width:110px;">Brand</th>
             <th style="width:150px;">Supplier</th>
             <th style="width:90px; text-align:center;">Container Size</th>
-            <th class="right" style="width:125px;">Stock Quantity (Cans)</th>
+            <th class="right" style="width:125px;">Stock Quantity (Units)</th>
             <th class="right" style="width:105px;">Stock Volume (L)</th>
-            <th class="right" style="width:135px;">Minimum Threshold (Cans)</th>
+            <th class="right" style="width:135px;">Minimum Threshold (Units)</th>
             <th class="right" style="width:115px;">Threshold Volume (L)</th>
             <th class="center" style="width:130px;">Stock Status</th>
             <th class="center" style="width:150px;">Purchase Order Status</th>
@@ -628,9 +628,9 @@ function alertsPage() {
                   </div>
                 </td>
 
-                <!-- Stock Quantity (Cans) -->
+                <!-- Stock Quantity (Units) -->
                 <td class="right" style="font-weight:700; font-family:'Space Grotesk',sans-serif; vertical-align:middle; ${borderBottom} ${st === 'out' ? 'color:var(--danger);' : (st === 'low' ? 'color:#B45309;' : 'color:var(--ink);')}">
-                  ${count} ${count === 1 ? 'can' : 'cans'}
+                  ${count} ${count === 1 ? 'unit' : 'units'}
                 </td>
 
                 <!-- Stock Volume (L) -->
@@ -638,9 +638,9 @@ function alertsPage() {
                   ${formatLiters(stockVol)}
                 </td>
 
-                <!-- Minimum Threshold (Cans) -->
+                <!-- Minimum Threshold (Units) -->
                 <td class="right" style="font-weight:600; font-family:'Space Grotesk',sans-serif; vertical-align:middle; ${borderBottom} color:var(--ink);">
-                  ${thresh} ${thresh === 1 ? 'can' : 'cans'}
+                  ${thresh} ${thresh === 1 ? 'unit' : 'units'}
                 </td>
 
                 <!-- Threshold Volume (L) -->

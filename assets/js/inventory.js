@@ -146,7 +146,7 @@ function inventoryPage() {
     </div>
   </div>
   <div class="inv-info-bar">
-    <span>ℹ️ Click any product row or <b>"Details"</b> to expand container sizes, opened stock, threshold, and status. Hover color swatch to preview pigment tone. ${readOnly ? '<b>Read-only view</b> — check stock levels and can sizes before confirming a sale.' : ''}</span>
+    <span>ℹ️ Click any product row or <b>"Details"</b> to expand container sizes, opened stock, threshold, and status. Hover color swatch to preview pigment tone. ${readOnly ? '<b>Read-only view</b> — check stock levels and container sizes before confirming a sale.' : ''}</span>
   </div>
 <div class="panel-body tight table-scroll" id="inventory-table">${inventoryTableHtml()}</div>
   </div>
@@ -261,7 +261,7 @@ function productInventoryAlertBadgesHtml(p) {
     return `
       <div class="inv-alerts-list">
         ${alerts.map(a => `
-          <span class="inv-alert-pill ${a.cssClass}" title="${fmtSize(a.size)} container: ${a.status === 'out' ? '0 cans remaining in stock' : 'Stock quantity is at or below individual minimum threshold'}">
+          <span class="inv-alert-pill ${a.cssClass}" title="${fmtSize(a.size)} container: ${a.status === 'out' ? '0 units remaining in stock' : 'Stock quantity is at or below individual minimum threshold'}">
             <span class="inv-alert-dot"></span>
             ${escapeHtml(a.label)}
           </span>
@@ -352,13 +352,13 @@ function renderPendingEditChangesList(changes) {
     items.push(`<div><b>Price/Liter:</b> <span class="muted"><del>${peso(changes.price.old)}</del></span> ➔ <b style="color:var(--teal); font-size:13px;">${peso(changes.price.new)}</b></div>`);
   }
   if (changes.sizes && changes.sizes.added) {
-    items.push(`<div><b>New Can Size(s):</b> <b style="color:var(--teal);">${changes.sizes.added.map(s => s + 'L').join(', ')}</b></div>`);
+    items.push(`<div><b>New Container Size(s):</b> <b style="color:var(--teal);">${changes.sizes.added.map(s => s + 'L').join(', ')}</b></div>`);
   }
   if (changes.threshold) {
     items.push(`<div><b>Total Threshold:</b> <span class="muted"><del>${formatLiters(changes.threshold.old)}</del></span> ➔ <b style="color:var(--teal);">${formatLiters(changes.threshold.new)}</b></div>`);
   }
   if (changes.thresholdBySize) {
-    items.push(`<div><b>Per-Size Thresholds:</b> <span class="badge" style="background:#EBF5FB; color:#1B4F72; font-size:11px;">Updated min cans</span></div>`);
+    items.push(`<div><b>Per-Size Thresholds:</b> <span class="badge" style="background:#EBF5FB; color:#1B4F72; font-size:11px;">Updated min units</span></div>`);
   }
   return items.map(html => `<div style="padding:6px 10px; background:#FAF8F5; border-radius:4px; border-left:3px solid var(--teal); font-size:12px;">${html}</div>`).join('');
 }
@@ -402,7 +402,7 @@ function productInventoryDetailsHtml(p) {
     statusClass = 'out';
     statusIcon = '🔴';
     statusTitle = 'Out of Stock';
-    statusSubtitle = 'All sealed cans are depleted. Restocking is required immediately.';
+    statusSubtitle = 'All sealed containers are depleted. Restocking is required immediately.';
   } else if (isLowStock) {
     statusClass = 'low';
     statusIcon = '🟡';
@@ -422,7 +422,7 @@ function productInventoryDetailsHtml(p) {
       const isOut = st === 'out' || count === 0;
       const chipClass = isOut ? 'chip-out' : 'chip-low';
       const statusLabel = isOut ? 'Out of Stock' : 'Low Stock';
-      const canWord = thresh === 1 ? 'can' : 'cans';
+      const canWord = thresh === 1 ? 'unit' : 'units';
       return `
         <div class="inv-alert-chip ${chipClass}">
           <span class="inv-alert-chip-icon">${isOut ? '⛔' : '⚠️'}</span>
@@ -445,7 +445,7 @@ function productInventoryDetailsHtml(p) {
     const sizeThresh = productSizeThreshold(p, s);
     const totalLitersForSize = count * s;
     const threshLitersForSize = sizeThresh * s;
-    const canWord = sizeThresh === 1 ? 'can' : 'cans';
+    const canWord = sizeThresh === 1 ? 'unit' : 'units';
     const status = productSizeStatus(p, s);
     const pricePerCan = variant && variant.pricePerCan != null ? Number(variant.pricePerCan) : (Number(p.price) * s);
 
@@ -483,7 +483,7 @@ function productInventoryDetailsHtml(p) {
         </td>
         <td class="inv-td-qty" style="text-align:right;">
           <span class="inv-can-qty-pill ${status === 'out' ? 'is-out' : (status === 'low' ? 'is-low' : '')}">
-            <strong>${count}</strong> <small>${count === 1 ? 'can' : 'cans'}</small>
+            <strong>${count}</strong> <small>${count === 1 ? 'unit' : 'units'}</small>
           </span>
         </td>
         <td class="inv-td-vol" style="text-align:right;">
@@ -496,9 +496,9 @@ function productInventoryDetailsHtml(p) {
                 <span class="inv-status-dot"></span>
                 ${statusText}
               </span>
-              <span class="inv-level-threshold" title="Minimum threshold for this container size">Min: <b>${sizeThresh}</b> ${canWord}</span>
+              <span class="inv-level-threshold" title="Minimum threshold for this container size">Minimum: <b>${sizeThresh}</b> ${canWord}</span>
             </div>
-            <div class="inv-can-row-bar-wrap" title="${fillPct}% stock level (${count}/${sizeThresh} cans)">
+            <div class="inv-can-row-bar-wrap" title="${fillPct}% stock level (${count}/${sizeThresh} units)">
               <div class="inv-can-row-bar-fill" style="width:${status === 'out' ? '0%' : fillPct + '%'}; background:${barColor};"></div>
             </div>
           </div>
@@ -550,7 +550,7 @@ function productInventoryDetailsHtml(p) {
       <div class="inv-opened-empty-compact">
         <span class="inv-opened-empty-icon">✨</span>
         <div class="inv-opened-empty-text">
-          <strong>No opened cans (0.00 L)</strong> — All current stock is factory sealed. Color mixing will automatically draw from and track the first opened can.
+          <strong>No opened containers (0.00 L)</strong> — All current stock is factory sealed. Color mixing will automatically draw from and track the first opened container.
         </div>
       </div>
     `;
@@ -640,8 +640,8 @@ function productInventoryDetailsHtml(p) {
       ${!p.pendingEdit && p.pendingSizes && p.pendingSizes.length > 0 ? `
         <div style="background:#FEF3C7; border:1px solid #FCD34D; border-radius:var(--radius-sm); padding:10px 14px; margin-bottom:4px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
           <div>
-            <span style="font-weight:700; color:#92400E;">⏳ New Can Size(s) Pending Admin Approval:</span>
-            <span style="margin-left:6px; font-weight:600;">${p.pendingSizes.map(s => s + 'L Can').join(', ')}</span>
+            <span style="font-weight:700; color:#92400E;">⏳ New Container Size(s) Pending Admin Approval:</span>
+            <span style="margin-left:6px; font-weight:600;">${p.pendingSizes.map(s => s + 'L').join(', ')}</span>
           </div>
           ${currentUser && currentUser.role === 'admin' ? `
             <div style="display:flex; gap:6px;">
@@ -669,10 +669,10 @@ function productInventoryDetailsHtml(p) {
 
       <!-- 2-Column Responsive Grid -->
       <div class="inv-friendly-grid">
-        <!-- 1. Sealed Cans -->
+        <!-- 1. Sealed Containers -->
         <div class="inv-friendly-box">
           <div class="inv-box-header">
-            <span class="inv-box-title">📦 Ready-to-Sell Sealed Cans</span>
+            <span class="inv-box-title">📦 Ready-to-Sell Sealed Containers</span>
             <span class="inv-box-meta">Total Sealed: <b>${formatLiters(stock)}</b></span>
           </div>
           ${sortedSizes.length ? `
@@ -681,7 +681,7 @@ function productInventoryDetailsHtml(p) {
                 <thead>
                   <tr>
                     <th class="inv-th-size">Container Size</th>
-                    <th class="inv-th-price">Price / Can</th>
+                    <th class="inv-th-price">Price / Unit</th>
                     <th class="inv-th-qty">Stock Quantity</th>
                     <th class="inv-th-vol">Total Volume</th>
                     <th class="inv-th-level">Stock Level</th>
@@ -702,8 +702,8 @@ function productInventoryDetailsHtml(p) {
         <!-- 2. Opened Stock & Price Reference -->
         <div class="inv-friendly-box">
           <div class="inv-box-header">
-            <span class="inv-box-title">🫙 Opened Cans &amp; Mixing</span>
-            <span class="inv-box-meta">${openedEntries.length ? `${openedEntries.length} active can${openedEntries.length === 1 ? '' : 's'}` : '0.00 L opened'}</span>
+            <span class="inv-box-title">🫙 Opened Containers &amp; Mixing</span>
+            <span class="inv-box-meta">${openedEntries.length ? `${openedEntries.length} active unit${openedEntries.length === 1 ? '' : 's'}` : '0.00 L opened'}</span>
           </div>
           <div class="inv-opened-section">
             ${openedStockHtml}
@@ -839,7 +839,7 @@ function productMovementHistoryHtml(p, isAllExpanded = false) {
             ${lines.map(l => {
         const sizeLabel = l.size
           ? `${fmtSize(l.size)} ${l.size <= 1 ? 'Can' : (l.size <= 4 ? 'Gallon' : 'Drum')}`
-          : (l.openedLiters > 0 ? `🫙 Opened Can (${fmtSize(l.openedCanSize || 1)})` : 'Product Stock');
+          : (l.openedLiters > 0 ? `🫙 Opened Container (${fmtSize(l.openedCanSize || 1)})` : 'Product Stock');
         return `
                 <div class="movement-item-paired-row" style="padding:4px 8px;">
                   <div class="movement-item-left">
@@ -857,7 +857,7 @@ function productMovementHistoryHtml(p, isAllExpanded = false) {
       const singleLine = lines[0] || { label: movementProductLabel(m), qty: m.qtyChange };
       const sizeLabel = singleLine.size
         ? `${fmtSize(singleLine.size)} ${singleLine.size <= 1 ? 'Can' : (singleLine.size <= 4 ? 'Gallon' : 'Drum')}`
-        : (singleLine.openedLiters > 0 ? `🫙 Opened Can (${fmtSize(singleLine.openedCanSize || 1)})` : 'Product Stock');
+        : (singleLine.openedLiters > 0 ? `🫙 Opened Container (${fmtSize(singleLine.openedCanSize || 1)})` : 'Product Stock');
       itemsTdHtml = `
         <td class="movement-product-td" style="font-size:12px; padding:10px 12px;">
           <div style="font-weight:600; color:var(--ink); display:inline-flex; align-items:center; gap:4px;">${escapeHtml(sizeLabel)}</div>
@@ -887,7 +887,7 @@ function productMovementHistoryHtml(p, isAllExpanded = false) {
           <tr style="background:#FAF8F5; border-bottom:1px solid var(--line);">
             <th class="movement-date-td" style="font-size:10.5px; padding:8px 12px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); font-weight:700;">Date &amp; Time</th>
             <th class="movement-type-td" style="font-size:10.5px; padding:8px 12px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); font-weight:700;">Type</th>
-            <th style="font-size:10.5px; padding:8px 12px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); font-weight:700; text-align:left;">Can Size / Item</th>
+            <th style="font-size:10.5px; padding:8px 12px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); font-weight:700; text-align:left;">Container Size / Item</th>
             <th class="right movement-qty-td" style="font-size:10.5px; padding:8px 12px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); font-weight:700;">Qty Change</th>
             <th class="movement-staff-td" style="font-size:10.5px; padding:8px 12px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); font-weight:700;">Staff / User</th>
             <th style="font-size:10.5px; padding:8px 12px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); font-weight:700; text-align:left;">Reference &amp; Details</th>

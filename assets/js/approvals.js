@@ -737,7 +737,7 @@ function renderAdjustmentsTab() {
       const isOpened = singleRow.reason === 'Dispose Opened / Used Stock' || (!isAdd && (typeof isOpenedSizeValue === 'function' ? isOpenedSizeValue(singleRow.size) : String(singleRow.size).endsWith('_opened')));
       const qtyNum = Math.abs(Number(singleRow.qty) || 0);
       const sign = isAdd ? '+' : '-';
-      const unitStr = isOpened ? 'L' : ` can${qtyNum === 1 ? '' : 's'}`;
+      const unitStr = isOpened ? 'L' : ` unit${qtyNum === 1 ? '' : 's'}`;
       qtyStr = `<span style="font-weight:700; color:${isAdd ? 'var(--success)' : 'var(--danger)'};">${sign}${qtyNum}${unitStr}</span>`;
     } else if (rows.length > 1) {
       const firstRow = rows[0];
@@ -752,7 +752,7 @@ function renderAdjustmentsTab() {
       const allDeduct = rows.every(rw => rw.reason !== 'Count Correction (add)');
       const sign = allAdd ? '+' : (allDeduct ? '-' : '');
       const color = allAdd ? 'var(--success)' : (allDeduct ? 'var(--danger)' : 'var(--ink)');
-      qtyStr = `<span style="font-weight:700; color:${color};">${sign}${totalCans} cans total</span>`;
+      qtyStr = `<span style="font-weight:700; color:${color};">${sign}${totalCans} units total</span>`;
     }
 
     const statusBadge = r.status === 'pending'
@@ -1204,7 +1204,7 @@ function renderPurchaseOrdersTab() {
               <th>PO #</th>
               <th>Order Date</th>
               <th>Supplier</th>
-              <th>Items & Cans</th>
+              <th>Items & Units</th>
               <th class="right">Total Cost</th>
               <th>Created By</th>
               <th class="right">Action</th>
@@ -1232,7 +1232,7 @@ function renderPurchaseOrdersTab() {
                     <div style="font-weight:700; color:var(--ink);">${escapeHtml(o.supplierName || 'Unknown')}</div>
                   </td>
                   <td>
-                    <div style="font-weight:600; color:var(--ink);">${items.length} item${items.length === 1 ? '' : 's'} (${totalCans} cans)</div>
+                    <div style="font-weight:600; color:var(--ink);">${items.length} item${items.length === 1 ? '' : 's'} (${totalCans} units)</div>
                     <div class="muted small">${items.slice(0, 2).map(it => escapeHtml(it.productName || '')).join(', ')}${items.length > 2 ? '…' : ''}</div>
                   </td>
                   <td class="right" style="font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:14px; color:var(--ink);">
@@ -1641,13 +1641,13 @@ function openProductApprovalPreviewModal(productId) {
           ${hasPrice ? `<div style="font-size:12px; color:var(--teal); font-weight:700; margin-top:2px;">➔ Proposed: ${peso(p.pendingPrice)}</div>` : ''}
         </div>
         <div style="background:#FAF8F5; border:1px solid var(--line); border-radius:6px; padding:10px 12px;">
-          <div class="muted small">Sealed Can Sizes</div>
+          <div class="muted small">Sealed Container Sizes</div>
           <div style="font-size:13px; font-weight:700; color:var(--ink);">${(p.sizes || []).map(s => s + 'L').join(', ') || 'None'}</div>
           ${hasSizes ? `<div style="font-size:12px; color:var(--teal); font-weight:700; margin-top:2px;">➔ Adding: +[${p.pendingSizes.map(s => s + 'L').join(', ')}]</div>` : ''}
         </div>
         <div style="background:#FAF8F5; border:1px solid var(--line); border-radius:6px; padding:10px 12px;">
           <div class="muted small">Current Stock / Threshold</div>
-          <div style="font-size:14px; font-weight:700; color:var(--ink);">${formatStock(p.stock)} cans (Min: ${p.threshold || 5})</div>
+          <div style="font-size:14px; font-weight:700; color:var(--ink);">${formatStock(p.stock)} units (Minimum: ${p.threshold || 5} units)</div>
         </div>
       </div>
 
@@ -1713,7 +1713,7 @@ function openPOPreviewModal(poId) {
         <div class="muted small">${escapeHtml(it.brand || '')}</div>
       </td>
       <td><span class="badge ghost">${it.size ? `${it.size}L` : 'Standard'}</span></td>
-      <td class="right">${itemQty} cans</td>
+      <td class="right">${itemQty} units</td>
       <td class="right">${peso(it.unitCost || 0)}</td>
       <td class="right" style="font-weight:600;">${peso(it.subtotal || (itemQty * (it.unitCost || 0)))}</td>
     </tr>

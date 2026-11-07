@@ -188,7 +188,7 @@ function enrichAuditRow(array $row, array $productMap) {
     if ($entityName === '' && preg_match('/(?:Admin updated product|Updated|Approved edit request for|Rejected edit request for|cancelled pending edit request for|Staff submitted edit request for)\s+"?([^"\(]+?)"?(?:\s*\(|\s+price|\s+for Admin|$)/i', $details, $m)) {
         $entityName = cleanDisplayAuditText(trim($m[1]));
     }
-    if ($fieldChanged === '' && preg_match('/\((Product Name|Brand|Paint Type|Color|Price per Liter|New Can Size\(s\)|Overall Threshold|Per-Size Thresholds[^)]*)\)/i', $details, $m)) {
+    if ($fieldChanged === '' && preg_match('/\((Product Name|Brand|Paint Type|Color|Price per Liter|New (?:Can|Container) Size\(s\)|Overall Threshold|Per-Size Thresholds[^)]*)\)/i', $details, $m)) {
         $fieldChanged = trim($m[1]);
     }
 
@@ -259,6 +259,39 @@ function enrichAuditRow(array $row, array $productMap) {
         if ($fieldChanged === '') $fieldChanged = ($action === 'USER_STATUS') ? 'Account Status' : 'Supplier Status';
         if ($newValue === '') $newValue = $targetSt;
         if ($oldValue === '') $oldValue = ($targetSt === 'Active') ? 'Inactive' : 'Active';
+    }
+
+    // 9. Stock Threshold Changes
+    if ($action === 'STOCK_THRESHOLD_CHANGE') {
+        if ($fieldChanged === '') $fieldChanged = 'Minimum Stock Threshold';
+        if ($oldValue === '' && preg_match('/from\s+([\d\.]+\s*L(?:\s*\([^)]*\))?)\s+(?:to|➔|->)\s+([\d\.]+\s*L(?:\s*\([^)]*\))?)/i', $details, $m)) {
+            $oldValue = $m[1];
+            $newValue = $m[2];
+        }
+    }
+
+    // 10. Container Size Added / Removed
+    if ($action === 'CONTAINER_SIZE_ADD' || $action === 'CONTAINER_SIZE_REMOVE') {
+        if ($fieldChanged === '') $fieldChanged = 'Container Sizes';
+        if ($newValue === '' && preg_match('/(?:Added|Removed)\s+container\s+size\(s\)\s+([A-Za-z0-9_,\s]+?)\s+to/i', $details, $m)) {
+            $newValue = trim($m[1]);
+        }
+    }
+
+    // 11. Unauthorized Access Attempt
+    if ($action === 'UNAUTHORIZED_ACCESS') {
+        if ($fieldChanged === '') $fieldChanged = 'Module Navigation Access';
+        if ($newValue === '') $newValue = 'Access Blocked';
+        if ($oldValue === '' && preg_match('/by\s+.+?\s*\((staff|cashier|unauthenticated|[^\)]+)\)/i', $details, $m)) {
+            $oldValue = 'Role: ' . $m[1];
+        }
+    }
+
+    // 12. Stock Adjustments / Increase / Decrease
+    if (in_array($action, ['STOCK_INCREASE', 'STOCK_DECREASE', 'STOCK_ADJUST'], true)) {
+        if ($fieldChanged === '') {
+            $fieldChanged = ($action === 'STOCK_ADJUST') ? 'Opened / Used Stock' : 'Sealed Stock Quantity';
+        }
     }
 
     $cleanEntityName = cleanDisplayAuditText($entityName);

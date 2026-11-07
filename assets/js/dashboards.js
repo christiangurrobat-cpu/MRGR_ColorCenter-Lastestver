@@ -158,7 +158,7 @@ function renderAdminPOMonitoringPanel() {
               <td><code style="color:var(--teal); font-weight:700;">${escapeHtml(po.poNumber)}</code></td>
               <td><b>${escapeHtml((supplier && supplier.name) || po.supplierName || 'Unknown')}</b></td>
               <td>${formatDateTime(po.orderDate || po.date)}</td>
-              <td>${items.length} line item${items.length === 1 ? '' : 's'} (${totalQty} cans)</td>
+              <td>${items.length} line item${items.length === 1 ? '' : 's'} (${totalQty} units)</td>
               <td class="right" style="font-weight:700; font-family:'Space Grotesk',sans-serif;">${peso(po.totalAmount || 0)}</td>
               <td class="center">${poStatusBadge(po.status)}</td>
               <td class="center" style="white-space:nowrap;">
@@ -356,7 +356,7 @@ function renderStaffIncomingDeliveriesPanel() {
               <td><code style="color:var(--teal); font-weight:700;">${escapeHtml(po.poNumber)}</code></td>
               <td><b>${escapeHtml((supplier && supplier.name) || po.supplierName || 'Unknown')}</b></td>
               <td>${formatDateTime(po.orderDate || po.date)}</td>
-              <td>${items.length} line item${items.length === 1 ? '' : 's'} (${totalCans} cans)</td>
+              <td>${items.length} line item${items.length === 1 ? '' : 's'} (${totalCans} units)</td>
               <td class="right" style="font-weight:700; font-family:'Space Grotesk',sans-serif;">${peso(po.totalAmount || 0)}</td>
               <td class="center">${poStatusBadge(po.status)}</td>
               <td class="center" style="white-space:nowrap;">
@@ -821,7 +821,7 @@ function adminDashboard() {
     <div class="stat-card ${summary.criticalOutProducts ? 'danger' : 'sage'} clickable" onclick="goTo('alerts')" title="Click to review critical out of stock products">
       <div class="label">🚨 Out-of-Stock Items</div>
       <div class="value">${summary.criticalOutProducts} Products</div>
-      <div class="sub"><b>${summary.criticalOutSizes}</b> container variants with 0 cans remaining</div>
+      <div class="sub"><b>${summary.criticalOutSizes}</b> container variants with 0 units remaining</div>
       <div class="stat-card-footer">
         <span class="stat-action-link">Review Critical Out &rarr;</span>
       </div>
@@ -893,9 +893,9 @@ function adminDashboard() {
             <th style="min-width:110px;">Brand</th>
             <th style="min-width:140px;">Supplier</th>
             <th class="center" style="min-width:90px;">Container Size</th>
-            <th class="right" style="min-width:110px;">Stock Quantity (Cans)</th>
+            <th class="right" style="min-width:110px;">Stock Quantity (Units)</th>
             <th class="right" style="min-width:90px;">Stock Volume (L)</th>
-            <th class="right" style="min-width:120px;">Minimum Threshold (Cans)</th>
+            <th class="right" style="min-width:120px;">Minimum Threshold (Units)</th>
             <th class="right" style="min-width:105px;">Threshold Volume (L)</th>
             <th class="center" style="min-width:95px;">Stock Status</th>
             <th class="center" style="min-width:120px;">PO Status</th>
@@ -957,9 +957,9 @@ function adminDashboard() {
                 </span>
               </td>
 
-              <!-- Stock Quantity (Cans) -->
+              <!-- Stock Quantity (Units) -->
               <td class="right" style="font-weight:600; font-family:'Space Grotesk',sans-serif; vertical-align:middle; ${borderBottom} ${st === 'out' ? 'color:var(--danger);' : (st === 'low' ? 'color:#B45309;' : 'color:var(--ink);')}">
-                ${count} ${count === 1 ? 'can' : 'cans'}
+                ${count} ${count === 1 ? 'unit' : 'units'}
               </td>
 
               <!-- Stock Volume (L) -->
@@ -967,9 +967,9 @@ function adminDashboard() {
                 ${formatLiters(stockVol)}
               </td>
 
-              <!-- Minimum Threshold (Cans) -->
+              <!-- Minimum Threshold (Units) -->
               <td class="right" style="font-weight:600; font-family:'Space Grotesk',sans-serif; vertical-align:middle; ${borderBottom} color:var(--ink);">
-                ${thresh} ${thresh === 1 ? 'can' : 'cans'}
+                ${thresh} ${thresh === 1 ? 'unit' : 'units'}
               </td>
 
               <!-- Threshold Volume (L) -->
@@ -1186,7 +1186,7 @@ function renderMovementProductCellClean(line, parentMove) {
       <div class="movement-prod-variant-row">
         ${colorHex ? `<span class="color-dot-sm" style="background:${escapeHtml(colorHex)};" title="${escapeHtml(color || '')}"></span>` : ''}
         ${color && color !== '-' ? `<span class="movement-prod-color">${escapeHtml(color)}</span>` : ''}
-        ${size ? `<span class="badge-size-pill">${fmtSize(size)} Can</span>` : (isOpened ? '<span class="badge-size-pill opened">🫙 Opened Stock</span>' : '')}
+        ${size ? `<span class="badge-size-pill">${fmtSize(size)} ${size <= 1 ? 'Can' : (size <= 4 ? 'Gallon' : 'Drum')}</span>` : (isOpened ? '<span class="badge-size-pill opened">🫙 Opened Stock</span>' : '')}
       </div>
     </div>
   `;
@@ -1202,7 +1202,7 @@ function renderMovementQtyBadgeClean(line) {
 
   if (line.size && line.units) {
     const unitsAbs = Math.abs(line.units);
-    const unitText = `${unitsAbs} can${unitsAbs === 1 ? '' : 's'}`;
+    const unitText = `${unitsAbs} unit${unitsAbs === 1 ? '' : 's'}`;
     const literSign = isPos ? '+' : '';
     return `
       <div class="movement-qty-badge ${deltaClass}" title="${sign}${unitText} (${literSign}${formatStock(qty)} L)">
@@ -1474,7 +1474,7 @@ function openStaffMovementDetailModal(moveId) {
           <div class="field-val" style="display:flex; align-items:center; gap:6px;">
             ${hex ? `<span class="color-dot-sm" style="background:${escapeHtml(hex)};"></span>` : ''}
             <span>${escapeHtml(color || 'Standard')}</span>
-            ${target.containerSize ? `<span class="badge-size-pill">${fmtSize(target.containerSize)} Can</span>` : ''}
+            ${target.containerSize ? `<span class="badge-size-pill">${fmtSize(target.containerSize)} ${target.containerSize <= 1 ? 'Can' : (target.containerSize <= 4 ? 'Gallon' : 'Drum')}</span>` : ''}
           </div>
         </div>
 
@@ -1557,7 +1557,7 @@ function staffDashboard() {
   const healthyProductsCount = prods.filter(p => !productHasLowStock(p)).length;
   const lowProductsCount = summary.totalLowProducts;
 
-  // Has critical out of stock sizes (0 cans)
+  // Has critical out of stock sizes (0 units)
   const criticalOutCount = summary.criticalOutSizes;
   const needingPOCount = summary.needingPOSizes;
   const onOrderCount = summary.onOrderSizes;
@@ -1636,11 +1636,11 @@ function staffDashboard() {
           <span class="staff-kpi-icon">🚨</span>
           <span class="staff-kpi-label">Critical Out-of-Stock</span>
         </div>
-        ${criticalOutCount > 0 ? '<span class="staff-kpi-tag tag-urgent">0 Cans</span>' : '<span class="staff-kpi-tag tag-ok">Healthy</span>'}
+        ${criticalOutCount > 0 ? '<span class="staff-kpi-tag tag-urgent">0 Units</span>' : '<span class="staff-kpi-tag tag-ok">Healthy</span>'}
       </div>
       <div class="staff-kpi-value" style="${criticalOutCount ? 'color:var(--danger);' : ''}">${criticalOutCount} Variants</div>
       <div class="staff-kpi-sub">
-        <span><b>0 cans remaining</b> in warehouse</span>
+        <span><b>0 units remaining</b> in warehouse</span>
       </div>
       <div class="staff-kpi-foot">
         <span>Review Critical Items &rarr;</span>
@@ -1715,7 +1715,7 @@ function staffDashboard() {
       <button type="button" class="staff-action-btn-highlight primary-teal" onclick="goTo('receiving')" title="Log supplier delivery or physical stock arrival">
         <span>📥</span> Stock Receiving ${getModuleBadgeHtml('receiving')}
       </button>
-      <button type="button" class="staff-action-btn-highlight accent-adjust" onclick="goToAdjustment()" title="Submit physical count correction or damaged can adjustment">
+      <button type="button" class="staff-action-btn-highlight accent-adjust" onclick="goToAdjustment()" title="Submit physical count correction or damaged unit adjustment">
         <span>⚖️</span> Stock Adjustment Request
       </button>
       <button type="button" class="staff-action-btn-highlight accent-warm" onclick="goTo('inventory')" title="Browse catalog inventory and check stock counts">
@@ -1750,7 +1750,7 @@ function staffDashboard() {
           <div class="staff-alert-content">
             <div class="staff-alert-category">Critical Out of Stock</div>
             <div class="staff-alert-message">
-              <b>${criticalOutCount} container size variant${criticalOutCount === 1 ? '' : 's'}</b> are completely out of stock (0 cans remaining). Immediate reordering required.
+              <b>${criticalOutCount} container size variant${criticalOutCount === 1 ? '' : 's'}</b> are completely out of stock (0 units remaining). Immediate reordering required.
             </div>
           </div>
         </div>

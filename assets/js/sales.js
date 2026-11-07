@@ -602,7 +602,7 @@ function openReturnRefundModal(saleId) {
       <div style="flex:1; min-width:240px;">
         <div style="font-weight:700; font-size:12.5px; color:#8A5A24;">🎨 Custom Color-Mixed Paint Policy</div>
         <div class="muted small" style="margin-top:2px;">
-          Custom-tinted paints cannot be un-mixed back into sealed base cans and are <b>Final Sale</b> by default. Unlock only if the store mixed the wrong formula/shade or the batch was defective.
+          Custom-tinted paints cannot be un-mixed back into sealed base units and are <b>Final Sale</b> by default. Unlock only if the store mixed the wrong formula/shade or the batch was defective.
         </div>
       </div>
       <label style="display:inline-flex; align-items:center; gap:8px; cursor:pointer; font-weight:700; font-size:12.5px; color:var(--danger); background:#fff; padding:6px 10px; border:1px solid #F3C4BF; border-radius:6px; margin:0;">
@@ -627,7 +627,7 @@ function openReturnRefundModal(saleId) {
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:8px; flex-wrap:wrap;">
       <div>
         <strong style="font-size:13.5px; color:var(--ink);">1. Select Items Being Returned</strong>
-        <div class="muted small">Enter the quantity of paint cans being returned:</div>
+        <div class="muted small">Enter the quantity of paint units being returned:</div>
       </div>
       <div class="row wrap" style="gap:6px;">
         <button type="button" class="btn secondary small" onclick="fillAllReturnLines('${sale.id}', true)">⚡ Return All Eligible</button>
@@ -658,8 +658,8 @@ function openReturnRefundModal(saleId) {
     <div style="margin-top:16px; padding:12px 14px; background:#F4F8F7; border:1px solid #C8DDD9; border-radius:var(--radius-sm);">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:8px; flex-wrap:wrap;">
         <div>
-          <strong style="font-size:13.5px; color:var(--teal);">2. Replacement Item(s) for Exchange <span class="badge mid" style="font-size:10.5px; margin-left:6px;">🔒 Fixed Can Size &amp; Qty</span></strong>
-          <div class="muted small">Can size and quantity are automatically fixed to match each item being returned above. You may keep the same product or select an alternative product of the same can size:</div>
+          <strong style="font-size:13.5px; color:var(--teal);">2. Replacement Item(s) for Exchange <span class="badge mid" style="font-size:10.5px; margin-left:6px;">🔒 Fixed Container Size &amp; Qty</span></strong>
+          <div class="muted small">Container size and quantity are automatically fixed to match each item being returned above. You may keep the same product or select an alternative product of the same container size:</div>
         </div>
       </div>
 
@@ -671,17 +671,17 @@ function openReturnRefundModal(saleId) {
         <label>Reason for Return / Exchange <span style="color:var(--danger);">*</span></label>
         <select id="ret-reason" required>
           <option value="Exchanging for a different color / shade">Exchanging for a different color / shade</option>
-          <option value="Wrong product or can size purchased (Exchange)">Wrong product or can size purchased (Exchange)</option>
-          <option value="Defective / damaged paint can (Replace)">Defective / damaged paint can (Replace)</option>
+          <option value="Wrong product or container size purchased (Exchange)">Wrong product or container size purchased (Exchange)</option>
+          <option value="Defective / damaged product container (Replace)">Defective / damaged product container (Replace)</option>
           <option value="Store mixing error / off-shade formula (Re-Mix Exchange)">Store mixing error / off-shade formula (Re-Mix Exchange)</option>
-          <option value="Returned unopened / excess paint cans">Returned unopened / excess paint cans</option>
+          <option value="Returned unopened / excess paint units">Returned unopened / excess paint units</option>
           <option value="Job cancelled / changed mind">Job cancelled / changed mind</option>
           <option value="Other return / exchange reason">Other return / exchange reason</option>
         </select>
       </div>
       <div class="field">
         <label>Cashier / Manager Note (optional)</label>
-        <input id="ret-note" type="text" placeholder="e.g. Unopened cans inspected, exchanged for new shade">
+        <input id="ret-note" type="text" placeholder="e.g. Unopened units inspected, exchanged for new shade">
       </div>
     </div>
 
@@ -689,9 +689,9 @@ function openReturnRefundModal(saleId) {
       <label style="display:flex; align-items:flex-start; gap:10px; cursor:pointer; font-weight:600; font-size:13px; margin:0;">
         <input type="checkbox" id="ret-restock" checked style="margin-top:3px;">
         <div>
-          <span>Restock returned sealed paint cans back into inventory</span>
+          <span>Restock returned sealed paint units back into inventory</span>
           <div class="muted small" style="font-weight:400; margin-top:2px;">
-            Adds returned sealed cans back to product stock. (Note: Custom Color-Mixed paints are never restocked into sealed base cans and are automatically logged as Miscast / Defective Mix.)
+            Adds returned sealed units back to product stock. (Note: Custom Color-Mixed paints are never restocked into sealed base units and are automatically logged as Miscast / Defective Mix.)
           </div>
         </div>
       </label>
@@ -890,7 +890,7 @@ function onChangeFixedReplacementProduct(saleId, sourceRowIdx, newProductId) {
     return;
   }
   if (productHasCanBreakdown(p) && productCanCount(p, fixedSize) < fixedQty) {
-    showToast(`Only ${productCanCount(p, fixedSize)} × ${fixedSize}L can(s) in stock for ${p.name} (need ${fixedQty}).`, 'error');
+    showToast(`Only ${productCanCount(p, fixedSize)} × ${fixedSize}L unit(s) in stock for ${p.name} (need ${fixedQty}).`, 'error');
     return;
   }
 
@@ -978,8 +978,8 @@ function buildExchangePickerCardsHtml(saleId, ex) {
       : (Math.abs(priceDiff) < 0.005
         ? `<span class="badge ok" style="font-size:10px; padding:1px 6px;">Even Exchange</span>`
         : (priceDiff > 0
-          ? `<span class="badge mid" style="font-size:10px; padding:1px 6px;">+${peso(priceDiff)}/can</span>`
-          : `<span class="badge low" style="font-size:10px; padding:1px 6px;">${peso(priceDiff)}/can</span>`));
+          ? `<span class="badge mid" style="font-size:10px; padding:1px 6px;">+${peso(priceDiff)}/unit</span>`
+          : `<span class="badge low" style="font-size:10px; padding:1px 6px;">${peso(priceDiff)}/unit</span>`));
 
     return `
       <div onclick="${enoughStock ? `onChangeFixedReplacementProduct('${saleId}', ${ex.sourceRowIdx}, '${p.id}')` : ''}"
@@ -1020,7 +1020,7 @@ function renderExchangeReplacementCart(saleId) {
   if (!wrap) return;
 
   if (!returnExchangeCart.length) {
-    wrap.innerHTML = `<div class="muted small" style="padding:10px 12px; background:#fff; border:1px dashed #C8DDD9; border-radius:4px; text-align:center;">Enter a <b>Return Qty</b> in Step 1 above — the replacement item card with matching <b>fixed Can Size</b> and <b>fixed Quantity</b> will appear here automatically.</div>`;
+    wrap.innerHTML = `<div class="muted small" style="padding:10px 12px; background:#fff; border:1px dashed #C8DDD9; border-radius:4px; text-align:center;">Enter a <b>Return Qty</b> in Step 1 above — the replacement item card with matching <b>fixed Container Size</b> and <b>fixed Quantity</b> will appear here automatically.</div>`;
     return;
   }
 
@@ -1032,7 +1032,7 @@ function renderExchangeReplacementCart(saleId) {
         <thead>
           <tr>
             <th>Selected Replacement Paint</th>
-            <th class="center">Fixed Can Size</th>
+            <th class="center">Fixed Container Size</th>
             <th class="center">Fixed Qty</th>
             <th class="right">Unit Price</th>
             <th class="right">Line Total</th>
@@ -1084,8 +1084,8 @@ function renderExchangeReplacementCart(saleId) {
       : (Math.abs(priceDiffPerCan) < 0.005
         ? `<span class="badge ok" style="font-size:10px; padding:1px 6px;">Even Exchange (₱0.00)</span>`
         : (priceDiffPerCan > 0
-          ? `<span class="badge mid" style="font-size:10px; padding:1px 6px;">+${peso(priceDiffPerCan)}/can</span>`
-          : `<span class="badge low" style="font-size:10px; padding:1px 6px;">${peso(priceDiffPerCan)}/can</span>`));
+          ? `<span class="badge mid" style="font-size:10px; padding:1px 6px;">+${peso(priceDiffPerCan)}/unit</span>`
+          : `<span class="badge low" style="font-size:10px; padding:1px 6px;">${peso(priceDiffPerCan)}/unit</span>`));
 
     const recCount = origProd
       ? allProds.filter(p => p.id === ex.origProductId || p.type === origProd.type || p.brand === origProd.brand).length
@@ -1403,7 +1403,7 @@ async function processSaleReturn(saleId) {
           size_id: null,
           productName: `Miscast / Returned Mix — ${item.name} (${item.colorName || 'Custom'})`,
           qtyChange: 0,
-          note: `Custom Mix Return / Exchange: ${receiptNo} (${reason}) [${qtyToReturn}L Miscast/Defective — Not Restocked to Base Cans]${note ? ' — ' + note : ''}`,
+          note: `Custom Mix Return / Exchange: ${receiptNo} (${reason}) [${qtyToReturn}L Miscast/Defective — Not Restocked to Base Units]${note ? ' — ' + note : ''}`,
           staffName: (currentUser && currentUser.name) || 'Cashier'
         });
       } else if (restock) {
@@ -1435,7 +1435,7 @@ async function processSaleReturn(saleId) {
               container_size: size,
               productName: product.name,
               qtyChange: litersRestocked,
-              note: `Product Return / Exchange: ${receiptNo} (${reason}) [Return ${qtyToReturn} × ${size}L Restocked · ${size}L Cans: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(product.stock)}L]${note ? ' — ' + note : ''}`,
+              note: `Product Return / Exchange: ${receiptNo} (${reason}) [Return ${qtyToReturn} × ${size}L Restocked · ${size}L Units: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(product.stock)}L]${note ? ' — ' + note : ''}`,
               staffName: (currentUser && currentUser.name) || 'Cashier'
             });
           }
@@ -1540,7 +1540,7 @@ async function processSaleReturn(saleId) {
           container_size: size,
           productName: product.name,
           qtyChange: -litersIssued,
-          note: `Exchange Replacement Issued: ${receiptNo} (${reason}) [Exchange ${exItem.qty} × ${size}L Issued · ${size}L Cans: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(product.stock)}L]${note ? ' — ' + note : ''}`,
+          note: `Exchange Replacement Issued: ${receiptNo} (${reason}) [Exchange ${exItem.qty} × ${size}L Issued · ${size}L Units: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(product.stock)}L]${note ? ' — ' + note : ''}`,
           staffName: (currentUser && currentUser.name) || 'Cashier'
         });
       }
@@ -1663,7 +1663,7 @@ function showReturnVoucherModal(saleId, voucherId) {
   const restockBadgeHtml = voucher.restocked
     ? '<span class="badge ok">✓ Restocked into inventory</span>'
     : (onlyColorMixReturned
-      ? '<span class="badge low">🎨 Miscast Mix (Not Restocked to Base Cans)</span>'
+      ? '<span class="badge low">🎨 Miscast Mix (Not Restocked to Base Units)</span>'
       : '<span class="badge low">✕ Damaged / Not Restocked</span>');
 
   const exItems = Array.isArray(voucher.exchangeItems) ? voucher.exchangeItems : [];

@@ -15,6 +15,18 @@ let auditRows = [];
 // Client-side in-memory deduplication cache (prevents duplicate dispatches within 3 seconds)
 const _recentAuditSignatures = new Map();
 
+function formatAuditUnitsDisplay(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/\bMin:\s*(\d+(?:\.\d+)?)\s*cans?\b/gi, 'Minimum: $1 units')
+    .replace(/\b(\d+)\s*\/\s*(\d+)\s*cans\b/gi, '$1/$2 units')
+    .replace(/\b1\s*\/\s*1\s*can\b/gi, '1/1 unit')
+    .replace(/\b(\d+(?:\.\d+)?)\s*cans\b/gi, '$1 units')
+    .replace(/\b1\s*can\b/gi, '1 unit')
+    .replace(/\b(\d+(?:\.\d+)?)\s*can\b/gi, '$1 units')
+    .replace(/\b(\d+(?:\.\d+)?L)\s+Cans:\b/gi, '$1 Units:');
+}
+
 function cleanAuditDisplayString(str) {
   if (!str) return '';
   let s = String(str);
@@ -22,6 +34,7 @@ function cleanAuditDisplayString(str) {
   s = s.replace(/\s*\(\s*(?:ID\s*:\s*)?(?:PRD|SZ)-[A-Za-z0-9_-]+\s*\)/gi, '');
   s = s.replace(/\s*\[\s*(?:p_[A-Za-z0-9_-]+|p\d+)\s*\]/gi, '');
   s = s.replace(/\s*\(\s*ID\s*:\s*(?:p_[A-Za-z0-9_-]+|p\d+)\s*\)/gi, '');
+  s = formatAuditUnitsDisplay(s);
   return s.replace(/  +/g, ' ').trim();
 }
 
@@ -738,6 +751,450 @@ function renderAuditDiffChip(l) {
   return '';
 }
 
+// Helper: Extract stock threshold information
+function parseAuditThreshold(l) {
+  const parseOne = str => {
+    if (!str) return { total: '', breakdown: '' };
+    const s = String(str).trim();
+    const m = s.match(/^([^()]+?)(?:\s*\((.*)\))?$/);
+    if (m) {
+      return { total: m[1].trim(), breakdown: (m[2] || '').trim() };
+    }
+    return { total: s, breakdown: '' };
+  };
+  const o = parseOne(l.old_value);
+  const n = parseOne(l.new_value);
+  let prevTotal = o.total;
+  let newTotal = n.total;
+  let prevBreakdown = o.breakdown;
+  let newBreakdown = n.breakdown;
+
+  if (!prevTotal && l.details) {
+    const mDet = l.details.match(/from\s+([\d\.]+\s*L)\s+to\s+([\d\.]+\s*L)/i);
+    if (mDet) {
+      prevTotal = mDet[1];
+      newTotal = mDet[2];
+    }
+  }
+  return {
+    prevTotal: formatAuditUnitsDisplay(prevTotal),
+    newTotal: formatAuditUnitsDisplay(newTotal),
+    prevBreakdown: formatAuditUnitsDisplay(prevBreakdown),
+    newBreakdown: formatAuditUnitsDisplay(newBreakdown)
+  };
+}
+
+// Helper: Parse threshold breakdown pairs
+function parseThresholdBreakdownPairs(breakdownStr) {
+  if (!breakdownStr) return [];
+  const parts = breakdownStr.split(',').map(s => s.trim()).filter(Boolean);
+  const list = [];
+  parts.forEach(p => {
+    const idx = p.indexOf(':');
+    if (idx > -1) {
+      list.push({
+        size: p.slice(0, idx).trim(),
+        cans: formatAuditUnitsDisplay(p.slice(idx + 1).trim())
+      });
+    } else {
+      list.push({ size: p, cans: '' });
+    }
+  });
+  return list;
+}
+
+// Helper: Extract added container size(s) vs existing sizes
+function parseAuditContainerSizes(l) {
+  const oldVal = l.old_value || '';
+  const newVal = l.new_value || '';
+  const details = l.details || '';
+  const oldList = oldVal.split(',').map(s => s.trim()).filter(Boolean);
+  const newList = newVal.split(',').map(s => s.trim()).filter(Boolean);
+  let addedList = newList.filter(s => !oldList.includes(s));
+  if (!addedList.length && details) {
+    const m = details.match(/size\(s\)\s+([A-Za-z0-9_,\s]+?)\s+to/i);
+    if (m) addedList = m[1].split(',').map(s => s.trim()).filter(Boolean);
+  }
+  return {
+    added: addedList.join(', ') || 'New Size',
+    addedList: addedList,
+    existingList: oldList,
+    newList: newList.length ? newList : (addedList.length ? addedList : [])
+  };
+}
+
+// Helper: Extract changed fields for product changes
+function parseAuditProductChanges(l) {
+  const meta = (l.meta && typeof l.meta === 'object') ? l.meta : null;
+  const changes = [];
+
+  if (meta && meta.changes) {
+    if (Array.isArray(meta.changes)) {
+      meta.changes.forEach(c => {
+        const f = c.field || c.label || c.key || 'Attribute';
+        const oldV = c.oldValue !== undefined ? c.oldValue : c.old;
+        const newV = c.newValue !== undefined ? c.newValue : c.new;
+        changes.push({ field: f, oldVal: formatAuditUnitsDisplay(oldV), newVal: formatAuditUnitsDisplay(newV) });
+      });
+    } else if (typeof meta.changes === 'object') {
+      Object.entries(meta.changes).forEach(([k, v]) => {
+        if (v && typeof v === 'object') {
+          const f = v.label || v.field || k;
+          const oldV = v.old !== undefined ? v.old : v.oldValue;
+          const newV = v.new !== undefined ? v.new : v.newValue;
+          changes.push({ field: f, oldVal: formatAuditUnitsDisplay(oldV), newVal: formatAuditUnitsDisplay(newV) });
+        }
+      });
+    }
+  }
+
+  if (changes.length > 0) return changes;
+
+  const oldStr = l.old_value != null ? String(l.old_value).trim() : '';
+  const newStr = l.new_value != null ? String(l.new_value).trim() : '';
+
+  // Check if multiple fields delimited by ' · '
+  if (oldStr.includes(' · ') || newStr.includes(' · ')) {
+    const parseKv = str => {
+      const map = {};
+      str.split(' · ').forEach(part => {
+        const idx = part.indexOf(':');
+        if (idx > -1) {
+          map[part.slice(0, idx).trim()] = part.slice(idx + 1).trim();
+        }
+      });
+      return map;
+    };
+    const oldMap = parseKv(oldStr);
+    const newMap = parseKv(newStr);
+    const allKeys = Array.from(new Set([...Object.keys(oldMap), ...Object.keys(newMap)]));
+    allKeys.forEach(k => {
+      changes.push({ field: k, oldVal: formatAuditUnitsDisplay(oldMap[k]) || '—', newVal: formatAuditUnitsDisplay(newMap[k]) || '—' });
+    });
+    if (changes.length > 0) return changes;
+  }
+
+  if (oldStr || newStr) {
+    let fName = l.field_changed || 'Attribute';
+    if (!l.field_changed && l.action === 'PRODUCT_PRICE_CHANGE') fName = 'Price per Liter';
+    changes.push({ field: fName, oldVal: formatAuditUnitsDisplay(oldStr) || 'None', newVal: formatAuditUnitsDisplay(newStr) || 'None' });
+  }
+
+  return changes;
+}
+
+// Helper: Extract previous, adjusted, and final quantity for stock adjustments
+function parseAuditStockAdjustment(l) {
+  const oldStr = l.old_value != null ? String(l.old_value).trim() : '';
+  const newStr = l.new_value != null ? String(l.new_value).trim() : '';
+  const det = l.details != null ? String(l.details).trim() : '';
+  const act = String(l.action || '').toUpperCase();
+
+  let prevQty = oldStr || '0';
+  let finalQty = newStr || '0';
+  let adjQty = '';
+
+  const mDet = det.match(/\(\s*([+-]?\d+(?:\.\d+)?\s*(?:×\s*\d+L)?\s*=\s*[+-]?\d+(?:\.\d+)?\s*L|[+-]?\d+(?:\.\d+)?\s*(?:cans?|units?|L|kg)?)\s*\)/i);
+  if (mDet) {
+    adjQty = mDet[1];
+  } else if (det.match(/([+-]\d+(?:\.\d+)?\s*L)/)) {
+    adjQty = det.match(/([+-]\d+(?:\.\d+)?\s*L)/)[1];
+  } else if (newStr.match(/\(([+-]?\d+(?:\.\d+)?\s*(?:cans?|units?|L|kg)?)\)/i)) {
+    adjQty = newStr.match(/\(([+-]?\d+(?:\.\d+)?\s*(?:cans?|units?|L|kg)?)\)/i)[1];
+    finalQty = newStr.replace(/\s*\([^\)]*\)/, '').trim();
+  }
+
+  if (!adjQty) {
+    if (act === 'STOCK_INCREASE') adjQty = '+Qty';
+    else if (act === 'STOCK_DECREASE') adjQty = '-Qty';
+    else adjQty = 'Adjusted';
+  }
+
+  const isNeg = act === 'STOCK_DECREASE' || adjQty.startsWith('-') || det.toLowerCase().includes('damaged') || det.toLowerCase().includes('decrease');
+
+  return {
+    prevQty: formatAuditUnitsDisplay(prevQty) || '—',
+    adjQty: formatAuditUnitsDisplay(adjQty) || '—',
+    finalQty: formatAuditUnitsDisplay(finalQty) || '—',
+    isNeg,
+    scope: formatAuditUnitsDisplay(l.field_changed || ''),
+    reason: l.reason || (det.match(/Reason:\s*(.+)$/i) ? RegExp.$1 : '')
+  };
+}
+
+// Render structured, clean Activity Details column
+function renderAuditActivityDetails(l) {
+  const act = String(l.action || '').toUpperCase();
+  const refPill = l.reference_no
+    ? `<span class="audit-ref-pill" title="Transaction Reference">${escapeHtml(l.reference_no)}</span>`
+    : '';
+  const detailsClean = cleanAuditDisplayString(l.display_details || l.details || '');
+
+  // 1. Stock Threshold Changed
+  if (act === 'STOCK_THRESHOLD_CHANGE') {
+    const t = parseAuditThreshold(l);
+    const prevPairs = parseThresholdBreakdownPairs(t.prevBreakdown);
+    const nextPairs = parseThresholdBreakdownPairs(t.newBreakdown);
+    const breakdownPairs = nextPairs.length ? nextPairs : prevPairs;
+
+    let breakdownHtml = '';
+    if (breakdownPairs.length > 0) {
+      breakdownHtml = `
+        <div class="audit-breakdown-section">
+          <div class="audit-section-subhead">Size Breakdown</div>
+          <table class="audit-size-table">
+            <thead>
+              <tr>
+                <th>Container Size</th>
+                <th>Minimum Stock Threshold</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${breakdownPairs.map(p => {
+        const isNewSize = prevPairs.length > 0 && !prevPairs.some(prev => prev.size === p.size);
+        return `
+                  <tr class="${isNewSize ? 'is-new-size' : ''}">
+                    <td>
+                      <span class="audit-size-pill ${isNewSize ? 'is-added' : ''}">${escapeHtml(p.size)}</span>
+                      ${isNewSize ? '<span class="audit-pill-tag">NEW</span>' : ''}
+                    </td>
+                    <td>
+                      <span class="${isNewSize ? 'audit-val-updated' : ''}">${escapeHtml(p.cans || '—')}</span>
+                    </td>
+                  </tr>`;
+      }).join('')}
+            </tbody>
+          </table>
+        </div>`;
+    }
+
+    return `
+      <div class="audit-act-card">
+        <div class="audit-card-pair">
+          <div class="audit-val-card">
+            <div class="audit-val-card-lbl">Previous Threshold</div>
+            <div class="audit-val-card-num">${escapeHtml(t.prevTotal || '—')}</div>
+          </div>
+          <div class="audit-val-card is-updated">
+            <div class="audit-val-card-lbl">New Threshold</div>
+            <div class="audit-val-card-num">${escapeHtml(t.newTotal || '—')}</div>
+          </div>
+        </div>
+        ${breakdownHtml}
+      </div>`;
+  }
+
+  // 2. Container Size Added / Removed
+  if (act === 'CONTAINER_SIZE_ADD' || act === 'CONTAINER_SIZE_REMOVE' || act === 'PRODUCT_SIZE_APPROVE') {
+    const c = parseAuditContainerSizes(l);
+    return `
+      <div class="audit-act-card">
+        <div class="audit-highlight-banner">
+          <span class="audit-lbl">Newly Added Size:</span>
+          <span class="audit-size-pill is-added">+ ${escapeHtml(c.added)}</span>
+        </div>
+        <div class="audit-size-group">
+          <div class="audit-size-section-label">Existing Sizes</div>
+          <div class="audit-badges-wrap">
+            ${c.existingList.length ? c.existingList.map(sz => `<span class="audit-size-pill">${escapeHtml(sz)}</span>`).join('') : '<span class="muted small">None</span>'}
+          </div>
+        </div>
+        <div class="audit-size-group">
+          <div class="audit-size-section-label">Updated Size List</div>
+          <div class="audit-badges-wrap">
+            ${c.newList.map(sz => {
+      const isAdded = c.addedList.includes(sz);
+      return `<span class="audit-size-pill ${isAdded ? 'is-added' : ''}">${escapeHtml(sz)}${isAdded ? '<span class="audit-pill-tag">NEW</span>' : ''}</span>`;
+    }).join('')}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // 3. Product Updated / Price Changed / Edit Approved / Status Changed
+  if (act === 'PRODUCT_UPDATE' || act === 'PRODUCT_PRICE_CHANGE' || act === 'PRODUCT_EDIT_APPROVE' ||
+    act === 'PRODUCT_EDIT_REQUEST' || act === 'PRODUCT_DEACTIVATE' || act === 'PRODUCT_REACTIVATE' ||
+    act === 'PRODUCT_DISCONTINUE' || act === 'PRODUCT_STATUS') {
+    const changes = parseAuditProductChanges(l);
+    if (changes.length > 0) {
+      return `
+        <div class="audit-act-card">
+          ${changes.map(ch => `
+            <div class="audit-field-card">
+              <div class="audit-field-title">${escapeHtml(ch.field)}</div>
+              <div class="audit-card-pair">
+                <div class="audit-val-card">
+                  <div class="audit-val-card-lbl">Previous Value</div>
+                  <div class="audit-val-card-num">${escapeHtml(String(ch.oldVal || 'None'))}</div>
+                </div>
+                <div class="audit-val-card is-updated">
+                  <div class="audit-val-card-lbl">New Value</div>
+                  <div class="audit-val-card-num">${escapeHtml(String(ch.newVal || 'None'))}</div>
+                </div>
+              </div>
+            </div>
+          `).join('')}
+          ${l.reason ? `<div class="audit-meta-footer"><span class="audit-lbl">Reason:</span> <span class="audit-meta-text">${escapeHtml(l.reason)}</span></div>` : ''}
+        </div>`;
+    }
+  }
+
+  // 4. User Login / Logout / Auth Events
+  if (act === 'LOGIN' || act === 'LOGOUT' || act === 'LOGIN_FAILED' || act === 'PASSWORD_CHANGE' ||
+    act === 'USER_LOGIN' || act === 'USER_LOGOUT') {
+    const isLogin = act === 'LOGIN' || act === 'USER_LOGIN';
+    const isLogout = act === 'LOGOUT' || act === 'USER_LOGOUT';
+    const isFailed = act === 'LOGIN_FAILED';
+
+    let icon = isLogin ? '🔑' : (isLogout ? '🚪' : (isFailed ? '⚠️' : '🛡️'));
+    let actionDesc = isLogin ? 'User signed in successfully' :
+      (isLogout ? 'User signed out' :
+        (isFailed ? 'Failed sign-in attempt (Invalid credentials)' : 'Password updated successfully'));
+    let pillClass = isLogin ? 'is-login' : (isLogout ? 'is-logout' : (isFailed ? 'is-failed' : 'is-security'));
+    let statusLabel = isLogin ? 'Active Session' : (isLogout ? 'Signed Out' : (isFailed ? 'Authentication Blocked' : 'Updated'));
+
+    return `
+      <div class="audit-act-card">
+        <div class="audit-session-row">
+          <span class="audit-session-badge ${pillClass}">${icon} ${isLogin ? 'Sign-in' : (isLogout ? 'Sign-out' : (isFailed ? 'Auth Failed' : 'Security'))}</span>
+          <span class="audit-session-text">${escapeHtml(actionDesc)}</span>
+        </div>
+        <div class="audit-meta-footer" style="margin-top:2px; border-top:none; padding-top:0;">
+          <span class="audit-lbl">Session:</span> <strong style="color:var(--ink); font-weight:600;">${escapeHtml(statusLabel)}</strong>
+        </div>
+      </div>`;
+  }
+
+  // 5. Unauthorized Access Attempt
+  if (act === 'UNAUTHORIZED_ACCESS') {
+    const moduleName = l.entity_name || l.entity || 'Restricted Module';
+    let attemptedRole = l.old_value ? l.old_value.replace(/^Role:\s*/i, '') : (l.user_role || 'Restricted Role');
+    if (!attemptedRole && detailsClean.match(/\((staff|cashier|unauthenticated|[^\)]+)\)/i)) {
+      attemptedRole = RegExp.$1;
+    }
+    return `
+      <div class="audit-sec-card">
+        <div class="audit-sec-header">
+          <span class="audit-sec-alert-pill">🚫 Restricted Access Attempt</span>
+          <span class="audit-sec-target"><span class="audit-lbl">Module:</span> <strong>${escapeHtml(moduleName)}</strong></span>
+        </div>
+        <div class="audit-card-pair" style="margin-top:2px;">
+          <div class="audit-val-card">
+            <div class="audit-val-card-lbl">Attempted Role</div>
+            <div class="audit-val-card-num">${escapeHtml(attemptedRole)}</div>
+          </div>
+          <div class="audit-val-card is-blocked">
+            <div class="audit-val-card-lbl">Access Result</div>
+            <div class="audit-val-card-num">Blocked (Access Denied)</div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // 6. Stock Adjustments (Increase, Decrease, Adjust, Receive, Dispose)
+  if (act === 'STOCK_ADJUST' || act === 'STOCK_INCREASE' || act === 'STOCK_DECREASE' ||
+    act === 'STOCK_RECEIVE' || act === 'STOCK_DISPOSE') {
+    const s = parseAuditStockAdjustment(l);
+    return `
+      <div class="audit-act-card">
+        <div class="audit-card-trio">
+          <div class="audit-val-card">
+            <div class="audit-val-card-lbl">Previous Qty</div>
+            <div class="audit-val-card-num">${escapeHtml(s.prevQty)}</div>
+          </div>
+          <div class="audit-val-card ${s.isNeg ? 'is-decreased' : 'is-updated'}">
+            <div class="audit-val-card-lbl">Adjustment</div>
+            <div class="audit-val-card-num">${escapeHtml(s.adjQty)}</div>
+          </div>
+          <div class="audit-val-card is-updated">
+            <div class="audit-val-card-lbl">Final Qty</div>
+            <div class="audit-val-card-num">${escapeHtml(s.finalQty)}</div>
+          </div>
+        </div>
+        ${(s.scope || s.reason) ? `
+        <div class="audit-meta-footer">
+          ${s.scope ? `<span class="audit-lbl">Scope:</span> <span class="audit-meta-text">${escapeHtml(s.scope)}</span>` : ''}
+          ${s.scope && s.reason ? ` <span class="audit-dot">·</span> ` : ''}
+          ${s.reason ? `<span class="audit-lbl">Reason:</span> <span class="audit-meta-text">${escapeHtml(s.reason)}</span>` : ''}
+        </div>` : ''}
+      </div>`;
+  }
+
+  // 7. Purchase Orders
+  if (act.startsWith('PO_')) {
+    const hasStatusChange = Boolean(l.old_value || l.new_value);
+    return `
+      <div class="audit-act-card">
+        <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+          ${refPill}
+          <span style="font-weight:600; color:var(--ink);">${escapeHtml(detailsClean || formatAuditActionLabel(act))}</span>
+        </div>
+        ${hasStatusChange ? `
+        <div class="audit-card-pair" style="margin-top:2px;">
+          <div class="audit-val-card">
+            <div class="audit-val-card-lbl">Previous Status</div>
+            <div class="audit-val-card-num">${escapeHtml(l.old_value || 'None')}</div>
+          </div>
+          <div class="audit-val-card is-updated">
+            <div class="audit-val-card-lbl">New Status</div>
+            <div class="audit-val-card-num">${escapeHtml(l.new_value || '—')}</div>
+          </div>
+        </div>` : ''}
+        ${l.reason ? `<div class="audit-meta-footer"><span class="audit-lbl">Reason:</span> <span class="audit-meta-text">${escapeHtml(l.reason)}</span></div>` : ''}
+      </div>`;
+  }
+
+  // 8. Sales Transactions & Refunds
+  if (act === 'SALE' || act === 'SALE_COMPLETE' || act === 'RECEIPT_GENERATED' ||
+    act === 'SALE_REFUND' || act === 'PARTIAL_REFUND' || act === 'SALE_VOID') {
+    const hasStatus = Boolean(l.old_value || l.new_value);
+    return `
+      <div class="audit-act-card">
+        <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+          ${refPill}
+          <span style="font-weight:600; color:var(--ink);">${escapeHtml(detailsClean || formatAuditActionLabel(act))}</span>
+        </div>
+        ${hasStatus ? `
+        <div class="audit-card-pair" style="margin-top:2px;">
+          <div class="audit-val-card">
+            <div class="audit-val-card-lbl">Previous Value</div>
+            <div class="audit-val-card-num">${escapeHtml(l.old_value || 'None')}</div>
+          </div>
+          <div class="audit-val-card is-updated">
+            <div class="audit-val-card-lbl">New Value</div>
+            <div class="audit-val-card-num">${escapeHtml(l.new_value || '—')}</div>
+          </div>
+        </div>` : ''}
+      </div>`;
+  }
+
+  // 9. Other activities with Before & After values
+  if (l.old_value || l.new_value) {
+    return `
+      <div class="audit-act-card">
+        ${refPill ? `<div style="margin-bottom:2px;">${refPill}</div>` : ''}
+        ${l.field_changed ? `<div class="audit-field-title">${escapeHtml(l.field_changed)}</div>` : ''}
+        <div class="audit-card-pair">
+          <div class="audit-val-card">
+            <div class="audit-val-card-lbl">Previous Value</div>
+            <div class="audit-val-card-num">${escapeHtml(String(l.old_value || 'None'))}</div>
+          </div>
+          <div class="audit-val-card is-updated">
+            <div class="audit-val-card-lbl">New Value</div>
+            <div class="audit-val-card-num">${escapeHtml(String(l.new_value || 'None'))}</div>
+          </div>
+        </div>
+        ${l.reason ? `<div class="audit-meta-footer"><span class="audit-lbl">Reason:</span> <span class="audit-meta-text">${escapeHtml(l.reason)}</span></div>` : ''}
+      </div>`;
+  }
+
+  // 10. Fallback / General activities
+  return `
+    <div class="audit-simple-desc">
+      ${refPill}${escapeHtml(detailsClean || formatAuditActionLabel(act))}
+    </div>`;
+}
+
 function openAuditDetailModal(idx) {
   const l = auditRows[idx];
   if (!l) return;
@@ -760,9 +1217,153 @@ function openAuditDetailModal(idx) {
   const hasReason = Boolean(l.reason && String(l.reason).trim());
 
   const meta = (l.meta && typeof l.meta === 'object') ? l.meta : null;
-  const changesList = (meta && Array.isArray(meta.changes) && meta.changes.length > 0) ? meta.changes : [];
+  let changesList = [];
+  if (meta && meta.changes) {
+    if (Array.isArray(meta.changes)) {
+      changesList = meta.changes.map(ch => ({
+        field: ch.field || ch.label || ch.key || 'Field',
+        oldValue: ch.oldValue !== undefined ? ch.oldValue : ch.old,
+        newValue: ch.newValue !== undefined ? ch.newValue : ch.new
+      }));
+    } else if (typeof meta.changes === 'object') {
+      changesList = Object.entries(meta.changes).map(([k, v]) => ({
+        field: v.label || v.field || k,
+        oldValue: v.old !== undefined ? v.old : v.oldValue,
+        newValue: v.new !== undefined ? v.new : v.newValue
+      }));
+    }
+  }
+  if (!changesList.length && (String(l.action).includes('PRODUCT_') || String(l.action).includes('USER_') || String(l.action).includes('PRICE_'))) {
+    changesList = parseAuditProductChanges(l).map(c => ({
+      field: c.field,
+      oldValue: c.oldVal,
+      newValue: c.newVal
+    }));
+  }
+
   const saleItemsList = (meta && Array.isArray(meta.items) && meta.items.length > 0) ? meta.items : [];
   const returnedItemsList = (meta && Array.isArray(meta.returnedItems) && meta.returnedItems.length > 0) ? meta.returnedItems : [];
+
+  // Specialized activity layouts in modal
+  let specializedSectionHtml = '';
+
+  if (l.action === 'STOCK_THRESHOLD_CHANGE') {
+    const t = parseAuditThreshold(l);
+    const prevPairs = parseThresholdBreakdownPairs(t.prevBreakdown);
+    const nextPairs = parseThresholdBreakdownPairs(t.newBreakdown);
+    const breakdownPairs = nextPairs.length ? nextPairs : prevPairs;
+
+    specializedSectionHtml = `
+      <div style="margin-top:12px;">
+        <div class="audit-detail-section-label" style="margin-bottom:8px;">📦 Minimum Stock Threshold Tracking</div>
+        <div class="audit-card-pair" style="margin-bottom:12px;">
+          <div class="audit-val-card" style="padding:10px 14px;">
+            <div class="audit-val-card-lbl" style="font-size:11px;">Previous Threshold</div>
+            <div class="audit-val-card-num" style="font-size:16px;">${escapeHtml(t.prevTotal || l.old_value || '—')}</div>
+          </div>
+          <div class="audit-val-card is-updated" style="padding:10px 14px;">
+            <div class="audit-val-card-lbl" style="font-size:11px;">New Threshold</div>
+            <div class="audit-val-card-num" style="font-size:16px;">${escapeHtml(t.newTotal || l.new_value || '—')}</div>
+          </div>
+        </div>
+        ${breakdownPairs.length > 0 ? `
+        <div class="audit-section-subhead" style="margin-bottom:6px;">Size Breakdown</div>
+        <table class="audit-size-table">
+          <thead>
+            <tr>
+              <th>Container Size</th>
+              <th>Minimum Stock Threshold</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${breakdownPairs.map(p => {
+      const isNewSize = prevPairs.length > 0 && !prevPairs.some(prev => prev.size === p.size);
+      return `
+                <tr class="${isNewSize ? 'is-new-size' : ''}">
+                  <td>
+                    <span class="audit-size-pill ${isNewSize ? 'is-added' : ''}">${escapeHtml(p.size)}</span>
+                    ${isNewSize ? '<span class="audit-pill-tag">NEW</span>' : ''}
+                  </td>
+                  <td>
+                    <span class="${isNewSize ? 'audit-val-updated' : ''}">${escapeHtml(p.cans || '—')}</span>
+                  </td>
+                </tr>`;
+    }).join('')}
+          </tbody>
+        </table>` : ''}
+      </div>`;
+  } else if (l.action === 'CONTAINER_SIZE_ADD' || l.action === 'CONTAINER_SIZE_REMOVE' || l.action === 'PRODUCT_SIZE_APPROVE') {
+    const c = parseAuditContainerSizes(l);
+    specializedSectionHtml = `
+      <div style="margin-top:12px;">
+        <div class="audit-detail-section-label" style="margin-bottom:8px;">🎨 Container Size Specification</div>
+        <div class="audit-highlight-banner" style="margin-bottom:10px;">
+          <span class="audit-lbl">Newly Added Size:</span>
+          <span class="audit-size-pill is-added" style="font-size:12px; padding:3px 10px;">+ ${escapeHtml(c.added)}</span>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:10px;">
+          <div class="audit-detail-card">
+            <div class="audit-size-section-label" style="margin-bottom:6px;">Existing Sizes</div>
+            <div class="audit-badges-wrap">
+              ${c.existingList.length ? c.existingList.map(sz => `<span class="audit-size-pill">${escapeHtml(sz)}</span>`).join('') : '<span class="muted small">None</span>'}
+            </div>
+          </div>
+          <div class="audit-detail-card" style="border-color:#A7F3D0; background:#F0FDF4;">
+            <div class="audit-size-section-label" style="margin-bottom:6px; color:#065F46;">Updated Size List</div>
+            <div class="audit-badges-wrap">
+              ${c.newList.map(sz => {
+      const isAdded = c.addedList.includes(sz);
+      return `<span class="audit-size-pill ${isAdded ? 'is-added' : ''}">${escapeHtml(sz)}${isAdded ? '<span class="audit-pill-tag">NEW</span>' : ''}</span>`;
+    }).join('')}
+            </div>
+          </div>
+        </div>
+      </div>`;
+  } else if (l.action === 'STOCK_ADJUST' || l.action === 'STOCK_INCREASE' || l.action === 'STOCK_DECREASE' || l.action === 'STOCK_RECEIVE' || l.action === 'STOCK_DISPOSE') {
+    const s = parseAuditStockAdjustment(l);
+    specializedSectionHtml = `
+      <div style="margin-top:12px;">
+        <div class="audit-detail-section-label" style="margin-bottom:8px;">📦 Stock Quantity &amp; Movement Breakdown</div>
+        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:10px;">
+          <div class="audit-ba-pane audit-ba-old">
+            <div class="audit-ba-header">Previous Quantity</div>
+            <div class="audit-ba-content">${escapeHtml(s.prevQty)}</div>
+          </div>
+          <div class="audit-ba-pane" style="background:${s.isNeg ? '#FEF2F2' : '#ECFDF5'}; border:1px solid ${s.isNeg ? '#FECACA' : '#A7F3D0'};">
+            <div class="audit-ba-header" style="color:${s.isNeg ? '#991B1B' : '#065F46'};">Quantity Adjustment</div>
+            <div class="audit-ba-content" style="color:${s.isNeg ? '#B91C1C' : '#047857'}; font-weight:700;">${escapeHtml(s.adjQty)}</div>
+          </div>
+          <div class="audit-ba-pane audit-ba-new">
+            <div class="audit-ba-header">Final Quantity Balance</div>
+            <div class="audit-ba-content">${escapeHtml(s.finalQty)}</div>
+          </div>
+        </div>
+      </div>`;
+  } else if (l.action === 'UNAUTHORIZED_ACCESS') {
+    const moduleName = l.entity_name || l.entity || 'Restricted Module';
+    let attemptedRole = l.old_value ? l.old_value.replace(/^Role:\s*/i, '') : (l.user_role || 'staff');
+    if (!attemptedRole && detailsDisplay.match(/\((staff|cashier|unauthenticated|[^\)]+)\)/i)) {
+      attemptedRole = RegExp.$1;
+    }
+    specializedSectionHtml = `
+      <div style="margin-top:12px;">
+        <div class="audit-detail-section-label" style="margin-bottom:8px;">🛡️ Security Access Control Resolution</div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:10px;">
+          <div class="audit-detail-card" style="border-left:3px solid #DC2626; background:#FEF2F2;">
+            <div class="audit-detail-label">Restricted Module Target</div>
+            <div style="font-size:14px; font-weight:700; color:#991B1B;">${escapeHtml(moduleName)}</div>
+          </div>
+          <div class="audit-detail-card">
+            <div class="audit-detail-label">Attempted Role / User</div>
+            <div style="font-size:13px; font-weight:600;">${escapeHtml(userName)} (${escapeHtml(attemptedRole)})</div>
+          </div>
+          <div class="audit-detail-card" style="border-left:3px solid #DC2626; background:#FEF2F2;">
+            <div class="audit-detail-label">Access Enforcement Result</div>
+            <div style="font-size:14px; font-weight:700; color:#DC2626;">Access Denied (Blocked)</div>
+          </div>
+        </div>
+      </div>`;
+  }
 
   const bodyHtml = `
     <div class="audit-detail-modal">
@@ -816,7 +1417,9 @@ function openAuditDetailModal(idx) {
         ` : ''}
       </div>
 
-      ${hasBeforeAfter ? `
+      ${specializedSectionHtml}
+
+      ${(hasBeforeAfter && !specializedSectionHtml && !changesList.length) ? `
       <div class="audit-before-after-box">
         <div class="audit-detail-section-label" style="margin-bottom:8px;">Before &amp; After Value Tracking</div>
         <div class="audit-before-after-grid">
@@ -833,14 +1436,14 @@ function openAuditDetailModal(idx) {
       </div>
       ` : ''}
 
-      ${changesList.length > 1 ? `
+      ${(changesList.length > 0 && !specializedSectionHtml) ? `
       <div style="margin-top:12px;">
-        <div class="audit-detail-section-label" style="margin-bottom:6px;">Detailed Field Breakdown (${changesList.length} changes)</div>
+        <div class="audit-detail-section-label" style="margin-bottom:6px;">Detailed Field Breakdown (${changesList.length} field change${changesList.length > 1 ? 's' : ''})</div>
         <div style="border:1px solid var(--line); border-radius:6px; overflow:hidden;">
           <table style="width:100%; font-size:12.5px;">
             <thead>
               <tr style="background:#F5F1E9;">
-                <th style="padding:7px 10px;">Field / Item</th>
+                <th style="padding:7px 10px;">Field / Attribute</th>
                 <th style="padding:7px 10px;">Previous Value</th>
                 <th style="padding:7px 10px;">New Value</th>
               </tr>
@@ -849,7 +1452,7 @@ function openAuditDetailModal(idx) {
               ${changesList.map(ch => `
                 <tr>
                   <td style="padding:6px 10px; font-weight:600;">${escapeHtml(ch.field || '')}</td>
-                  <td style="padding:6px 10px; color:#9B1C1C;">${escapeHtml(ch.oldValue != null ? String(ch.oldValue) : '—')}</td>
+                  <td style="padding:6px 10px; color:var(--ink);">${escapeHtml(ch.oldValue != null ? String(ch.oldValue) : '—')}</td>
                   <td style="padding:6px 10px; color:#03543F; font-weight:600;">${escapeHtml(ch.newValue != null ? String(ch.newValue) : '—')}</td>
                 </tr>
               `).join('')}
@@ -1048,8 +1651,7 @@ async function loadAuditLogs() {
         ${l.entity && l.entity !== entityText ? `<div class="muted small" style="font-size:11px;">${escapeHtml(l.entity)}</div>` : ''}
       </td>
       <td class="audit-details-cell">
-        <div class="audit-details-main">${refBadgeHtml}${escapeHtml(detailsText)}</div>
-        ${diffChipHtml}
+        ${renderAuditActivityDetails(l)}
       </td>
       <td class="right" style="white-space:nowrap;">
         <button type="button" class="btn ghost small audit-view-btn" onclick="openAuditDetailModal(${idx})" title="View complete activity details and before/after values">

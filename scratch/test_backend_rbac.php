@@ -26,7 +26,8 @@ $ctx = stream_context_create([
     ]
 ]);
 
-$response = file_get_contents('http://127.0.0.1/api/db.php', false, $ctx);
+$url = (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] != 80) ? 'http://127.0.0.1:' . $_SERVER['SERVER_PORT'] . '/api/db.php' : 'http://127.0.0.1:8000/api/db.php';
+$response = @file_get_contents($url, false, $ctx);
 $conn = getDBConnection();
 $chk = $conn->query("SELECT * FROM users WHERE id = 'u_test_unauth'")->fetch_assoc();
 

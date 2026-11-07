@@ -70,9 +70,11 @@ $res = $conn->query("SELECT id, po_number, total_amount, items_json FROM purchas
 $poMismatches = [];
 while ($r = $res->fetch_assoc()) {
     $items = json_decode($r['items_json'] ?? '[]', true) ?: [];
+    if (empty($items)) continue; // historical summary headers
     $sum = 0;
     foreach ($items as $it) {
-        $sum += (float)($it['total'] ?? (($it['qty'] ?? 0) * ($it['price'] ?? 0)));
+        $cost = (float)($it['unitCost'] ?? ($it['price'] ?? 0));
+        $sum += (float)($it['total'] ?? (($it['qty'] ?? 0) * $cost));
     }
     if (abs((float)$r['total_amount'] - $sum) > 0.05) {
         $poMismatches[] = ['id' => $r['id'], 'po' => $r['po_number'], 'total' => $r['total_amount'], 'sum' => $sum];

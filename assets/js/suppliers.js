@@ -485,7 +485,7 @@ function openSupplierDetailsModal(id) {
                     <tr>
                       <td style="font-family:'Space Grotesk',monospace; font-weight:700;">${escapeHtml(po.poNumber)}</td>
                       <td style="font-size:12px; color:var(--ink-soft);">${formatDateShort(po.orderDate)}</td>
-                      <td style="font-size:12px;">${items.length} item${items.length === 1 ? '' : 's'} (${totalCans} cans)</td>
+                      <td style="font-size:12px;">${items.length} item${items.length === 1 ? '' : 's'} (${totalCans} units)</td>
                       <td class="right" style="font-family:'Space Grotesk',monospace; font-weight:700; font-size:13px;">${peso(po.totalAmount)}</td>
                       <td>${stBadge}</td>
                       <td class="right">
