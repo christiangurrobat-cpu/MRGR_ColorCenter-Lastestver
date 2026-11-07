@@ -1124,8 +1124,13 @@ function printPO(id) {
     @page{size:A4 portrait;margin:12mm}
     @media print{body{padding:0}}
     </style></head><body>
-    <h1>Purchase Order: ${escapeHtml(po.poNumber)}</h1>
-    <h2>MRGR Color Center</h2>
+    <div style="display:flex; align-items:center; gap:14px; margin-bottom:16px;">
+      <img src="assets/images/logo.png" alt="MRGR Logo" style="width:50px; height:50px; border-radius:50%; object-fit:cover;">
+      <div>
+        <h1 style="margin:0 0 4px;">Purchase Order: ${escapeHtml(po.poNumber)}</h1>
+        <h2 style="margin:0; font-size:14px; color:#6B6259; font-weight:500;">MRGR Color Center</h2>
+      </div>
+    </div>
     <div class="meta">
       <strong>Supplier:</strong> ${escapeHtml(po.supplierName)}<br>
       <strong>Date:</strong> ${formatDateTime(po.orderDate)}<br>

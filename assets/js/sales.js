@@ -3146,6 +3146,7 @@ function showReturnVoucherModal(saleId, voucherId) {
   openModal('📋 Return &amp; Exchange Voucher', `
     <div id="printable-return-slip" style="background:#fff; border:1px solid var(--line); border-radius:var(--radius-sm); padding:18px 20px; font-family:'Inter',system-ui,sans-serif; color:#26211C; font-size:12.5px;">
       <div style="text-align:center; padding-bottom:12px; border-bottom:1px dashed var(--line); margin-bottom:12px;">
+        <img src="assets/images/logo.png" alt="MRGR Logo" style="width:44px; height:44px; border-radius:50%; margin:0 auto 8px auto; display:block; object-fit:cover;">
         <div style="font-family:'Space Grotesk'; font-weight:700; font-size:16px; letter-spacing:-0.01em;">MRGR COLOR CENTER</div>
         <div class="muted small">Official Return, Refund &amp; Exchange Slip</div>
         <div style="display:inline-block; margin-top:8px; padding:4px 12px; background:#FBEAE8; border:1px solid #F3C4BF; border-radius:4px; font-family:'Space Grotesk'; font-weight:700; font-size:13px; color:var(--danger);">

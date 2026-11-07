@@ -321,7 +321,7 @@ function shell() {
 <div class="sidebar-backdrop" onclick="toggleSidebarCollapse(true)"></div>
 <div class="sidebar" id="app-sidebar">
   <div class="brand">
-    <div class="swatch-strip"><span class="swatch sw-teal"></span><span class="swatch sw-orange"></span><span class="swatch sw-mustard"></span></div>
+    <img src="assets/images/logo.png" alt="MRGR Color Center" class="brand-logo" width="40" height="40">
     <div class="brand-text">MRGR<br><small>COLOR CENTER</small></div>
   </div>
   <div class="nav-list">${navHtml}</div>
@@ -1667,7 +1667,7 @@ function loginScreen() {
   <div class="login-wrap">
 <div class="login-side">
   <div class="brand-mark">
-    <div class="swatch-strip"><span class="swatch sw-teal"></span><span class="swatch sw-orange"></span><span class="swatch sw-mustard"></span><span class="swatch sw-sage"></span></div>
+    <img src="assets/images/logo.png" alt="MRGR Color Center" class="login-brand-logo" width="48" height="48">
     <div class="brand-name">MRGR COLOR CENTER</div>
   </div>
   <div>
@@ -1687,8 +1687,11 @@ function loginScreen() {
 </div>
 <div class="login-form-side">
   <div class="login-card">
-    <h2>Sign in</h2>
-    <p class="muted small" style="margin-bottom:18px;">Use your MRGR staff account to continue.</p>
+    <div class="login-card-header">
+      <img src="assets/images/logo.png" alt="MRGR Color Center" class="login-card-logo" width="68" height="68">
+      <h2>Sign in</h2>
+    </div>
+    <p class="muted small" style="margin-bottom:18px; text-align:center;">Use your MRGR staff account to continue.</p>
     <div id="login-error-slot"></div>
     <form onsubmit="return handleLogin(event)">
       <div class="field">

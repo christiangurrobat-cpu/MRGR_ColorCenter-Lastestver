@@ -1582,6 +1582,7 @@ function showReceipt(sale) {
   const bodyHtml = `
   <div id="printable-receipt" class="pos-receipt-card">
     <div class="pos-receipt-header">
+      <img src="assets/images/logo.png" alt="MRGR Logo" style="width:48px; height:48px; border-radius:50%; margin:0 auto 8px auto; display:block; object-fit:cover;">
       <div class="pos-receipt-title">MRGR COLOR CENTER</div>
       <div class="pos-receipt-sub">Paint &amp; Color Formulation Specialists</div>
       <div class="pos-receipt-sub" style="font-size:11px; margin-top:2px;">Official Sales Receipt</div>
