@@ -2,6 +2,7 @@
    10. POINT OF SALE
    ============================================================ */
 let posCategoryFilter = '';
+let posSearchQuery = '';
 let posCurrentPage = 1;
 const POS_PAGE_SIZE = 8;
 
@@ -9,6 +10,7 @@ function setPosPage(newPage) {
   const target = parseInt(newPage, 10);
   if (isNaN(target)) return;
   posCurrentPage = target;
+  if (typeof syncRouteState === 'function') syncRouteState({ push: false });
   renderPosProductList();
 }
 
@@ -16,20 +18,30 @@ function setPosCategoryFilter(cat) {
   posCategoryFilter = cat;
   const pills = document.querySelectorAll('.pos-cat-pill');
   pills.forEach(p => p.classList.toggle('active', p.dataset.cat === cat));
+  if (typeof syncRouteState === 'function') syncRouteState({ push: false });
   renderPosProductList();
 }
 
 function clearPosSearch() {
+  posSearchQuery = '';
   const input = document.getElementById('pos-search');
   if (input) { input.value = ''; input.focus(); }
   posCurrentPage = 1;
+  if (typeof syncRouteState === 'function') syncRouteState({ push: false });
   renderPosProductList();
+}
+
+function onPosCustomerNameInput(val) {
+  currentSaleCustomerName = typeof val === 'string' ? val : '';
 }
 
 function clearPosCart() {
   if (!cart.length) return;
   if (!confirm('Are you sure you want to clear all items from Current Sale?')) return;
   cart = [];
+  currentSaleCustomerName = '';
+  const custInp = document.getElementById('pos-customer-name');
+  if (custInp) custInp.value = '';
   refreshCartUI();
   showToast('Current Sale cart has been cleared.', 'info');
 }
@@ -63,7 +75,7 @@ function posPage() {
           <!-- Search Box with Clear Button -->
           <div class="pos-search-wrap">
             <span class="pos-search-icon">🔍</span>
-            <input id="pos-search" type="text" class="pos-search-input" placeholder="Search by paint name, brand, color, or size…" oninput="renderPosProductList()">
+            <input id="pos-search" type="text" class="pos-search-input" placeholder="Search by paint name, brand, color, or size…" value="${escapeHtml(posSearchQuery)}" oninput="renderPosProductList()">
             <button type="button" class="pos-search-clear" onclick="clearPosSearch()" title="Clear search">✕</button>
           </div>
 
@@ -104,6 +116,17 @@ function posPage() {
         <div class="panel-body">
           <div id="cart-lines">${cartLinesHtml()}</div>
 
+          <div class="pos-customer-field">
+            <label for="pos-customer-name" class="pos-customer-label">
+              <span>Customer Name (Optional)</span>
+            </label>
+            <input type="text" id="pos-customer-name" class="pos-customer-input" maxlength="150"
+              placeholder="Enter customer name (optional)"
+              value="${escapeHtml(currentSaleCustomerName)}"
+              oninput="onPosCustomerNameInput(this.value)"
+              autocomplete="off">
+          </div>
+
           <div id="cart-totals">${cartTotalsHtml()}</div>
 
           <button id="btn-complete-sale" class="btn block" onclick="completeSale()" disabled>
@@ -119,8 +142,10 @@ function posPage() {
 }
 
 function renderPosProductList() {
+  closeAllPosMoreMenus();
   const searchInput = document.getElementById('pos-search');
-  const q = (searchInput ? searchInput.value : '').toLowerCase().trim();
+  if (searchInput) posSearchQuery = searchInput.value;
+  const q = (posSearchQuery || '').toLowerCase().trim();
   let list = activeProducts();
 
   if (posCategoryFilter) {
@@ -229,23 +254,7 @@ function renderPosProductList() {
       </div>
       <div class="pos-size-picker">
         <div class="pos-size-buttons">
-          ${productSizes(p).map(s => {
-      const variant = productSizeVariantBySize(p, s);
-      const hasBreakdown = productHasCanBreakdown(p);
-      const canCount = productCanCount(p, s);
-      const inStock = hasBreakdown ? (canCount > 0 && p.stock >= s) : (p.stock >= s);
-      const countLabel = hasBreakdown ? `(${canCount})` : '';
-      const canPrice = variant ? variant.pricePerCan : (p.price * s);
-      const priceLabel = peso(canPrice);
-      return `
-              <button type="button" 
-                      class="pos-size-btn ${inStock ? '' : 'disabled'}" 
-                      ${!inStock ? `disabled title="Out of stock for ${fmtSize(s)}"` : `title="Add 1x ${fmtSize(s)} to cart — ${priceLabel}"`}
-                      onclick="addSizeToCart('${p.id}', ${s})">
-                <span class="ps-size-tag">+ ${fmtSize(s)}</span>
-                <span class="ps-stock-tag">${inStock ? countLabel : '(0)'}</span>
-              </button>`;
-    }).join('')}
+          ${renderPosProductSizes(p)}
         </div>
         <span class="pos-size-hint">${isOut ? 'Currently unavailable' : 'Click size to add to cart'}</span>
       </div>
@@ -304,6 +313,165 @@ function renderPosProductList() {
         </div>
       </div>`;
   }
+}
+
+/**
+ * Renders size selection buttons for a product row in POS Product Catalog.
+ * - Displays a maximum of 4 size buttons per product row.
+ * - If >4 sizes, shows first 4 and provides a "+ More Sizes" dropdown for the remaining sizes.
+ * - Out-of-stock sizes remain visible but disabled with distinct clear styling.
+ * - All sizes remain accessible.
+ */
+function renderPosProductSizes(p) {
+  const allSizes = productSizes(p);
+  const MAX_VISIBLE_SIZES = 4;
+  const visibleSizes = allSizes.slice(0, MAX_VISIBLE_SIZES);
+  const extraSizes = allSizes.length > MAX_VISIBLE_SIZES ? allSizes.slice(MAX_VISIBLE_SIZES) : [];
+
+  const renderBtn = (s) => {
+    const variant = productSizeVariantBySize(p, s);
+    const hasBreakdown = productHasCanBreakdown(p);
+    const canCount = productCanCount(p, s);
+    const inStock = hasBreakdown ? (canCount > 0 && p.stock >= s) : (p.stock >= s);
+    const displayCount = hasBreakdown ? canCount : Math.floor(p.stock / s);
+    const countLabel = `(${inStock ? displayCount : 0})`;
+    const canPrice = variant ? variant.pricePerCan : (p.price * s);
+    const priceLabel = peso(canPrice);
+
+    return `
+      <button type="button" 
+              class="pos-size-btn ${inStock ? 'in-stock' : 'disabled out-of-stock'}" 
+              ${!inStock ? `disabled title="Out of stock for ${fmtSize(s)} (0 available)"` : `title="Add 1x ${fmtSize(s)} to cart — ${priceLabel}"`}
+              onclick="addSizeToCart('${p.id}', ${s})">
+        <span class="ps-size-tag">${fmtSize(s)}</span>
+        <span class="ps-stock-tag">${countLabel}</span>
+      </button>`;
+  };
+
+  let html = visibleSizes.map(renderBtn).join('');
+
+  if (extraSizes.length > 0) {
+    const moreAvailableCount = extraSizes.filter(s => {
+      const hasBreakdown = productHasCanBreakdown(p);
+      const canCount = productCanCount(p, s);
+      return hasBreakdown ? (canCount > 0 && p.stock >= s) : (p.stock >= s);
+    }).length;
+
+    html += `
+      <div class="pos-more-sizes-wrap" id="pos-more-wrap-${p.id}">
+        <button type="button" 
+                class="pos-size-btn pos-more-sizes-btn" 
+                id="pos-more-btn-${p.id}"
+                onclick="togglePosMoreSizesMenu(event, '${p.id}')"
+                aria-haspopup="true"
+                aria-expanded="false"
+                title="${extraSizes.length} more size${extraSizes.length > 1 ? 's' : ''} available (${moreAvailableCount} in stock)">
+          <span class="ps-more-tag">+ More Sizes</span>
+          <span class="ps-more-caret">▾</span>
+        </button>
+        <div class="pos-more-sizes-menu" id="pos-more-menu-${p.id}" role="menu" onclick="event.stopPropagation()">
+          <div class="pos-more-menu-header">
+            <span class="pos-more-header-title">More Sizes</span>
+            <span class="pos-more-header-count">${extraSizes.length} option${extraSizes.length > 1 ? 's' : ''}</span>
+          </div>
+          <div class="pos-more-menu-items">
+            ${extraSizes.map(s => {
+      const variant = productSizeVariantBySize(p, s);
+      const hasBreakdown = productHasCanBreakdown(p);
+      const canCount = productCanCount(p, s);
+      const inStock = hasBreakdown ? (canCount > 0 && p.stock >= s) : (p.stock >= s);
+      const displayCount = hasBreakdown ? canCount : Math.floor(p.stock / s);
+      const countLabel = `(${inStock ? displayCount : 0})`;
+      const canPrice = variant ? variant.pricePerCan : (p.price * s);
+      const priceLabel = peso(canPrice);
+      return `
+              <button type="button" 
+                      role="menuitem"
+                      class="pos-more-item ${inStock ? 'in-stock' : 'disabled out-of-stock'}" 
+                      ${!inStock ? `disabled title="Out of stock for ${fmtSize(s)} (0 available)"` : `title="Add 1x ${fmtSize(s)} to cart — ${priceLabel}"`}
+                      onclick="selectPosMoreSize('${p.id}', ${s})">
+                <div class="pos-more-item-main">
+                  <span class="pos-more-item-size">${fmtSize(s)}</span>
+                  <span class="pos-more-item-stock ${inStock ? 'in-stock' : 'out-of-stock'}">${countLabel}</span>
+                </div>
+                <div class="pos-more-item-side">
+                  <span class="pos-more-item-price">${priceLabel}</span>
+                  <span class="pos-more-item-action ${inStock ? 'can-add' : 'is-out'}">${inStock ? '+ Add' : 'Out'}</span>
+                </div>
+              </button>`;
+    }).join('')}
+          </div>
+          <div class="pos-more-menu-footer">
+            <span class="pos-more-footer-note">All sizes: ${allSizes.map(s => fmtSize(s)).join(', ')}</span>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  return html;
+}
+
+function togglePosMoreSizesMenu(event, productId) {
+  if (event) {
+    event.stopPropagation();
+    event.preventDefault();
+  }
+  const menu = document.getElementById(`pos-more-menu-${productId}`);
+  const btn = document.getElementById(`pos-more-btn-${productId}`);
+  const row = btn ? btn.closest('.pos-product') : null;
+  const isOpen = menu && menu.classList.contains('open');
+
+  closeAllPosMoreMenus();
+
+  if (!isOpen && menu && btn) {
+    menu.classList.add('open');
+    btn.classList.add('active');
+    btn.setAttribute('aria-expanded', 'true');
+    if (row) row.classList.add('dropdown-active');
+
+    // Smart flip: open upwards if close to window bottom
+    const rect = btn.getBoundingClientRect();
+    const menuHeight = menu.offsetHeight || 190;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceBelow < menuHeight + 16 && rect.top > menuHeight) {
+      menu.classList.add('open-up');
+    } else {
+      menu.classList.remove('open-up');
+    }
+  }
+}
+
+function selectPosMoreSize(productId, size) {
+  closeAllPosMoreMenus();
+  addSizeToCart(productId, size);
+}
+
+function closeAllPosMoreMenus() {
+  document.querySelectorAll('.pos-more-sizes-menu.open').forEach(m => {
+    m.classList.remove('open');
+    m.classList.remove('open-up');
+  });
+  document.querySelectorAll('.pos-more-sizes-btn.active').forEach(b => {
+    b.classList.remove('active');
+    b.setAttribute('aria-expanded', 'false');
+  });
+  document.querySelectorAll('.pos-product.dropdown-active').forEach(r => {
+    r.classList.remove('dropdown-active');
+  });
+}
+
+if (typeof window !== 'undefined' && !window._posMoreSizesListenersAttached) {
+  window._posMoreSizesListenersAttached = true;
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.pos-more-sizes-wrap')) {
+      closeAllPosMoreMenus();
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeAllPosMoreMenus();
+    }
+  });
 }
 
 function addSizeToCart(productId, size = 1) {
@@ -561,7 +729,7 @@ function refreshCartUI() {
     try {
       selectionStart = activeEl.selectionStart;
       selectionEnd = activeEl.selectionEnd;
-    } catch (e) {}
+    } catch (e) { }
   }
 
   const cartLinesEl = document.getElementById('cart-lines');
@@ -589,7 +757,7 @@ function refreshCartUI() {
         if (selectionStart !== null && selectionEnd !== null) {
           nextInput.setSelectionRange(selectionStart, selectionEnd);
         }
-      } catch (e) {}
+      } catch (e) { }
     }
   }
 }
@@ -640,18 +808,47 @@ function cartLinesHtml() {
 
 function cartTotals() {
   const subtotal = Number(cart.reduce((t, c) => t + (Number(c.lineTotal) || 0), 0).toFixed(2));
-  const total = subtotal;
-  return { subtotal, total };
+  const isEligible = subtotal >= 2500;
+  const discountPct = isEligible ? 10 : 0;
+  const discountAmount = isEligible ? Number((subtotal * 0.10).toFixed(2)) : 0;
+  const total = isEligible ? Number((subtotal - discountAmount).toFixed(2)) : subtotal;
+  const neededToQualify = isEligible ? 0 : Number((2500 - subtotal).toFixed(2));
+  return {
+    subtotal,
+    discountPct,
+    discountPercentage: discountPct,
+    discountAmount,
+    discount: discountAmount,
+    isEligible,
+    neededToQualify,
+    total
+  };
 }
 
 function cartTotalsHtml() {
   const t = cartTotals();
+  const hasItems = cart.length > 0;
   return `
   <div class="pos-payment-card">
     <div class="cart-total-row">
       <span class="muted">Subtotal</span>
       <span style="font-weight:600; font-family:'Space Grotesk',monospace;">${peso(t.subtotal)}</span>
     </div>
+    ${t.isEligible ? `
+      <div class="cart-total-row pos-discount-row">
+        <span>Discount (10%)</span>
+        <span style="font-weight:700; font-family:'Space Grotesk',monospace;">-${peso(t.discountAmount)}</span>
+      </div>
+      <div class="pos-promo-indicator qualified">
+        <span>🎉</span>
+        <span>10% Discount Applied!</span>
+      </div>
+    ` : (hasItems ? `
+      <div class="pos-promo-indicator hint">
+        <span>💡</span>
+        <span>Add ${peso(t.neededToQualify)} more to qualify for a 10% discount.</span>
+      </div>
+    ` : '')}
     <div class="cart-total-row grand">
       <span>Total Due</span>
       <span class="total-amount">${peso(t.total)}</span>
@@ -738,7 +935,7 @@ function promptCustomerPurchaseConfirmation(data) {
     window.removeEventListener('keydown', posConfirmKeyHandler);
     window.addEventListener('keydown', posConfirmKeyHandler);
 
-    const { cashierName, items, totals } = data;
+    const { cashierName, customerName, items, totals } = data;
 
     const totalCount = items.reduce((sum, i) => sum + (Number(i.qty) || 1), 0);
     const totalLiters = items.reduce((sum, i) => {
@@ -820,6 +1017,16 @@ function promptCustomerPurchaseConfirmation(data) {
         </tr>`;
     }).join('');
 
+    const totalDue = Number(totals.total) || 0;
+    const commonBills = [20, 50, 100, 200, 500, 1000, 1500, 2000, 3000, 5000, 10000];
+    const nextBills = commonBills.filter(b => b > totalDue);
+    const next100 = Math.ceil(totalDue / 100) * 100;
+    if (next100 > totalDue && !nextBills.includes(next100)) nextBills.unshift(next100);
+    const next500 = Math.ceil(totalDue / 500) * 500;
+    if (next500 > totalDue && !nextBills.includes(next500)) nextBills.push(next500);
+    nextBills.sort((a, b) => a - b);
+    const quickBills = [...new Set(nextBills)].slice(0, 4);
+
     const bodyHtml = `
       <div class="pos-confirm-wrapper">
         <div class="pos-confirm-notice">
@@ -835,6 +1042,7 @@ function promptCustomerPurchaseConfirmation(data) {
         <div style="background:#FAF8F5; border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; font-size:12.5px;">
           <div>
             <span class="muted">Cashier:</span> <strong>${escapeHtml(cashierName)}</strong>
+            ${((customerName || '').trim()) ? `<span style="margin-left:14px;"><span class="muted">Customer:</span> <strong>${escapeHtml(customerName.trim())}</strong></span>` : ''}
           </div>
           <div>
             <span class="muted">Total Volume:</span> <span class="badge ok" style="font-size:11.5px; padding:2px 8px; font-weight:700;">${totalCount} item${totalCount === 1 ? '' : 's'} (${formatStock(totalLiters)} L total)</span>
@@ -858,20 +1066,68 @@ function promptCustomerPurchaseConfirmation(data) {
           </table>
         </div>
 
-        <div class="pos-confirm-payment-box">
-          <div style="display:flex; justify-content:space-between; font-size:12.5px; padding:3px 0;">
+        <div class="pos-confirm-payment-box" style="background:#FAF8F5; border:1.5px solid var(--line); border-radius:10px; padding:14px; margin-top:14px;">
+          <div style="display:flex; justify-content:space-between; font-size:13px; padding:3px 0;">
             <span class="muted">Subtotal:</span>
-            <span style="font-weight:600;">${peso(totals.subtotal)}</span>
+            <span style="font-weight:600; font-family:'Space Grotesk',monospace;">${peso(totals.subtotal)}</span>
           </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-top:1px dashed var(--line); margin-top:4px;">
-            <span style="font-size:13.5px; font-weight:700; color:var(--ink);">Total Due:</span>
-            <span style="font-size:18px; font-weight:800; font-family:'Space Grotesk',monospace; color:var(--teal);">${peso(totals.total)}</span>
+          ${(totals.discountAmount > 0) ? `
+            <div style="display:flex; justify-content:space-between; font-size:13px; padding:3px 0; color:var(--teal, #1F6F6B);">
+              <span>Discount (${totals.discountPct}%):</span>
+              <span style="font-weight:700; font-family:'Space Grotesk',monospace;">-${peso(totals.discountAmount)}</span>
+            </div>
+            <div style="display:inline-flex; align-items:center; gap:5px; background:#EDF5F4; border:1px solid #C4DFDC; color:#1F6F6B; padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700; margin:4px 0 2px;">
+              <span>🎉</span>
+              <span>10% Discount Applied!</span>
+            </div>
+          ` : ''}
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-top:1px dashed var(--line); margin-top:6px;">
+            <span style="font-size:15px; font-weight:700; color:var(--ink);">Total Amount Due:</span>
+            <span id="pos-confirm-total-due" data-amount="${totalDue}" style="font-size:22px; font-weight:800; font-family:'Space Grotesk',monospace; color:var(--teal);">${peso(totalDue)}</span>
+          </div>
+
+          <!-- Cash Payment Section (Cash Only Store Policy) -->
+          <div style="margin-top:12px; padding-top:12px; border-top:2px solid #EBE4D8;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+              <label for="pos-cash-tendered-input" style="font-weight:700; font-size:13px; color:var(--ink); display:flex; align-items:center; gap:6px;">
+                <span>💵 Cash Tendered (Halagang Ibinayad):</span>
+              </label>
+              <span class="badge" style="background:#EDF5F4; color:#1F6F6B; border:1px solid #C4DFDC; font-size:11px; font-weight:700;">STORE POLICY: CASH ONLY</span>
+            </div>
+
+            <div style="position:relative; margin-bottom:8px;">
+              <span style="position:absolute; left:12px; top:50%; transform:translateY(-50%); font-weight:700; font-size:18px; color:var(--ink-soft);">₱</span>
+              <input type="number" id="pos-cash-tendered-input" step="any" min="0" placeholder="0.00"
+                style="width:100%; padding:10px 14px 10px 32px; font-size:18px; font-weight:700; font-family:'Space Grotesk',monospace; border:2px solid var(--teal); border-radius:8px; box-sizing:border-box; outline:none;"
+                oninput="onPosCashTenderedChange()" onkeydown="onPosCashTenderedKey(event)">
+            </div>
+
+            <!-- Quick Cash Buttons -->
+            <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px;">
+              <span class="muted small" style="align-self:center; margin-right:4px; font-size:11px;">Quick Cash:</span>
+              <button type="button" class="btn ghost small" style="padding:4px 10px; font-size:12px; font-weight:700; border:1px solid var(--teal); background:#EDF5F4; color:var(--teal);"
+                onclick="setPosQuickCash(${totalDue})">
+                Exact (${peso(totalDue)})
+              </button>
+              ${quickBills.map(b => `
+                <button type="button" class="btn ghost small" style="padding:4px 10px; font-size:12px; font-weight:600; border:1px solid var(--line); background:#fff;"
+                  onclick="setPosQuickCash(${b})">
+                  ${peso(b)}
+                </button>
+              `).join('')}
+            </div>
+
+            <!-- Real-time Change Feedback Banner -->
+            <div id="pos-change-banner" style="background:#FFF0EE; border:1.5px solid #F0C4BF; border-radius:8px; padding:10px 14px; display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-size:13px; font-weight:600; color:#C1443D;" id="pos-change-label">⚠️ Please enter cash tendered</span>
+              <span id="pos-change-val" style="font-size:18px; font-weight:800; font-family:'Space Grotesk',monospace; color:#C1443D;">₱0.00</span>
+            </div>
           </div>
         </div>
 
-        <div style="font-size:12px; color:var(--ink-soft); display:flex; align-items:center; gap:8px; padding:2px 4px;">
+        <div style="font-size:12px; color:var(--ink-soft); display:flex; align-items:center; gap:8px; padding:6px 4px 2px;">
           <span style="color:var(--teal); font-weight:bold; font-size:14px;">✔</span>
-          <span>Click <b>Confirm &amp; Finalize Sale</b> if all items and amounts are verified. Click <b>Edit / Modify Cart</b> to make adjustments.</span>
+          <span>Ensure payment is received and change is counted before finalizing transaction.</span>
         </div>
       </div>
     `;
@@ -880,21 +1136,102 @@ function promptCustomerPurchaseConfirmation(data) {
       <button type="button" class="btn secondary" id="btn-cancel-pos-confirm" onclick="cancelPosConfirm()" style="padding:10px 16px;">
         ✕ Edit / Modify Cart
       </button>
-      <button type="button" class="btn" id="btn-submit-pos-confirm" onclick="acceptPosConfirm()" style="background:linear-gradient(135deg, #1F6F6B 0%, #165653 100%); font-weight:700; padding:10px 22px; font-size:14px; box-shadow:0 3px 8px rgba(31,111,107,0.3);">
+      <button type="button" class="btn" id="btn-submit-pos-confirm" onclick="acceptPosConfirm()" disabled style="background:linear-gradient(135deg, #1F6F6B 0%, #165653 100%); font-weight:700; padding:10px 22px; font-size:14px; box-shadow:0 3px 8px rgba(31,111,107,0.3); opacity:0.5; cursor:not-allowed;">
         ✓ Confirm &amp; Finalize Sale
       </button>
     `;
 
-    openModal('🛒 Confirm Purchase', bodyHtml, footHtml, 'pos-confirm-modal');
+    openModal('🛒 Confirm Purchase & Cash Payment', bodyHtml, footHtml, 'pos-confirm-modal');
 
     setTimeout(() => {
-      const btn = document.getElementById('btn-submit-pos-confirm');
-      if (btn) btn.focus();
-    }, 60);
+      const input = document.getElementById('pos-cash-tendered-input');
+      if (input) input.focus();
+    }, 80);
   });
 }
 
+function onPosCashTenderedChange() {
+  const totalEl = document.getElementById('pos-confirm-total-due');
+  const inputEl = document.getElementById('pos-cash-tendered-input');
+  const bannerEl = document.getElementById('pos-change-banner');
+  const labelEl = document.getElementById('pos-change-label');
+  const valEl = document.getElementById('pos-change-val');
+  const submitBtn = document.getElementById('btn-submit-pos-confirm');
+  if (!totalEl || !inputEl || !bannerEl || !labelEl || !valEl || !submitBtn) return;
+
+  const total = Number(totalEl.dataset.amount) || 0;
+  const rawVal = inputEl.value.trim();
+  const tendered = Number(rawVal);
+
+  if (rawVal === '' || isNaN(tendered) || tendered <= 0) {
+    bannerEl.style.background = '#FFF0EE';
+    bannerEl.style.borderColor = '#F0C4BF';
+    labelEl.style.color = '#C1443D';
+    labelEl.innerHTML = '⚠️ Please enter cash tendered';
+    valEl.style.color = '#C1443D';
+    valEl.textContent = '₱0.00';
+    submitBtn.disabled = true;
+    submitBtn.style.opacity = '0.5';
+    submitBtn.style.cursor = 'not-allowed';
+    return;
+  }
+
+  const change = Number((tendered - total).toFixed(2));
+
+  if (change < 0) {
+    const lacking = Math.abs(change);
+    bannerEl.style.background = '#FFF0EE';
+    bannerEl.style.borderColor = '#F0C4BF';
+    labelEl.style.color = '#C1443D';
+    labelEl.innerHTML = `⚠️ Insufficient Cash (Shortage)`;
+    valEl.style.color = '#C1443D';
+    valEl.textContent = `-${peso(lacking)}`;
+    submitBtn.disabled = true;
+    submitBtn.style.opacity = '0.5';
+    submitBtn.style.cursor = 'not-allowed';
+  } else {
+    bannerEl.style.background = '#EDF5F4';
+    bannerEl.style.borderColor = '#C4DFDC';
+    labelEl.style.color = '#1F6F6B';
+    labelEl.innerHTML = `✓ Change Due:`;
+    valEl.style.color = '#1F6F6B';
+    valEl.textContent = peso(change);
+    submitBtn.disabled = false;
+    submitBtn.style.opacity = '1';
+    submitBtn.style.cursor = 'pointer';
+  }
+}
+
+function setPosQuickCash(amt) {
+  const inputEl = document.getElementById('pos-cash-tendered-input');
+  if (!inputEl) return;
+  inputEl.value = Number(amt).toFixed(2);
+  onPosCashTenderedChange();
+  inputEl.focus();
+}
+
+function onPosCashTenderedKey(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const submitBtn = document.getElementById('btn-submit-pos-confirm');
+    if (submitBtn && !submitBtn.disabled) {
+      acceptPosConfirm();
+    }
+  }
+}
+
 function acceptPosConfirm() {
+  const inputEl = document.getElementById('pos-cash-tendered-input');
+  const totalEl = document.getElementById('pos-confirm-total-due');
+  const total = totalEl ? (Number(totalEl.dataset.amount) || 0) : 0;
+  const tendered = inputEl ? Number(inputEl.value.trim() || 0) : 0;
+  if (tendered < total) {
+    showToast('Cannot complete sale: Cash tendered is less than total amount due.', 'error');
+    if (inputEl) inputEl.focus();
+    return;
+  }
+  const change = Number((tendered - total).toFixed(2));
+
   window.removeEventListener('keydown', posConfirmKeyHandler);
   const btn = document.getElementById('btn-submit-pos-confirm');
   if (btn) {
@@ -904,8 +1241,9 @@ function acceptPosConfirm() {
   if (typeof posConfirmPromiseResolve === 'function') {
     const fn = posConfirmPromiseResolve;
     posConfirmPromiseResolve = null;
-    fn(true);
+    fn({ confirmed: true, cashTendered: tendered, changeAmount: change, paymentMethod: 'Cash' });
   }
+  closeModal();
 }
 
 function cancelPosConfirm() {
@@ -913,7 +1251,7 @@ function cancelPosConfirm() {
   if (typeof posConfirmPromiseResolve === 'function') {
     const fn = posConfirmPromiseResolve;
     posConfirmPromiseResolve = null;
-    fn(false);
+    fn({ confirmed: false });
   }
   closeModal();
 }
@@ -974,26 +1312,44 @@ async function completeSale() {
       }
     }
 
-    // Prompt cashier to confirm if purchase is correct
-    const isConfirmed = await promptCustomerPurchaseConfirmation({
+    // Prompt cashier to confirm if purchase is correct and collect cash payment
+    const custInput = document.getElementById('pos-customer-name');
+    const rawCustomerName = custInput ? custInput.value : currentSaleCustomerName;
+    const cleanCustomerName = (rawCustomerName || '').trim().slice(0, 150);
+    const customerName = cleanCustomerName !== '' ? cleanCustomerName : null;
+
+    const confirmRes = await promptCustomerPurchaseConfirmation({
       cashierName: (currentUser && currentUser.name) || 'Cashier',
+      customerName: customerName || '',
       items,
       totals: t
     });
 
-    if (!isConfirmed) {
+    if (!confirmRes || !confirmRes.confirmed) {
       showToast('Returned to cart. You can review or modify items.', 'info');
       return;
     }
 
     const receiptNo = generateReceiptNo();
+    const cashTendered = Number(confirmRes.cashTendered) || t.total;
+    const changeAmount = Number(confirmRes.changeAmount) || 0;
     const sale = {
       id: uid('sale'),
       receiptNo,
       date: nowISO(),
+      customerName: customerName || null,
+      customer_name: customerName || null,
+      cashierId: (currentUser && currentUser.id) || null,
       cashierName: (currentUser && currentUser.name) || 'Cashier',
+      paymentMethod: 'Cash',
+      cashTendered,
+      changeAmount,
       items,
       subtotal: t.subtotal,
+      discountPct: t.discountPct,
+      discountPercentage: t.discountPct,
+      discountAmount: t.discountAmount,
+      discount: t.discountAmount,
       total: t.total,
       status: 'completed',
     };
@@ -1053,6 +1409,15 @@ async function completeSale() {
               const beforeStock = Number(p.stock) || 0;
               const plan = consumeProductForColorMix(p, comp.liters, comp.preferredCanSize || 0);
               const mixNoteExtra = formatMixConsumptionNote(plan);
+              comp.containerSource = mixNoteExtra ? mixNoteExtra.replace(/^[ ·\[]+|[ ·\]]+$/g, '').trim() : (comp.preferredCanSize ? `${comp.preferredCanSize}L container` : '');
+              if (!comp.colorName && typeof getProductColorName === 'function') {
+                comp.colorName = getProductColorName(p);
+                comp.color = comp.colorName;
+              }
+              if (!comp.hex && typeof getProductDefaultColor === 'function') {
+                comp.hex = getProductDefaultColor(p);
+                comp.colorHex = comp.hex;
+              }
               saleStockChanges.push({
                 field: `${p.name} (Mix Ingredient)`,
                 oldValue: `${formatStock(beforeStock)}L`,
@@ -1084,6 +1449,12 @@ async function completeSale() {
           productId: null,
           productName: `Custom Color Mix — ${c.colorName}` + (c.detectedColorName ? ` [${c.detectedColorName}]` : ''),
           colorName: c.colorName,
+          hexColor: c.hexColor || null,
+          colorHex: c.hexColor || null,
+          detectedColorName: c.detectedColorName || null,
+          receiptNo: receiptNo,
+          components: c.components || [],
+          formulaJson: JSON.stringify(c.components || []),
           qtyChange: c.liters,
           note: `Formula: ${formulaSummary} · Receipt: ${receiptNo}`,
           staffName: (currentUser && currentUser.name) || 'Cashier'
@@ -1109,7 +1480,7 @@ async function completeSale() {
     logAudit(
       'SALE',
       `Receipt ${receiptNo}`,
-      `Completed sale ${receiptNo} — ${items.length} item(s): ${itemSummaryText} · Total: ${peso(sale.total)}`,
+      `Completed sale ${receiptNo}${customerName ? ' for ' + customerName : ''} — ${items.length} item(s): ${itemSummaryText} · Total: ${peso(sale.total)}`,
       {
         entityName: `Receipt ${receiptNo}`,
         fieldChanged: 'POS Sales Checkout',
@@ -1119,6 +1490,7 @@ async function completeSale() {
         reason: 'POS Sale Checkout',
         meta: {
           receiptNo,
+          customerName: customerName || null,
           cashierName: sale.cashierName,
           subtotal: sale.subtotal,
           total: sale.total,
@@ -1144,6 +1516,9 @@ async function completeSale() {
 
     await saveDB();
     cart = [];
+    currentSaleCustomerName = '';
+    const custInp = document.getElementById('pos-customer-name');
+    if (custInp) custInp.value = '';
     renderApp();
     showReceipt(sale);
   } finally {
@@ -1157,6 +1532,13 @@ async function completeSale() {
 }
 
 function showReceipt(sale) {
+  if (!sale) return;
+  if (currentUser && currentUser.role === 'cashier' && typeof isCurrentUserSale === 'function' && !isCurrentUserSale(sale)) {
+    if (typeof showToast === 'function') {
+      showToast('Access denied: You are restricted from viewing other cashiers\' receipts.', 'error');
+    }
+    return;
+  }
   const receiptNo = getReceiptNo(sale);
   const returnedVal = typeof getSaleReturnedValue === 'function' ? getSaleReturnedValue(sale) : Number(sale.refundTotal || 0);
   const exchangeTotal = typeof getSaleExchangeTotal === 'function' ? getSaleExchangeTotal(sale) : 0;
@@ -1204,12 +1586,23 @@ function showReceipt(sale) {
       <div class="pos-receipt-sub">Paint &amp; Color Formulation Specialists</div>
       <div class="pos-receipt-sub" style="font-size:11px; margin-top:2px;">Official Sales Receipt</div>
       <div class="pos-receipt-badge">Receipt #: <span>${escapeHtml(receiptNo)}</span></div>
+      ${status === 'voided' ? `
+        <div style="background:#FFF0EE; border:2px dashed #C1443D; border-radius:8px; padding:10px 14px; margin-top:10px; text-align:center;">
+          <div style="font-size:16px; font-weight:800; color:#C1443D; letter-spacing:0.05em;">*** TRANSACTION VOIDED ***</div>
+          <div style="font-size:11.5px; color:#A83232; margin-top:3px;">
+            Voided on <b>${formatDateTime(sale.voidedAt || sale.date)}</b> by <b>${escapeHtml(sale.voidedBy || 'Admin')}</b>
+          </div>
+          ${sale.voidReason ? `<div style="font-size:11.5px; color:#6B2121; margin-top:2px;">Reason: <i>${escapeHtml(sale.voidReason)}</i></div>` : ''}
+          <div style="font-size:10.5px; color:#A83232; margin-top:3px;">All stock units have been reversed and restored to inventory.</div>
+        </div>
+      ` : ''}
     </div>
 
     <div class="pos-receipt-meta">
       <div>
         <div><span class="muted">Date &amp; Time:</span> <b>${formatDateTime(sale.date)}</b></div>
         <div style="margin-top:3px;"><span class="muted">Cashier:</span> <b>${escapeHtml(sale.cashierName)}</b></div>
+        ${((sale.customerName || sale.customer_name || '').trim()) ? `<div style="margin-top:3px;"><span class="muted">Customer:</span> <b>${escapeHtml((sale.customerName || sale.customer_name).trim())}</b></div>` : ''}
       </div>
       <div class="right">
         <div><span class="muted">Transaction Status:</span> ${saleStatusBadge(status)}</div>
@@ -1235,6 +1628,12 @@ function showReceipt(sale) {
         <span class="muted">Subtotal:</span>
         <span class="num">${peso(sale.subtotal)}</span>
       </div>
+      ${(Number(sale.discountAmount || sale.discount || 0) > 0) ? `
+        <div class="pos-receipt-total-row" style="color:var(--teal, #1F6F6B);">
+          <span class="muted">Discount (${Number(sale.discountPct || sale.discountPercentage || 10)}%):</span>
+          <span class="num" style="font-weight:700;">-${peso(Number(sale.discountAmount || sale.discount || 0))}</span>
+        </div>
+      ` : ''}
       <div class="pos-receipt-total-row ${(returnedVal > 0 || refundTotal > 0) ? '' : 'grand'}">
         <span>Total Due:</span>
         <span class="grand-val">${peso(sale.total)}</span>
@@ -1244,6 +1643,18 @@ function showReceipt(sale) {
         ${exchangeTotal > 0 ? `<div class="pos-receipt-total-row" style="color:var(--teal);"><span class="muted">Replacement Issued:</span><span class="num">+${peso(exchangeTotal)}</span></div>` : ''}
         <div class="pos-receipt-total-row grand"><span>Net Total:</span><span class="grand-val">${peso(netTotal)}</span></div>
       ` : ''}
+      <div class="pos-receipt-total-row" style="margin-top:6px; padding-top:6px; border-top:1px dashed var(--line, #ddd);">
+        <span class="muted">Payment Method:</span>
+        <span style="font-weight:700;">Cash</span>
+      </div>
+      <div class="pos-receipt-total-row">
+        <span class="muted">Cash Tendered:</span>
+        <span class="num" style="font-weight:700;">${peso(sale.cashTendered !== undefined ? sale.cashTendered : sale.total)}</span>
+      </div>
+      <div class="pos-receipt-total-row">
+        <span class="muted">Change Due:</span>
+        <span class="num" style="font-weight:700; color:var(--teal, #1F6F6B);">${peso(sale.changeAmount !== undefined ? sale.changeAmount : 0)}</span>
+      </div>
     </div>
 
     <div class="pos-receipt-footer">

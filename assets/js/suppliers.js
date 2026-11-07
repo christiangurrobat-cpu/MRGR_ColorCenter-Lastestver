@@ -12,6 +12,7 @@ function refreshSuppliersView() {
   if (container) {
     container.innerHTML = supplierTableHtml(editable);
     updateSupplierSummaryCardsUI();
+    if (typeof syncRouteState === 'function') syncRouteState({ push: false });
   } else {
     renderPage();
   }

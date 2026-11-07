@@ -729,13 +729,18 @@ function computeBulkAdjRowState(row) {
 
 function switchAdjView(view) {
   adjActiveView = view;
+  if (view === 'requests') {
+    currentMovementType = 'adjustment';
+  }
   resetPaginationPage('adj_requests');
+  if (typeof syncRouteState === 'function') syncRouteState({ push: true });
   renderPage();
 }
 
 function setAdjReqFilter(filter) {
   adjRequestFilterStatus = filter;
   resetPaginationPage('adj_requests');
+  if (typeof syncRouteState === 'function') syncRouteState({ push: false });
   renderPage();
 }
 
@@ -1134,6 +1139,7 @@ function selectMovementType(type) {
     }
   });
 
+  if (typeof syncRouteState === 'function') syncRouteState({ push: true });
   toggleMovementFields();
 }
 

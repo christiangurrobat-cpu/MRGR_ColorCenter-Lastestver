@@ -89,13 +89,13 @@ function openMixingReceiptModal(receiptRef) {
     return;
   }
   const ref = String(receiptRef).trim();
-  const sale = (db.sales || []).find(s => 
-    s.id === ref || 
-    s.receiptNo === ref || 
+  const sale = (db.sales || []).find(s =>
+    s.id === ref ||
+    s.receiptNo === ref ||
     (typeof getReceiptNo === 'function' && getReceiptNo(s) === ref)
   ) || (db.sales || []).find(s => {
     return (s.receiptNo && s.receiptNo.toLowerCase() === ref.toLowerCase()) ||
-           (s.items || []).some(it => it.receiptNo === ref);
+      (s.items || []).some(it => it.receiptNo === ref);
   });
 
   if (sale) {
@@ -111,6 +111,550 @@ function openMixingReceiptModal(receiptRef) {
   }
 }
 window.openMixingReceiptModal = openMixingReceiptModal;
+
+function reportStaffLabel(name) {
+  const u = (db.users || []).find(x => x.name === name);
+  const role = u ? { admin: 'Admin', cashier: 'Cashier', staff: 'Inventory Staff' }[u.role] : '';
+  return escapeHtml(name || '') + (role ? ` (${role})` : '');
+}
+window.reportStaffLabel = reportStaffLabel;
+
+function mixColorLabel(m) {
+  if (m.colorName) return m.colorName;
+  const pn = String(m.productName || '').trim();
+  // 1. Clean from productName if it contains a color (e.g. "Custom Color Mix — Baby Blue", "Color Mix - Leaf Green [Leaf Green]")
+  const stripped = pn
+    .replace(/^(Custom\s+)?Color\s+Mix\s*([—–\-:·]\s*|\s+)/i, '')
+    .replace(/\s*\[.*?\]$/, '')
+    .replace(/^.*\(for\s+(.*?)\s+mix\)$/i, '$1')
+    .trim();
+  if (stripped && !/^(custom\s+)?color\s+mix$/i.test(stripped)) return stripped;
+
+  // 2. Recover from sibling ingredient rows of the same date/staff: "<product> (for X mix)" or note containing "(ColorName)"
+  const sib = (db.movements || []).find(x => x.type === 'colormix' && x.date === m.date && x.staffName === m.staffName && (
+    /\(for\s+(.*?)\s+mix\)/i.test(x.productName || '') ||
+    /\b(?:of\s+\d+(?:\.\d+)?L\s+)\(([^)]+)\)/i.test(x.note || '')
+  ));
+  if (sib) {
+    const sibPnMatch = String(sib.productName || '').match(/\(for\s+(.*?)\s+mix\)/i);
+    if (sibPnMatch && sibPnMatch[1]) return sibPnMatch[1].trim();
+    const sibNoteMatch = String(sib.note || '').match(/\b(?:of\s+\d+(?:\.\d+)?L\s+)\(([^)]+)\)/i);
+    if (sibNoteMatch && sibNoteMatch[1]) return sibNoteMatch[1].trim();
+  }
+
+  // 3. Recover from linked sale receipt if present in note
+  const note = String(m.note || '');
+  const rc = (note.match(/OR-\d+-\d+/) || [])[0];
+  if (rc) {
+    const sale = (db.sales || []).find(s => (s.receiptNo === rc || getReceiptNo(s) === rc));
+    const mixes = sale ? (sale.items || []).filter(i => i.type === 'colormix' && i.colorName) : [];
+    if (mixes.length) {
+      return mixes[0].colorName;
+    }
+  }
+
+  return pn || 'Color Mix';
+}
+window.mixColorLabel = mixColorLabel;
+
+function extractMixingLogRecord(m) {
+  if (!m) return null;
+  const id = m.id || (typeof uid === 'function' ? uid('mix') : `mix_${Math.random()}`);
+  const date = m.date;
+  const staff = m.staffName || 'Staff';
+  const liters = Number(m.qtyChange) || 0;
+  const colorName = mixColorLabel(m);
+  let detectedName = m.detectedColorName || m.detectedName || '';
+  let baseType = m.baseType || '';
+
+  const detMatch = String(m.productName || '').match(/\[(.*?)\]/);
+  if (!detectedName && detMatch && detMatch[1]) {
+    detectedName = detMatch[1].trim();
+  }
+
+  let receiptRef = m.receiptNo || '';
+  const noteStr = String(m.note || '');
+  if (!receiptRef) {
+    const rcMatch = noteStr.match(/(?:Receipt:\s*|\b)(OR-\d+-\d+|OR-\d+)/i);
+    if (rcMatch) receiptRef = rcMatch[1].trim();
+  }
+  if (!receiptRef) {
+    const rcMatch2 = noteStr.match(/OR-[A-Za-z0-9\-]+/i);
+    if (rcMatch2) receiptRef = rcMatch2[0].trim();
+  }
+
+  if (!receiptRef) {
+    const sib = (db.movements || []).find(x => x.type === 'colormix' && x.date === m.date && x.staffName === m.staffName && x.productId && x.note);
+    if (sib) {
+      const sibRcMatch = String(sib.note || '').match(/(?:Receipt:\s*|\b)(OR-[A-Za-z0-9\-]+)/i);
+      if (sibRcMatch) receiptRef = sibRcMatch[1].trim();
+    }
+  }
+
+  let sale = null;
+  if (receiptRef) {
+    sale = (db.sales || []).find(s => s.receiptNo === receiptRef || (typeof getReceiptNo === 'function' && getReceiptNo(s) === receiptRef) || s.id === receiptRef);
+  }
+  if (!sale && !receiptRef) {
+    sale = (db.sales || []).find(s => s.date === m.date && (s.items || []).some(it => it.type === 'colormix'));
+    if (sale) {
+      receiptRef = typeof getReceiptNo === 'function' ? getReceiptNo(sale) : (sale.receiptNo || sale.id);
+    }
+  }
+
+  let saleMixItem = null;
+  if (sale && Array.isArray(sale.items)) {
+    saleMixItem = sale.items.find(it => it.type === 'colormix' && it.colorName && it.colorName.toLowerCase() === colorName.toLowerCase()) ||
+      sale.items.find(it => it.type === 'colormix');
+    if (saleMixItem) {
+      if (!detectedName && saleMixItem.detectedColorName) detectedName = saleMixItem.detectedColorName;
+      if (!baseType && saleMixItem.baseType) baseType = saleMixItem.baseType;
+    }
+  }
+
+  // Final Mixed Color Hex Resolution
+  // IMPORTANT: Do not calculate or invent the final HEX code by simply averaging the ingredient HEX values.
+  // Use the actual saved color identification result or recorded final color value. If unavailable, display "HEX not recorded".
+  let hexColor = m.hexColor || m.colorHex || m.hex || '';
+  if (!hexColor && saleMixItem && (saleMixItem.hexColor || saleMixItem.colorHex)) {
+    hexColor = saleMixItem.hexColor || saleMixItem.colorHex;
+  }
+  if (!hexColor) {
+    const presets = (db.presets || []).concat(
+      (() => {
+        try {
+          return JSON.parse(localStorage.getItem('mrgr_color_mix_presets') || '[]');
+        } catch (e) {
+          return [];
+        }
+      })()
+    );
+    const pMatch = presets.find(p => (p.colorName || '').toLowerCase() === colorName.toLowerCase() || (p.name || '').toLowerCase() === colorName.toLowerCase());
+    if (pMatch && pMatch.hex) hexColor = pMatch.hex;
+  }
+  if (!hexColor) {
+    const audit = (db.auditLogs || []).find(a => (a.action === 'MIXING_COMPLETE' || a.action === 'COLOR_MIX') && (
+      (a.entityName && a.entityName.toLowerCase() === colorName.toLowerCase()) ||
+      (a.details && a.details.toLowerCase().includes(colorName.toLowerCase()))
+    ));
+    if (audit) {
+      const hexMatch = String(audit.newValue || audit.details || '').match(/#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b/);
+      if (hexMatch) hexColor = hexMatch[0];
+    }
+  }
+  if (!hexColor && typeof PAINT_COLOR_DICTIONARY !== 'undefined') {
+    const dict = PAINT_COLOR_DICTIONARY.find(d => d.name.toLowerCase() === colorName.toLowerCase() || (detectedName && d.name.toLowerCase() === detectedName.toLowerCase()));
+    if (dict) hexColor = dict.hex;
+  }
+  if (hexColor && !/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/i.test(hexColor)) {
+    hexColor = '';
+  }
+
+  // Components & Formula Parsing with Snapshots
+  let components = [];
+  let rawFormula = '';
+  let extraNote = '';
+
+  // 1. Direct snapshot from movement object or formula_json
+  if (Array.isArray(m.components) && m.components.length) {
+    components = m.components;
+  } else if (m.formulaJson) {
+    try {
+      const parsed = typeof m.formulaJson === 'string' ? JSON.parse(m.formulaJson) : m.formulaJson;
+      if (Array.isArray(parsed) && parsed.length) components = parsed;
+    } catch (e) { }
+  }
+
+  // 2. From linked POS sale item components
+  if (!components.length && saleMixItem && Array.isArray(saleMixItem.components) && saleMixItem.components.length) {
+    components = saleMixItem.components;
+  }
+
+  // 3. Sibling ingredient movements
+  if (!components.length) {
+    const sibs = (db.movements || []).filter(x => x.type === 'colormix' && x.date === m.date && x.staffName === m.staffName && x.productId);
+    if (sibs.length) {
+      const totalDeducted = sibs.reduce((sum, s) => sum + Math.abs(Number(s.qtyChange) || 0), 0);
+      components = sibs.map(s => {
+        const prod = typeof productById === 'function' ? productById(s.productId) : null;
+        const sLiters = Math.abs(Number(s.qtyChange) || 0);
+        let calcPct = totalDeducted > 0 ? Math.round((sLiters / totalDeducted) * 100) : 0;
+
+        let pctStr = '';
+        const sNote = String(s.note || '');
+        const pMatch = sNote.match(/(\d+(?:\.\d+)?)\s*%/);
+        if (pMatch) {
+          calcPct = parseFloat(pMatch[1]);
+          pctStr = `${calcPct}%`;
+        } else if (calcPct > 0) {
+          pctStr = `${calcPct}%`;
+        }
+
+        let containerSrc = '';
+        const brkMatch = sNote.match(/\[(.*?)\]/);
+        if (brkMatch && brkMatch[1]) {
+          containerSrc = brkMatch[1].trim();
+        } else if (s.containerSize) {
+          containerSrc = `${s.containerSize}L container`;
+        }
+
+        const cleanName = (s.productName || (prod ? prod.name : 'Ingredient')).replace(/\s*\(for\s+.*?\s+mix\)$/i, '').trim();
+        const origColor = prod && typeof getProductColorName === 'function' ? getProductColorName(prod) : (prod && prod.color && prod.color !== '-' ? prod.color : 'Standard');
+        const hex = prod && typeof getProductDefaultColor === 'function' ? getProductDefaultColor(prod) : '';
+
+        return {
+          productId: s.productId,
+          name: cleanName,
+          brand: prod ? prod.brand : '',
+          colorName: origColor,
+          color: origColor,
+          hex: hex,
+          percentage: pctStr,
+          pctNum: calcPct,
+          liters: sLiters,
+          containerSource: containerSrc
+        };
+      });
+      rawFormula = components.map(c => `${c.percentage ? c.percentage + ' ' : ''}${c.name}`).join(' + ');
+    }
+  }
+
+  // 4. Fallback to note formula string parsing
+  if (!components.length && noteStr) {
+    const fMatch = noteStr.match(/Formula:\s*([^·\r\n]+)/i);
+    if (fMatch) {
+      rawFormula = fMatch[1].trim();
+      const parts = rawFormula.split('+').map(p => p.trim()).filter(Boolean);
+      components = parts.map(part => {
+        let pct = '';
+        let pctNum = 0;
+        let name = part;
+        let compLiters = 0;
+
+        const m1 = part.match(/^(\d+(?:\.\d+)?%)\s*(.+)$/);
+        const m2 = part.match(/^(.+?)\s*\((\d+(?:\.\d+)?%)\)$/);
+        if (m1) {
+          pct = m1[1];
+          pctNum = parseFloat(pct);
+          name = m1[2].trim();
+        } else if (m2) {
+          pct = m2[2];
+          pctNum = parseFloat(pct);
+          name = m2[1].trim();
+        }
+
+        const litMatch = name.match(/\((\d+(?:\.\d+)?)\s*L\)$/i);
+        if (litMatch) {
+          compLiters = parseFloat(litMatch[1]);
+          name = name.replace(/\s*\(\d+(?:\.\d+)?\s*L\)$/i, '').trim();
+        } else if (pctNum && liters) {
+          compLiters = Number((liters * (pctNum / 100)).toFixed(2));
+        }
+
+        const prod = (db.products || []).find(p => p.name.toLowerCase() === name.toLowerCase() || p.id === name);
+        const origColor = prod && typeof getProductColorName === 'function' ? getProductColorName(prod) : (prod && prod.color && prod.color !== '-' ? prod.color : 'Standard');
+        const hex = prod && typeof getProductDefaultColor === 'function' ? getProductDefaultColor(prod) : '';
+
+        return {
+          productId: prod ? prod.id : null,
+          name: prod ? prod.name : name,
+          brand: prod ? prod.brand : '',
+          colorName: origColor,
+          color: origColor,
+          hex: hex,
+          percentage: pct || (pctNum ? `${pctNum}%` : ''),
+          pctNum: pctNum,
+          liters: compLiters,
+          containerSource: ''
+        };
+      });
+    }
+  }
+
+  // Normalize and enhance each component with historical snapshot integrity
+  components = components.map(c => {
+    const prod = c.productId ? (typeof productById === 'function' ? productById(c.productId) : null) :
+      (db.products || []).find(p => p.name.toLowerCase() === (c.name || '').toLowerCase());
+    const prodName = c.name || (prod ? prod.name : 'Ingredient');
+    const brand = c.brand || (prod ? prod.brand : '') || '';
+
+    // Original color name: prioritize saved snapshot
+    let colorName = c.colorName || c.color || '';
+    if (!colorName || colorName === '-' || colorName.startsWith('#')) {
+      if (prod && typeof getProductColorName === 'function') {
+        colorName = getProductColorName(prod);
+      } else if (prod && prod.color && prod.color !== '-' && !prod.color.startsWith('#')) {
+        colorName = prod.color;
+      }
+    }
+    if (!colorName) {
+      if (typeof PAINT_COLOR_DICTIONARY !== 'undefined') {
+        const found = PAINT_COLOR_DICTIONARY.find(d => prodName.toLowerCase().includes(d.name.toLowerCase()));
+        if (found) colorName = found.name;
+      }
+    }
+    if (!colorName) colorName = 'Standard';
+
+    // Hex code: prioritize saved snapshot
+    let hex = c.hex || c.colorHex || '';
+    if (!hex || !/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/i.test(hex)) {
+      if (prod && typeof getProductDefaultColor === 'function') {
+        hex = getProductDefaultColor(prod);
+      } else if (prod && (prod.colorHex || prod.color_hex)) {
+        hex = prod.colorHex || prod.color_hex;
+      }
+      if (!hex && colorName && typeof PAINT_COLOR_DICTIONARY !== 'undefined') {
+        const dict = PAINT_COLOR_DICTIONARY.find(d => d.name.toLowerCase() === colorName.toLowerCase());
+        if (dict) hex = dict.hex;
+      }
+    }
+    if (hex && !/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/i.test(hex)) {
+      hex = '';
+    }
+
+    const pctNum = Number(c.pctNum || parseFloat(c.percentage || 0) || 0);
+    const pct = c.percentage || (pctNum > 0 ? `${pctNum}%` : '');
+    const compLiters = Number(c.liters || 0) || (liters && pctNum ? Number((liters * (pctNum / 100)).toFixed(2)) : 0);
+    const containerSource = c.containerSource || (c.preferredCanSize ? `${c.preferredCanSize}L container` : '');
+
+    return {
+      productId: c.productId || (prod ? prod.id : null),
+      name: prodName,
+      brand: brand,
+      colorName: colorName,
+      color: colorName,
+      hex: hex,
+      percentage: pct,
+      pctNum: pctNum,
+      liters: compLiters,
+      preferredCanSize: Number(c.preferredCanSize || 0),
+      containerSource: containerSource
+    };
+  });
+
+  // Freeze snapshot onto m to preserve data integrity against future product edits
+  if (!m.components || !m.components.length) {
+    m.components = components;
+  }
+  if (!m.hexColor && hexColor) {
+    m.hexColor = hexColor;
+  }
+
+  if (noteStr) {
+    extraNote = noteStr
+      .replace(/Formula:\s*[^·\r\n]+/i, '')
+      .replace(/Receipt:\s*[^·\r\n]+/i, '')
+      .replace(/\bOR-[A-Za-z0-9\-]+\b/gi, '')
+      .replace(/\[.*?\]/g, '')
+      .replace(/^[·\s\-_:,]+|[·\s\-_:,]+$/g, '')
+      .trim();
+  }
+
+  rawFormula = components.map(c => `${c.percentage ? c.percentage + ' ' : ''}${c.name} (${c.colorName}${c.hex ? ` ${c.hex}` : ''})`).join(' + ');
+
+  return {
+    id,
+    rawMove: m,
+    date,
+    staff,
+    liters,
+    colorName,
+    detectedName,
+    baseType,
+    hexColor,
+    receiptRef,
+    sale,
+    components,
+    rawFormula,
+    extraNote,
+    formulaString: components.map(c => `${c.percentage || ''} ${c.name} ${c.brand} ${c.colorName} ${c.hex}`).join(' ')
+  };
+}
+window.extractMixingLogRecord = extractMixingLogRecord;
+
+function openMixingDetailsModal(mixId) {
+  if (!mixId) return;
+  const m = (db.movements || []).find(x => x.id === mixId) ||
+    (window._cachedMixingRecords || []).find(r => r.id === mixId || (r.rawMove && r.rawMove.id === mixId));
+  if (!m) {
+    if (typeof showToast === 'function') showToast('Mixing record not found.', 'error');
+    return;
+  }
+  const rec = (m.rawMove && m.components) ? m : extractMixingLogRecord(m);
+  if (!rec) return;
+
+  const hexBadge = rec.hexColor ? `
+    <span class="mixing-modal-hex-badge">
+      <span class="modal-hex-dot" style="background:${rec.hexColor};"></span>
+      <code>${escapeHtml(rec.hexColor)}</code>
+    </span>
+  ` : `
+    <span class="mixing-modal-hex-badge missing">HEX not recorded</span>
+  `;
+
+  const bodyHtml = `
+    <div class="mixing-modal-wrap">
+      <!-- Final Mixed Color Hero Banner -->
+      <div class="mixing-modal-hero">
+        <div class="mixing-modal-swatch-box">
+          ${rec.hexColor ? `
+            <div class="mixing-modal-swatch" style="background:${rec.hexColor};" title="${escapeAttr(rec.colorName)} (${rec.hexColor})"></div>
+          ` : `
+            <div class="mixing-modal-swatch no-hex" title="${escapeAttr(rec.colorName)} (HEX not recorded)">?</div>
+          `}
+        </div>
+        <div class="mixing-modal-hero-info">
+          <div class="mixing-modal-tag">FINAL MIXED COLOR</div>
+          <h2 class="mixing-modal-color-title">${escapeHtml(rec.colorName)}</h2>
+          ${rec.detectedName && rec.detectedName.toLowerCase() !== rec.colorName.toLowerCase() ? `
+            <div class="mixing-modal-detected-title">[${escapeHtml(rec.detectedName)}]</div>
+          ` : ''}
+          <div class="mixing-modal-hero-pills">
+            ${hexBadge}
+            <span class="mixing-modal-pill teal">
+              <strong>${formatStock(rec.liters)} L</strong> Produced
+            </span>
+            <span class="mixing-modal-pill sand">
+              <strong>${rec.components.length}</strong> Ingredient${rec.components.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mixing Information Grid -->
+      <div class="mixing-modal-section-title">Mixing Information</div>
+      <div class="mixing-modal-info-grid">
+        <div class="mixing-modal-card">
+          <div class="info-label">Mixing Date &amp; Time</div>
+          <div class="info-value font-mono">${formatDateTime(rec.date)}</div>
+        </div>
+        <div class="mixing-modal-card">
+          <div class="info-label">Final Color Name</div>
+          <div class="info-value"><strong>${escapeHtml(rec.colorName)}</strong></div>
+        </div>
+        <div class="mixing-modal-card">
+          <div class="info-label">Final Color HEX Code</div>
+          <div class="info-value">${rec.hexColor ? `<code class="formula-hex-code">${escapeHtml(rec.hexColor)}</code>` : '<span class="muted small">HEX not recorded</span>'}</div>
+        </div>
+        <div class="mixing-modal-card">
+          <div class="info-label">Total Volume Produced</div>
+          <div class="info-value font-mono" style="color:var(--teal-dark); font-weight:700;">${formatStock(rec.liters)} Liters</div>
+        </div>
+        <div class="mixing-modal-card">
+          <div class="info-label">Number of Ingredients</div>
+          <div class="info-value"><strong>${rec.components.length}</strong> paint ingredient${rec.components.length !== 1 ? 's' : ''}</div>
+        </div>
+        <div class="mixing-modal-card">
+          <div class="info-label">Receipt Reference</div>
+          <div class="info-value">
+            ${rec.receiptRef ? (currentUser && currentUser.role === 'admin' ? `
+              <button type="button" class="receipt-ref-btn" onclick="openMixingReceiptModal('${escapeAttr(rec.receiptRef)}')" title="View receipt ${escapeAttr(rec.receiptRef)}">
+                <span>🧾</span>
+                <span>${escapeHtml(rec.receiptRef)}</span>
+              </button>
+            ` : `
+              <span class="receipt-ref-static">
+                <span>🧾</span>
+                <span>${escapeHtml(rec.receiptRef)}</span>
+              </span>
+            `) : `
+              <span class="muted small">Direct Inventory Mix (Internal)</span>
+            `}
+          </div>
+        </div>
+        <div class="mixing-modal-card">
+          <div class="info-label">Staff / Cashier Responsible</div>
+          <div class="info-value">${reportStaffLabel(rec.staff)}</div>
+        </div>
+        <div class="mixing-modal-card">
+          <div class="info-label">Base Paint Type</div>
+          <div class="info-value">${escapeHtml(rec.baseType || 'Automotive / Architectural Paint')}</div>
+        </div>
+        ${rec.extraNote ? `
+          <div class="mixing-modal-card full-span">
+            <div class="info-label">Service Note</div>
+            <div class="info-value" style="font-style:italic;">${escapeHtml(rec.extraNote)}</div>
+          </div>
+        ` : ''}
+      </div>
+
+      <!-- Formula Breakdown -->
+      <div class="mixing-modal-section-title" style="margin-top:18px;">
+        <span>Formula Breakdown</span>
+        <span class="muted small" style="font-weight:400; text-transform:none; margin-left:8px;">Exact paint colors, proportions &amp; measured volumes</span>
+      </div>
+
+      <div class="mixing-modal-ingredients-list">
+        ${rec.components.length ? rec.components.map((c, idx) => `
+          <div class="mixing-modal-ingredient-card">
+            <div class="ingredient-card-header">
+              <div class="ingredient-number">Ingredient #${idx + 1}</div>
+              <div class="ingredient-pct-badge">${escapeHtml(c.percentage || (c.pctNum ? `${c.pctNum}%` : ''))}</div>
+            </div>
+            <div class="ingredient-card-body">
+              <div class="ingredient-swatch-col">
+                ${c.hex ? `
+                  <div class="ingredient-modal-swatch" style="background:${c.hex};" title="Original: ${escapeAttr(c.colorName)} (${c.hex})"></div>
+                ` : `
+                  <div class="ingredient-modal-swatch no-hex" title="No HEX recorded">?</div>
+                `}
+              </div>
+              <div class="ingredient-details-col">
+                <div class="ingredient-prod-line">
+                  <span class="ingredient-prod-name">${escapeHtml(c.name)}</span>
+                  ${c.brand ? `<span class="ingredient-brand-badge">${escapeHtml(c.brand)}</span>` : ''}
+                </div>
+                <div class="ingredient-color-row">
+                  <span class="ingredient-color-label">Original Paint Color:</span>
+                  <strong class="ingredient-color-val">${escapeHtml(c.colorName || 'Standard')}</strong>
+                  <span class="ingredient-hex-wrap">
+                    ${c.hex ? `<code class="formula-hex-code">${escapeHtml(c.hex)}</code>` : `<span class="muted small">No HEX</span>`}
+                  </span>
+                </div>
+                <div class="ingredient-metrics-row">
+                  <div class="ingredient-metric">
+                    <span class="metric-label">Formula Share:</span>
+                    <strong class="metric-val">${escapeHtml(c.percentage || (c.pctNum ? `${c.pctNum}%` : '—'))}</strong>
+                  </div>
+                  <div class="ingredient-metric">
+                    <span class="metric-label">Actual Volume Used:</span>
+                    <strong class="metric-val teal">${c.liters ? `${formatStock(c.liters)} L` : '—'}</strong>
+                  </div>
+                  ${c.containerSource ? `
+                    <div class="ingredient-metric full">
+                      <span class="metric-label">Container Source:</span>
+                      <span class="ingredient-src-badge">🫙 ${escapeHtml(c.containerSource)}</span>
+                    </div>
+                  ` : ''}
+                </div>
+              </div>
+            </div>
+          </div>
+        `).join('') : `
+          <div class="empty-state" style="padding:16px; text-align:center;">
+            ${rec.rawFormula ? escapeHtml(rec.rawFormula) : 'No ingredient components recorded.'}
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+
+  const footHtml = `
+    <div class="row wrap" style="gap:8px; width:100%; align-items:center;">
+      ${rec.receiptRef && currentUser && currentUser.role === 'admin' ? `
+        <button type="button" class="btn secondary" onclick="openMixingReceiptModal('${escapeAttr(rec.receiptRef)}')" style="display:inline-flex; align-items:center; gap:6px;">
+          <span>🧾</span>
+          <span>View Receipt ${escapeHtml(rec.receiptRef)}</span>
+        </button>
+      ` : ''}
+      <div class="spacer"></div>
+      <button type="button" class="btn" onclick="closeModal()">Close</button>
+    </div>
+  `;
+
+  openModal('🎨 Color Mixing Service Details', bodyHtml, footHtml, 'modal-lg');
+}
+window.openMixingDetailsModal = openMixingDetailsModal;
 
 function exportActiveReportCSV() {
   const table = document.querySelector('#report-body table');
@@ -472,58 +1016,7 @@ function getLowStockReportData() {
 
 
 function renderReportFilterToolbarHtml() {
-  const products = (db.products || []).filter(p => p.status !== 'discontinued');
-  const brands = Array.from(new Set(products.map(p => p.brand).filter(Boolean))).sort();
-  const suppliers = (db.suppliers || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-
-  return `
-    <div class="audit-filter-row" style="display:flex; align-items:center; gap:8px; padding:10px 18px; border-bottom:1px solid var(--line-light); background:#FAF8F5; flex-wrap:wrap;">
-      <div style="position:relative; display:inline-flex; align-items:center;">
-        <input type="search" id="rep-search-input" placeholder="Search product, PO#, receipt..." value="${escapeHtml(reportSearchQuery)}"
-          oninput="setReportSearch(this.value)"
-          style="padding:6px 26px 6px 10px; border:1px solid var(--line); border-radius:6px; font-size:12.5px; min-width:210px;">
-        ${reportSearchQuery ? `
-          <button type="button" onclick="setReportSearch(''); document.getElementById('rep-search-input').value='';"
-                  style="position:absolute; right:6px; background:none; border:none; color:var(--ink-soft); cursor:pointer; font-size:12px; padding:2px 4px;" title="Clear search">✕</button>
-        ` : ''}
-      </div>
-
-      <select id="rep-product-filter" onchange="setReportProductFilter(this.value)"
-        style="padding:6px 10px; border:1px solid var(--line); border-radius:6px; font-size:12.5px;" title="Filter by specific product">
-        <option value="all" ${reportProductFilter === 'all' ? 'selected' : ''}>All Products</option>
-        ${products.map(p => `<option value="${p.id}" ${reportProductFilter === p.id ? 'selected' : ''}>${escapeHtml(p.name)} (${escapeHtml(p.brand || 'Generic')})</option>`).join('')}
-      </select>
-
-      <select id="rep-brand-filter" onchange="setReportBrandFilter(this.value)"
-        style="padding:6px 10px; border:1px solid var(--line); border-radius:6px; font-size:12.5px;" title="Filter by brand">
-        <option value="all" ${reportBrandFilter === 'all' ? 'selected' : ''}>All Brands</option>
-        ${brands.map(b => `<option value="${escapeHtml(b)}" ${reportBrandFilter === b ? 'selected' : ''}>Brand: ${escapeHtml(b)}</option>`).join('')}
-      </select>
-
-      <select id="rep-supplier-filter" onchange="setReportSupplierFilter(this.value)"
-        style="padding:6px 10px; border:1px solid var(--line); border-radius:6px; font-size:12.5px;" title="Filter by supplier">
-        <option value="all" ${reportSupplierFilter === 'all' ? 'selected' : ''}>All Suppliers</option>
-        ${suppliers.map(s => `<option value="${s.id}" ${reportSupplierFilter === s.id ? 'selected' : ''}>Supplier: ${escapeHtml(s.name)}</option>`).join('')}
-      </select>
-
-      <select id="rep-txtype-filter" onchange="setReportTxTypeFilter(this.value)"
-        style="padding:6px 10px; border:1px solid var(--line); border-radius:6px; font-size:12.5px;" title="Filter by transaction type">
-        <option value="all" ${reportTxTypeFilter === 'all' ? 'selected' : ''}>All Transaction Types</option>
-        <option value="sale" ${reportTxTypeFilter === 'sale' ? 'selected' : ''}>POS Sales</option>
-        <option value="receiving" ${reportTxTypeFilter === 'receiving' ? 'selected' : ''}>Stock Receiving</option>
-        <option value="adjustment" ${reportTxTypeFilter === 'adjustment' ? 'selected' : ''}>Stock Adjustments</option>
-        <option value="colormix" ${reportTxTypeFilter === 'colormix' ? 'selected' : ''}>Color Mixing</option>
-        <option value="return" ${reportTxTypeFilter === 'return' ? 'selected' : ''}>Returns &amp; Exchanges</option>
-      </select>
-
-      <div class="spacer"></div>
-
-      <div style="display:inline-flex; align-items:center; gap:6px;">
-        <button type="button" class="btn secondary small" onclick="exportActiveReportCSV()" title="Download current report view as CSV spreadsheet">📥 Export CSV</button>
-        <button type="button" class="btn secondary small" onclick="printActiveReport()" title="Print current report">🖨️ Print</button>
-      </div>
-    </div>
-  `;
+  return '';
 }
 
 function reportsPage() {
@@ -618,8 +1111,6 @@ function reportsPage() {
       </div>
     </div>
 
-    ${renderReportFilterToolbarHtml()}
-
     <!-- Toggle Menu Bar -->
     <div class="report-toggle-bar">
       <button type="button" class="report-toggle-btn ${reportActiveTab === 'all' ? 'active' : ''}" data-tab="all" onclick="setReportTab('all')">
@@ -676,6 +1167,7 @@ function setReportTab(tab) {
   document.querySelectorAll('.report-toggle-btn').forEach(b => {
     b.classList.toggle('active', b.getAttribute('data-tab') === tab);
   });
+  if (typeof syncRouteState === 'function') syncRouteState({ push: true });
   renderReportBody();
 }
 
@@ -697,6 +1189,7 @@ function renderReportBody() {
   const container = document.getElementById('report-body');
   if (container) {
     container.innerHTML = reportBodyHtml(reportDateFrom, reportDateTo);
+    if (typeof syncRouteState === 'function') syncRouteState({ push: false });
   }
 }
 
@@ -759,6 +1252,7 @@ function renderTopProductsPanel() {
   if (container) {
     const sales = salesBetween(reportDateFrom, reportDateTo);
     container.outerHTML = renderTopProductsSectionHtml(sales);
+    if (typeof syncRouteState === 'function') syncRouteState({ push: false });
   } else {
     renderReportBody();
   }
@@ -1462,6 +1956,12 @@ function computeSalesHistorySummary(salesList) {
       exchangedCount++;
     }
 
+    const saleDiscount = Number(sale.discountAmount !== undefined ? sale.discountAmount : (sale.discount !== undefined ? sale.discount : (rawSubtotal > rawTotal ? (rawSubtotal - rawTotal) : 0)));
+    if (saleDiscount > 0) {
+      totalDiscounts = Number((totalDiscounts + saleDiscount).toFixed(2));
+      discountedTransactionsCount++;
+    }
+
     const upgradeExtra = effectiveRefund < 0 ? Math.abs(effectiveRefund) : 0;
     const effectiveGross = Number((rawSubtotal + upgradeExtra).toFixed(2));
     const partialRefundDed = effectiveRefund > 0 ? Number(effectiveRefund.toFixed(2)) : 0;
@@ -1741,16 +2241,18 @@ function renderSalesHistorySummaryAndBreakdownsHtml(salesList, from, to) {
         <div class="stat-card mustard" id="sh-card-gross-sales">
           <div class="label">Total Gross Sales</div>
           <div class="value" id="sh-val-gross-sales">${peso(summary.grossSales)}</div>
-          <div class="sub">Total value of completed sales</div>
+          <div class="sub">${summary.totalDiscounts > 0 ? `Subtotal before discounts (${peso(summary.totalDiscounts)} discounts)` : 'Total value of completed sales'}</div>
         </div>
 
         <div class="stat-card" id="sh-card-net-sales" style="border-left:4px solid var(--teal);">
           <div class="label">Total Net Sales</div>
           <div class="value" id="sh-val-net-sales" style="color:var(--teal);">${peso(summary.netSales)}</div>
           <div class="sub">
-            ${summary.partialRefundsDeducted > 0
-      ? `Actual sales revenue (-${peso(summary.partialRefundsDeducted)} partial refunds)`
-      : 'Actual sales revenue'}
+            ${summary.totalDiscounts > 0
+      ? `Actual revenue (${peso(summary.totalDiscounts)} promo discount${summary.discountedTransactionsCount === 1 ? '' : 's'}${summary.partialRefundsDeducted > 0 ? ` · -${peso(summary.partialRefundsDeducted)} refunds` : ''})`
+      : (summary.partialRefundsDeducted > 0
+        ? `Actual sales revenue (-${peso(summary.partialRefundsDeducted)} partial refunds)`
+        : 'Actual sales revenue')}
           </div>
         </div>
 
@@ -1917,15 +2419,20 @@ function renderSalesHistoryTableRowsHtml(pagedSales) {
             ? `Exchanged: ${peso(exchangeTotal)}`
             : `Returned: -${peso(returnedVal || refundTotal)}`}
                  </div>`
-          : `<strong style="font-family:'Space Grotesk'; font-size:13.5px;">${peso(s.total)}</strong>`)}
+          : `<div><strong style="font-family:'Space Grotesk'; font-size:13.5px;">${peso(s.total)}</strong></div>
+             ${(Number(s.discountAmount || s.discount || 0) > 0) ? `<div class="muted small" style="color:var(--teal); font-size:11px; font-weight:600;">10% Disc: -${peso(Number(s.discountAmount || s.discount || 0))}</div>` : ''}`)}
         </td>
         <td class="right" style="white-space:nowrap;">
           <div class="row wrap" style="justify-content:flex-end; gap:6px;">
             <button class="btn ghost small" onclick='viewSale("${s.id}")' title="View Sales Receipt">🧾 Receipt</button>
             ${(!isVoidOrCancel && status !== 'refunded') ? (
-        isWithinDay
-          ? `<button class="btn secondary small" onclick='openReturnRefundModal("${s.id}")' title="Return cans and process exchange (same-day only)">↩️ Return / Exchange</button>`
-          : `<button class="btn ghost small" disabled style="opacity:0.55; cursor:not-allowed;" title="Return / Exchange is only allowed within the same day of purchase">🔒 Return Expired</button>`
+        (typeof hasSaleReturnableItems === 'function' ? hasSaleReturnableItems(s) : true)
+          ? `<button class="btn secondary small" onclick='openReturnRefundModal("${s.id}")' title="Process Return &amp; Exchange under store policy">↩️ Return / Exchange</button>`
+          : ((typeof saleHasOnlyCustomMixItems === 'function' && saleHasOnlyCustomMixItems(s))
+            ? (currentUser && (currentUser.role === 'admin' || currentUser.role === 'manager')
+              ? `<button class="btn ghost small" onclick='openReturnRefundModal("${s.id}")' style="border-color:#D8A868; color:#8A5A24;" title="Custom Color Mix is strictly Final Sale under standard policy. Click to open Administrator Review for store mixing errors.">🛡️ Custom Mix (Admin Review)</button>`
+              : `<button class="btn ghost small" disabled style="opacity:0.65; cursor:not-allowed;" title="Custom Color Mix cannot be returned or exchanged once mixed (Final Sale)">🔒 Custom Mix (Final Sale)</button>`)
+            : `<button class="btn ghost small" disabled style="opacity:0.55; cursor:not-allowed;" title="All purchased items have already been returned or exchanged">✓ Fully Returned</button>`)
       ) : ''}
             ${hasReturns ? `
               <button class="btn ghost small" onclick='viewReturnVouchers("${s.id}")' title="View return &amp; exchange slips" style="color:#856404; background:#FFF3CD; border:1px solid #FFEBAA;">📋 Slip (${s.returns.length})</button>
@@ -1978,12 +2485,21 @@ function renderReportsSalesHistoryPageOnly() {
   if (container) {
     const sales = salesBetween(reportDateFrom, reportDateTo);
     container.innerHTML = renderReportsSalesHistoryTableContainerHtml(sales);
+    if (typeof syncRouteState === 'function') syncRouteState({ push: false });
   } else {
     renderReportBody();
   }
 }
 
 function renderReportsSalesHistorySectionHtml(salesList, from, to) {
+  if (currentUser && currentUser.role === 'cashier') {
+    return `
+      <div class="empty-state" style="padding:40px; margin:20px; background:#fff; border:1px solid var(--line); border-radius:8px;">
+        <h3>🔒 Access Restricted</h3>
+        <p class="muted">Cashiers are restricted from accessing business-wide sales reports and analytics.</p>
+      </div>
+    `;
+  }
   const list = Array.isArray(salesList) ? salesList : [];
   return `
     <div id="rep-sales-history-section">
@@ -2009,14 +2525,15 @@ function renderOverallReportSummaryCardsHtml(from, to, sales, moves) {
     const st = String((s && s.status) || 'completed').trim().toLowerCase();
     return st !== 'voided' && st !== 'void' && st !== 'cancelled' && st !== 'canceled';
   });
-  const grossSales = validSalesForRev.reduce((t, s) => t + Number(s.total || 0), 0);
+  const grossSales = validSalesForRev.reduce((t, s) => t + Number(s.subtotal !== undefined ? s.subtotal : (s.total || 0)), 0);
+  const totalDiscounts = validSalesForRev.reduce((t, s) => t + Number(s.discountAmount !== undefined ? s.discountAmount : (s.discount || 0)), 0);
   const periodRefunds = validSalesForRev.reduce((t, s) => {
     const st = String(s.status || 'completed').trim().toLowerCase();
     const ref = Number(s.refundTotal || 0);
     const effRef = (st === 'refunded' && ref === 0 && (!s.returns || !s.returns.length)) ? Number(s.total || 0) : ref;
     return t + effRef;
   }, 0);
-  const netSales = Number((grossSales - periodRefunds).toFixed(2));
+  const netSales = Number((validSalesForRev.reduce((t, s) => t + Number(s.total || 0), 0) - periodRefunds).toFixed(2));
 
   let totalReceivedLitres = 0;
   let totalAdjustedLitres = 0;
@@ -2034,7 +2551,7 @@ function renderOverallReportSummaryCardsHtml(from, to, sales, moves) {
       <div class="stat-card" style="cursor:pointer;" onclick="setReportTab('sales')" title="Click to view sales and revenue reports">
         <div class="label">Total Net Sales</div>
         <div class="value">${peso(netSales)}</div>
-        <div class="sub">Gross: ${peso(grossSales)} (${validSalesForRev.length} sales)</div>
+        <div class="sub">Gross: ${peso(grossSales)}${totalDiscounts > 0 ? ` · Disc: -${peso(totalDiscounts)}` : ''} (${validSalesForRev.length} sales)</div>
       </div>
       <div class="stat-card sage" style="cursor:pointer;" onclick="setReportTab('receiving')" title="Click to view stock receiving deliveries">
         <div class="label">Total Stock Received</div>
@@ -2584,243 +3101,7 @@ function reportBodyHtml(from, to) {
   const stockMoves = groupStockMovements(moves);
   const fmtQty = q => (q > 0 ? '+' : '') + formatStock(q);
   const colorMixMoves = sortedMoves.filter(m => m.type === 'colormix' && !m.productId);
-  const mixColorLabel = m => {
-    if (m.colorName) return m.colorName;
-    const pn = String(m.productName || '').trim();
-    // 1. Clean from productName if it contains a color (e.g. "Custom Color Mix — Baby Blue", "Color Mix - Leaf Green [Leaf Green]")
-    const stripped = pn
-      .replace(/^(Custom\s+)?Color\s+Mix\s*([—–\-:·]\s*|\s+)/i, '')
-      .replace(/\s*\[.*?\]$/, '')
-      .replace(/^.*\(for\s+(.*?)\s+mix\)$/i, '$1')
-      .trim();
-    if (stripped && !/^(custom\s+)?color\s+mix$/i.test(stripped)) return stripped;
-
-    // 2. Recover from sibling ingredient rows of the same date/staff: "<product> (for X mix)" or note containing "(ColorName)"
-    const sib = db.movements.find(x => x.type === 'colormix' && x.date === m.date && x.staffName === m.staffName && (
-      /\(for\s+(.*?)\s+mix\)/i.test(x.productName || '') ||
-      /\b(?:of\s+\d+(?:\.\d+)?L\s+)\(([^)]+)\)/i.test(x.note || '')
-    ));
-    if (sib) {
-      const sibPnMatch = String(sib.productName || '').match(/\(for\s+(.*?)\s+mix\)/i);
-      if (sibPnMatch && sibPnMatch[1]) return sibPnMatch[1].trim();
-      const sibNoteMatch = String(sib.note || '').match(/\b(?:of\s+\d+(?:\.\d+)?L\s+)\(([^)]+)\)/i);
-      if (sibNoteMatch && sibNoteMatch[1]) return sibNoteMatch[1].trim();
-    }
-
-    // 3. Recover from linked sale receipt if present in note
-    const note = String(m.note || '');
-    const rc = (note.match(/OR-\d+-\d+/) || [])[0];
-    if (rc) {
-      const sale = (db.sales || []).find(s => (s.receiptNo === rc || getReceiptNo(s) === rc));
-      const mixes = sale ? (sale.items || []).filter(i => i.type === 'colormix' && i.colorName) : [];
-      if (mixes.length) {
-        return mixes[0].colorName;
-      }
-    }
-
-    return pn || 'Color Mix';
-  };
-
-  const extractMixingLogRecord = m => {
-    const date = m.date;
-    const staff = m.staffName || 'Staff';
-    const liters = Number(m.qtyChange) || 0;
-    const colorName = mixColorLabel(m);
-    let detectedName = '';
-    let baseType = '';
-
-    const detMatch = String(m.productName || '').match(/\[(.*?)\]/);
-    if (detMatch && detMatch[1]) {
-      detectedName = detMatch[1].trim();
-    }
-
-    let receiptRef = m.receiptNo || '';
-    const noteStr = String(m.note || '');
-    if (!receiptRef) {
-      const rcMatch = noteStr.match(/(?:Receipt:\s*|\b)(OR-\d+-\d+|OR-\d+)/i);
-      if (rcMatch) receiptRef = rcMatch[1].trim();
-    }
-
-    if (!receiptRef) {
-      const sib = (db.movements || []).find(x => x.type === 'colormix' && x.date === m.date && x.staffName === m.staffName && x.productId && x.note);
-      if (sib) {
-        const sibRcMatch = String(sib.note || '').match(/(?:Receipt:\s*|\b)(OR-\d+-\d+|OR-\d+)/i);
-        if (sibRcMatch) receiptRef = sibRcMatch[1].trim();
-      }
-    }
-
-    let sale = null;
-    if (receiptRef) {
-      sale = (db.sales || []).find(s => s.receiptNo === receiptRef || (typeof getReceiptNo === 'function' && getReceiptNo(s) === receiptRef) || s.id === receiptRef);
-    }
-    if (!sale && !receiptRef) {
-      sale = (db.sales || []).find(s => s.date === m.date && (s.items || []).some(it => it.type === 'colormix'));
-      if (sale) {
-        receiptRef = typeof getReceiptNo === 'function' ? getReceiptNo(sale) : (sale.receiptNo || sale.id);
-      }
-    }
-
-    let saleMixItem = null;
-    if (sale && Array.isArray(sale.items)) {
-      saleMixItem = sale.items.find(it => it.type === 'colormix' && it.colorName && it.colorName.toLowerCase() === colorName.toLowerCase()) ||
-                    sale.items.find(it => it.type === 'colormix');
-      if (saleMixItem) {
-        if (saleMixItem.detectedColorName) detectedName = saleMixItem.detectedColorName;
-        if (saleMixItem.baseType) baseType = saleMixItem.baseType;
-      }
-    }
-
-    // Hex Color Preview Resolution
-    let hexColor = m.hexColor || m.hex || '';
-    if (!hexColor && saleMixItem && saleMixItem.hexColor) {
-      hexColor = saleMixItem.hexColor;
-    }
-    if (!hexColor) {
-      const presets = (db.presets || []).concat(
-        (() => {
-          try {
-            return JSON.parse(localStorage.getItem('mrgr_color_mix_presets') || '[]');
-          } catch (e) {
-            return [];
-          }
-        })()
-      );
-      const pMatch = presets.find(p => (p.colorName || '').toLowerCase() === colorName.toLowerCase() || (p.name || '').toLowerCase() === colorName.toLowerCase());
-      if (pMatch && pMatch.hex) hexColor = pMatch.hex;
-    }
-    if (!hexColor) {
-      const audit = (db.auditLogs || []).find(a => (a.action === 'MIXING_COMPLETE' || a.action === 'COLOR_MIX') && (
-        (a.entityName && a.entityName.toLowerCase() === colorName.toLowerCase()) ||
-        (a.details && a.details.toLowerCase().includes(colorName.toLowerCase()))
-      ));
-      if (audit) {
-        const hexMatch = String(audit.newValue || audit.details || '').match(/#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b/);
-        if (hexMatch) hexColor = hexMatch[0];
-      }
-    }
-    if (!hexColor && typeof PAINT_COLOR_DICTIONARY !== 'undefined') {
-      const dict = PAINT_COLOR_DICTIONARY.find(d => d.name.toLowerCase() === colorName.toLowerCase());
-      if (dict) hexColor = dict.hex;
-    }
-    if (hexColor && !/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/i.test(hexColor)) {
-      hexColor = '';
-    }
-
-    // Components & Formula Parsing
-    let components = [];
-    let rawFormula = '';
-    let extraNote = '';
-
-    if (saleMixItem && Array.isArray(saleMixItem.components) && saleMixItem.components.length) {
-      components = saleMixItem.components.map(c => ({
-        productId: c.productId,
-        name: c.name || (typeof productById === 'function' && productById(c.productId) ? productById(c.productId).name : 'Ingredient'),
-        percentage: Number(c.percentage || c.pct || 0) ? `${Number(c.percentage || c.pct)}%` : '',
-        pctNum: Number(c.percentage || c.pct || 0),
-        liters: Number(c.liters || 0) || (liters && c.percentage ? Number((liters * (Number(c.percentage) / 100)).toFixed(2)) : 0),
-        brand: c.brand || (typeof productById === 'function' && productById(c.productId) ? productById(c.productId).brand : '')
-      }));
-      rawFormula = components.map(c => `${c.percentage ? c.percentage + ' ' : ''}${c.name}`).join(' + ');
-    }
-
-    if (!components.length && noteStr) {
-      const fMatch = noteStr.match(/Formula:\s*([^·\r\n]+)/i);
-      if (fMatch) {
-        rawFormula = fMatch[1].trim();
-        const parts = rawFormula.split('+').map(p => p.trim()).filter(Boolean);
-        components = parts.map(part => {
-          let pct = '';
-          let pctNum = 0;
-          let name = part;
-          let compLiters = 0;
-          
-          const m1 = part.match(/^(\d+(?:\.\d+)?%)\s*(.+)$/);
-          const m2 = part.match(/^(.+?)\s*\((\d+(?:\.\d+)?%)\)$/);
-          if (m1) {
-            pct = m1[1];
-            pctNum = parseFloat(pct);
-            name = m1[2].trim();
-          } else if (m2) {
-            pct = m2[2];
-            pctNum = parseFloat(pct);
-            name = m2[1].trim();
-          }
-
-          const litMatch = name.match(/\((\d+(?:\.\d+)?)\s*L\)$/i);
-          if (litMatch) {
-            compLiters = parseFloat(litMatch[1]);
-            name = name.replace(/\s*\(\d+(?:\.\d+)?\s*L\)$/i, '').trim();
-          } else if (pctNum && liters) {
-            compLiters = Number((liters * (pctNum / 100)).toFixed(2));
-          }
-
-          const prod = (db.products || []).find(p => p.name.toLowerCase() === name.toLowerCase() || p.id === name);
-
-          return {
-            productId: prod ? prod.id : null,
-            name: prod ? prod.name : name,
-            percentage: pct,
-            pctNum: pctNum,
-            liters: compLiters,
-            brand: prod ? prod.brand : ''
-          };
-        });
-      }
-    }
-
-    if (!components.length) {
-      const sibs = (db.movements || []).filter(x => x.type === 'colormix' && x.date === m.date && x.staffName === m.staffName && x.productId);
-      if (sibs.length) {
-        const totalDeducted = sibs.reduce((sum, s) => sum + Math.abs(Number(s.qtyChange) || 0), 0);
-        components = sibs.map(s => {
-          const prod = typeof productById === 'function' ? productById(s.productId) : null;
-          const sLiters = Math.abs(Number(s.qtyChange) || 0);
-          const calcPct = totalDeducted > 0 ? Math.round((sLiters / totalDeducted) * 100) : 0;
-          const cleanName = (s.productName || (prod ? prod.name : 'Ingredient')).replace(/\s*\(for\s+.*?\s+mix\)$/i, '').trim();
-          return {
-            productId: s.productId,
-            name: cleanName,
-            percentage: calcPct > 0 ? `${calcPct}%` : '',
-            pctNum: calcPct,
-            liters: sLiters,
-            brand: prod ? prod.brand : ''
-          };
-        });
-        rawFormula = components.map(c => `${c.percentage ? c.percentage + ' ' : ''}${c.name}`).join(' + ');
-      }
-    }
-
-    if (noteStr) {
-      extraNote = noteStr
-        .replace(/Formula:\s*[^·\r\n]+/i, '')
-        .replace(/Receipt:\s*[^·\r\n]+/i, '')
-        .replace(/\bOR-\d+-\d+\b/gi, '')
-        .replace(/^[·\s\-_:,]+|[·\s\-_:,]+$/g, '')
-        .trim();
-    }
-
-    return {
-      rawMove: m,
-      date,
-      staff,
-      liters,
-      colorName,
-      detectedName,
-      baseType,
-      hexColor,
-      receiptRef,
-      sale,
-      components,
-      rawFormula,
-      extraNote,
-      formulaString: rawFormula || components.map(c => `${c.percentage || ''} ${c.name}`).join(' ')
-    };
-  };
-  const staffLabel = name => {
-    const u = (db.users || []).find(x => x.name === name);
-    const role = u ? { admin: 'Admin', cashier: 'Cashier', staff: 'Inventory Staff' }[u.role] : '';
-    return escapeHtml(name || '') + (role ? ` (${role})` : '');
-  };
+  const staffLabel = reportStaffLabel;
   const low = lowStockProducts();
 
   // Sales calculations (excluding voided / cancelled transactions)
@@ -3013,6 +3294,7 @@ function reportBodyHtml(from, to) {
 
   // Color Mixing Service Log Section
   const allMixRecords = colorMixMoves.map(m => extractMixingLogRecord(m));
+  window._cachedMixingRecords = allMixRecords;
   const qMix = (reportSearchQuery || '').trim().toLowerCase();
   const filteredMixRecords = allMixRecords.filter(rec => {
     if (reportTxTypeFilter !== 'all' && reportTxTypeFilter !== 'colormix') {
@@ -3029,15 +3311,23 @@ function reportBodyHtml(from, to) {
       if (!hasBrand) return false;
     }
     if (qMix) {
-      const inColor = rec.colorName.toLowerCase().includes(qMix);
-      const inDet = rec.detectedName.toLowerCase().includes(qMix);
+      const inColor = (rec.colorName || '').toLowerCase().includes(qMix);
+      const inDet = (rec.detectedName || '').toLowerCase().includes(qMix);
       const inReceipt = (rec.receiptRef || '').toLowerCase().includes(qMix);
       const inStaff = (rec.staff || '').toLowerCase().includes(qMix);
       const inFormula = (rec.formulaString || '').toLowerCase().includes(qMix);
       const inNote = (rec.extraNote || '').toLowerCase().includes(qMix);
       const inDate = (rec.date || '').toLowerCase().includes(qMix) || (typeof formatDateTime === 'function' && formatDateTime(rec.date).toLowerCase().includes(qMix));
       const inLiters = `${rec.liters}l`.includes(qMix) || `${formatStock(rec.liters)}`.includes(qMix);
-      if (!inColor && !inDet && !inReceipt && !inStaff && !inFormula && !inNote && !inDate && !inLiters) {
+      const inHex = (rec.hexColor || '').toLowerCase().includes(qMix);
+      const inComponents = (rec.components || []).some(c =>
+        (c.name || '').toLowerCase().includes(qMix) ||
+        (c.brand || '').toLowerCase().includes(qMix) ||
+        (c.colorName || '').toLowerCase().includes(qMix) ||
+        (c.hex || '').toLowerCase().includes(qMix) ||
+        (c.containerSource || '').toLowerCase().includes(qMix)
+      );
+      if (!inColor && !inDet && !inReceipt && !inStaff && !inFormula && !inNote && !inDate && !inLiters && !inHex && !inComponents) {
         return false;
       }
     }
@@ -3117,24 +3407,40 @@ function reportBodyHtml(from, to) {
         <table class="mixing-log-table">
           <thead>
             <tr>
-              ${mixTh('date', 'Date &amp; Time', '', 'min-width:130px; width:15%;')}
-              ${mixTh('color', 'Color Description', '', 'min-width:145px; width:18%;')}
-              ${mixTh('liters', 'Liters', 'right', 'min-width:85px; width:10%; text-align:right;')}
-              ${mixTh('formula', 'Formula', '', 'min-width:210px; width:30%;')}
-              ${mixTh('receipt', 'Receipt Reference', '', 'min-width:130px; width:14%;')}
-              ${mixTh('staff', 'Staff / User', '', 'min-width:115px; width:13%;')}
+              ${mixTh('date', 'Date &amp; Time', '', 'min-width:130px; width:14%;')}
+              ${mixTh('color', 'Final Mixed Color', '', 'min-width:165px; width:20%;')}
+              ${mixTh('liters', 'Volume', 'right', 'min-width:80px; width:8%; text-align:right;')}
+              ${mixTh('formula', 'Formula Breakdown', '', 'min-width:270px; width:34%;')}
+              ${mixTh('receipt', 'Receipt Reference', '', 'min-width:130px; width:12%;')}
+              ${mixTh('staff', 'Staff / User', '', 'min-width:115px; width:12%;')}
             </tr>
           </thead>
           <tbody>
             ${(mixPag.pagedItems || mixPag.pageItems || []).length ? (mixPag.pagedItems || mixPag.pageItems || []).map(rec => `
-              <tr>
+              <tr class="mixing-log-row" onclick="openMixingDetailsModal('${escapeAttr(rec.id)}')" title="Click to view detailed color mixing formulation breakdown">
                 <td style="white-space:nowrap; font-size:12.5px; color:var(--ink);">${formatDateTime(rec.date)}</td>
                 <td>
-                  <div class="mixing-color-cell">
-                    ${rec.hexColor ? `<span class="mixing-color-swatch" style="background:${rec.hexColor};" title="Preview: ${escapeAttr(rec.colorName)} (${rec.hexColor})"></span>` : ''}
-                    <div>
-                      <div style="font-weight:700; color:var(--ink); line-height:1.25;">${escapeHtml(rec.colorName)}</div>
-                      ${rec.detectedName && rec.detectedName.toLowerCase() !== rec.colorName.toLowerCase() ? `<div class="muted small" style="font-size:11px; margin-top:2px;">[${escapeHtml(rec.detectedName)}]</div>` : ''}
+                  <div class="mixing-final-color-cell">
+                    <div class="mixing-final-swatch-wrap">
+                      ${rec.hexColor ? `
+                        <span class="mixing-final-swatch" style="background:${rec.hexColor};" title="Final Color: ${escapeAttr(rec.colorName)} (${rec.hexColor})"></span>
+                      ` : `
+                        <span class="mixing-final-swatch no-hex" title="Final Color: ${escapeAttr(rec.colorName)} (HEX not recorded)">?</span>
+                      `}
+                    </div>
+                    <div class="mixing-final-info">
+                      <div class="mixing-final-title">${escapeHtml(rec.colorName)}</div>
+                      ${rec.detectedName && rec.detectedName.toLowerCase() !== rec.colorName.toLowerCase() ? `
+                        <div class="mixing-final-detected">[${escapeHtml(rec.detectedName)}]</div>
+                      ` : ''}
+                      <div class="mixing-final-meta">
+                        ${rec.hexColor ? `
+                          <code class="mixing-hex-code">${escapeHtml(rec.hexColor)}</code>
+                        ` : `
+                          <span class="mixing-hex-missing">HEX not recorded</span>
+                        `}
+                        <span class="mixing-ing-count-pill">${rec.components.length} ingredient${rec.components.length !== 1 ? 's' : ''}</span>
+                      </div>
                     </div>
                   </div>
                 </td>
@@ -3144,14 +3450,20 @@ function reportBodyHtml(from, to) {
                 <td>
                   <div class="mixing-formula-wrap">
                     ${rec.components.length ? `
-                      <div class="mixing-formula-chips">
-                        ${rec.components.map((c, idx) => `
-                          ${idx > 0 ? `<span class="formula-plus-sep">+</span>` : ''}
-                          <span class="formula-chip" title="${c.liters ? `${formatStock(c.liters)}L used` : ''}">
-                            ${c.percentage ? `<span class="formula-pct">${escapeHtml(c.percentage)}</span>` : ''}
-                            <span class="formula-name">${escapeHtml(c.name)}</span>
-                            ${c.liters ? `<span class="formula-liters">(${formatStock(c.liters)}L)</span>` : ''}
-                          </span>
+                      <div class="mixing-formula-breakdown">
+                        ${rec.components.map(c => `
+                          <div class="formula-ing-item">
+                            <span class="formula-ing-swatch ${!c.hex ? 'no-hex' : ''}" style="${c.hex ? `background:${c.hex};` : ''}" title="${escapeAttr(c.colorName || 'Color')} (${c.hex || 'No HEX'})"></span>
+                            <span class="formula-ing-pct">${escapeHtml(c.percentage || (c.pctNum ? `${c.pctNum}%` : ''))}</span>
+                            <span class="formula-ing-name">${escapeHtml(c.name)}</span>
+                            ${c.brand ? `<span class="formula-ing-brand">(${escapeHtml(c.brand)})</span>` : ''}
+                            <span class="formula-ing-color-tag">
+                              <span class="formula-ing-color-name">${escapeHtml(c.colorName || 'Standard')}</span>
+                              <code class="formula-ing-hex ${!c.hex ? 'missing' : ''}">${c.hex ? escapeHtml(c.hex) : 'No HEX'}</code>
+                            </span>
+                            <span class="formula-ing-vol">${c.liters ? `· ${formatStock(c.liters)} L` : ''}</span>
+                            ${c.containerSource ? `<span class="formula-ing-src" title="${escapeAttr(c.containerSource)}">🫙 ${escapeHtml(c.containerSource)}</span>` : ''}
+                          </div>
                         `).join('')}
                       </div>
                     ` : (rec.rawFormula ? `
@@ -3160,7 +3472,7 @@ function reportBodyHtml(from, to) {
                     ${rec.extraNote ? `<div class="mixing-extra-note">Note: ${escapeHtml(rec.extraNote)}</div>` : ''}
                   </div>
                 </td>
-                <td style="white-space:nowrap;">
+                <td style="white-space:nowrap;" onclick="event.stopPropagation();">
                   ${rec.receiptRef ? (isAdmin ? `
                     <button type="button" class="receipt-ref-btn" onclick="openMixingReceiptModal('${escapeAttr(rec.receiptRef)}')" title="Click to view sales transaction ${escapeAttr(rec.receiptRef)}">
                       <span>🧾</span>
@@ -3175,7 +3487,16 @@ function reportBodyHtml(from, to) {
                     <span class="muted small" title="Direct inventory mix (no sales receipt)">—</span>
                   `}
                 </td>
-                <td style="font-size:12.5px;">${staffLabel(rec.staff)}</td>
+                <td style="font-size:12.5px;">
+                  <div style="display:flex; flex-direction:column; gap:4px;">
+                    <div>${staffLabel(rec.staff)}</div>
+                    <div>
+                      <button type="button" class="btn ghost small mixing-details-action-btn" onclick="event.stopPropagation(); openMixingDetailsModal('${escapeAttr(rec.id)}')" title="View detailed formulation breakdown">
+                        <span>🔍 Details</span>
+                      </button>
+                    </div>
+                  </div>
+                </td>
               </tr>
             `).join('') : `
               <tr>

@@ -17,6 +17,7 @@ const selectedAlertProductIds = new Set();
 function setAlertTab(tab) {
   alertTab = tab;
   resetPaginationPage('low_stock_alerts');
+  if (typeof syncRouteState === 'function') syncRouteState({ push: true });
   renderPage();
 }
 
@@ -189,6 +190,8 @@ function createPOForSingleSize(productId, size, sizeId = null) {
 }
 
 function createPOFromSelectedAlerts() {
+  const bar = document.getElementById('alerts-floating-bar');
+  if (bar) bar.style.display = 'none';
   LowStockService.createPOFromSelected();
 }
 
@@ -461,11 +464,6 @@ function alertsPage() {
           </button>
 
           <!-- Selection action buttons -->
-          ${pag.totalPages > 1 ? `
-            <button class="btn secondary small" onclick="LowStockService.selectCurrentPage(getAllEligibleAlertSizes(pag.pagedItems))" title="Select eligible sizes on current visible page">
-              Select Current Page
-            </button>
-          ` : ''}
           <button class="btn secondary small" onclick="toggleSelectAllAlerts(true)" title="Select all eligible low-stock container sizes">
             Select All
           </button>
@@ -703,7 +701,7 @@ function alertsPage() {
     </div>
     <div style="display:flex; align-items:center; gap:8px;">
       <button class="btn ghost small" onclick="LowStockService.clear()" style="color:#fff; border-color:rgba(255,255,255,0.4);">Cancel</button>
-      <button class="btn small" style="background:#fff; color:var(--teal-dark); font-weight:700; box-shadow:var(--shadow-md);" onclick="createPOFromSelectedAlerts()">
+      <button id="alerts-floating-btn" class="btn small" style="background:#fff; color:var(--teal-dark); font-weight:700; box-shadow:var(--shadow-md);" onclick="createPOFromSelectedAlerts()">
         ⚡ Create Purchase Order (${selectedCount === 1 ? '1 Size' : `${selectedCount} Sizes`}) &rarr;
       </button>
     </div>

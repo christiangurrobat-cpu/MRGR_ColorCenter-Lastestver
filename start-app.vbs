@@ -25,6 +25,6 @@ WshShell.Run "taskkill /F /IM php.exe", 0, True
 WshShell.CurrentDirectory = ScriptDir
 WshShell.Run "php -S 0.0.0.0:80", 0, False
 
-' 3. Give PHP a moment to bind, then open http://MRGR_ColorCenter
+' 3. Give PHP a moment to bind, then open http://MRGR_ColorCenter on the login screen
 WScript.Sleep 600
-WshShell.Run "http://MRGR_ColorCenter"
+WshShell.Run "http://MRGR_ColorCenter/?login=1"

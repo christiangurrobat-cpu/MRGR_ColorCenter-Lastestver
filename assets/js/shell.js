@@ -59,6 +59,7 @@ function getModuleNotificationCount(moduleId, role) {
         (p.pendingPrice != null && Number(p.pendingPrice) > 0)
       ).length;
       total += (db.purchaseOrders || []).filter(o => o.status === 'pending').length;
+      total += (db.voidRequests || []).filter(v => v.status === 'pending').length;
       return total;
     }
 
@@ -142,7 +143,10 @@ function getModuleNotificationCount(moduleId, role) {
     }
 
     case 'sales': {
-      // Sales History is a completed transaction ledger; no pending notification needed
+      // For cashiers, show badge if there are unviewed/undismissed void decision notifications
+      if (currentRole === 'cashier' && typeof getPendingCashierVoidNotifs === 'function') {
+        return getPendingCashierVoidNotifs().length;
+      }
       return 0;
     }
 
@@ -266,6 +270,9 @@ function renderApp() {
   app.innerHTML = shell();
   renderPage();
   updateNavBadges();
+  if (typeof refreshColorMixPresetAvailabilityUI === 'function') {
+    try { refreshColorMixPresetAvailabilityUI(); } catch (e) { }
+  }
   startLiveClock();
 }
 
@@ -297,7 +304,7 @@ function shell() {
     const isVisible = count > 0;
     const displayCount = count > 99 ? '99+' : count;
     return `
-<button class="nav-item ${currentPage === it.id ? 'active' : ''}" onclick="goTo('${it.id}')" title="${it.label}">
+<button class="nav-item ${currentPage === it.id ? 'active' : ''}" onclick="goTo('${it.id}', { fromSidebar: true })" title="${it.label}">
   <span class="nav-icon" aria-hidden="true">${it.icon || '•'}</span>
   <span class="nav-label">${it.label}</span>
   <span id="nav-badge-${it.id}" class="nav-badge ${isVisible ? '' : 'hidden'}" style="${isVisible ? 'display:inline-flex;' : 'display:none;'}" title="${count} notification${count === 1 ? '' : 's'}">${displayCount}</span>
@@ -318,12 +325,6 @@ function shell() {
     <div class="brand-text">MRGR<br><small>COLOR CENTER</small></div>
   </div>
   <div class="nav-list">${navHtml}</div>
-  <div style="padding-top:14px; border-top:1px solid #3a352e; margin-top:auto;">
-    <div style="font-size:11px; color:#8E8578; display:flex; align-items:center; gap:6px;" class="system-status-text">
-      <span style="width:7px; height:7px; border-radius:50%; background:#4ade80; display:inline-block; flex-shrink:0;"></span>
-      <span>System Online · v2.5</span>
-    </div>
-  </div>
 </div>
 <div class="main">
   <div class="topbar">
@@ -365,29 +366,1171 @@ const PAGE_TITLES = {
   purchaseOrders: 'Purchase Orders',
 };
 
-function goTo(page) {
-  if (page === 'products') {
-    page = 'inventory';
+const ROLE_ALLOWED_PAGES = {
+  admin: ['dashboard', 'approvals', 'inventory', 'alerts', 'purchaseOrders', 'suppliers', 'reports', 'auditLog', 'users', 'pos', 'sales'],
+  cashier: ['pos', 'inventory', 'sales'],
+  staff: ['staffDashboard', 'inventory', 'alerts', 'purchaseOrders', 'receiving', 'suppliers', 'reports']
+};
+
+const PAGE_ALIASES = {
+  'dashboard': 'dashboard',
+  'admin-dashboard': 'dashboard',
+  'admindashboard': 'dashboard',
+  'staffdashboard': 'staffDashboard',
+  'staff-dashboard': 'staffDashboard',
+  'staff_dashboard': 'staffDashboard',
+  'approvals': 'approvals',
+  'pending-approvals': 'approvals',
+  'pending_approvals': 'approvals',
+  'pos': 'pos',
+  'point-of-sale': 'pos',
+  'point_of_sale': 'pos',
+  'products': 'inventory',
+  'inventory': 'inventory',
+  'sales': 'sales',
+  'sales-history': 'sales',
+  'sales_history': 'sales',
+  'saleshistory': 'sales',
+  'reports': 'reports',
+  'suppliers': 'suppliers',
+  'suppliersview': 'suppliers',
+  'supplier-directory': 'suppliers',
+  'supplier_directory': 'suppliers',
+  'users': 'users',
+  'user-management': 'users',
+  'user_management': 'users',
+  'auditlog': 'auditLog',
+  'audit-log': 'auditLog',
+  'audit_log': 'auditLog',
+  'audit': 'auditLog',
+  'receiving': 'receiving',
+  'stock-receiving': 'receiving',
+  'stock_receiving': 'receiving',
+  'alerts': 'alerts',
+  'low-stock': 'alerts',
+  'low_stock': 'alerts',
+  'low-stock-alerts': 'alerts',
+  'purchaseorders': 'purchaseOrders',
+  'purchase-orders': 'purchaseOrders',
+  'purchase_orders': 'purchaseOrders',
+  'po': 'purchaseOrders'
+};
+
+function normalizePageId(rawPage, role) {
+  if (!rawPage) return '';
+  const cleaned = String(rawPage).trim().replace(/^\/+|\/+$/g, '');
+  if (!cleaned) return '';
+  const mapped = PAGE_ALIASES[cleaned] || PAGE_ALIASES[cleaned.toLowerCase()] || cleaned;
+  const effectiveRole = role || (currentUser && currentUser.role) || '';
+  if (effectiveRole === 'staff' && mapped === 'dashboard') return 'staffDashboard';
+  if (effectiveRole === 'admin' && mapped === 'staffDashboard') return 'dashboard';
+  return mapped;
+}
+
+function isPageAllowedForRole(page, role) {
+  const effectiveRole = role || (currentUser && currentUser.role) || 'unauthenticated';
+  const normPage = normalizePageId(page, effectiveRole);
+  const allowed = ROLE_ALLOWED_PAGES[effectiveRole] || [];
+  return allowed.includes(normPage);
+}
+
+/* ============================================================
+   5.1 URL ROUTING & PAGE STATE PRESERVATION ENGINE
+   ============================================================ */
+const NAV_STATE_STORAGE_PREFIX = 'mrgr_nav_state_v1_';
+const PENDING_AUTH_ROUTE_KEY = 'mrgr_pending_auth_route_v1';
+let _isHandlingPopState = false;
+let _isBootingRoute = false;
+let _lastHistoryPushTs = 0;
+let _routeSyncTimer = null;
+
+function getCleanBasePath() {
+  let path = window.location.pathname || '/';
+  // Strip any known SPA route segment or login.php at the end of pathname
+  path = path.replace(/\/login\.php$/i, '/');
+  const parts = path.split('/').filter(Boolean);
+  if (parts.length > 0) {
+    const lastSeg = parts[parts.length - 1];
+    const lastLower = lastSeg.toLowerCase();
+    if (lastLower !== 'sales&inventory' && lastLower !== 'index.php' && lastLower !== 'index.html' && lastLower !== 'admin.php') {
+      if (PAGE_ALIASES[lastLower] || PAGE_ALIASES[lastSeg]) {
+        parts.pop();
+        path = '/' + parts.join('/') + (parts.length ? '/' : '');
+      }
+    }
   }
-  if (page === 'suppliersView') {
-    page = 'suppliers';
+  return path || '/';
+}
+
+function getNavStateKey(userId) {
+  const uidStr = userId || (currentUser && currentUser.id) || 'guest';
+  return NAV_STATE_STORAGE_PREFIX + uidStr;
+}
+
+function syncActiveDomInputsToState() {
+  try {
+    if (currentPage === 'inventory') {
+      const s = document.getElementById('inv-search');
+      if (s && typeof invSearchQuery !== 'undefined') invSearchQuery = s.value;
+      const t = document.getElementById('inv-type-filter');
+      if (t && typeof invTypeFilter !== 'undefined') invTypeFilter = t.value;
+      const st = document.getElementById('inv-status-filter');
+      if (st && typeof invStatusFilter !== 'undefined') invStatusFilter = st.value;
+    } else if (currentPage === 'sales') {
+      const s = document.getElementById('sh-search');
+      if (s && typeof salesSearchQuery !== 'undefined') salesSearchQuery = s.value;
+    } else if (currentPage === 'purchaseOrders') {
+      const s = document.getElementById('po-search-input');
+      if (s && typeof poSearch !== 'undefined') poSearch = s.value;
+    } else if (currentPage === 'pos') {
+      const s = document.getElementById('pos-search');
+      if (s && typeof posSearchQuery !== 'undefined') posSearchQuery = s.value;
+      const c = document.getElementById('pos-customer-name');
+      if (c && typeof currentSaleCustomerName !== 'undefined') currentSaleCustomerName = c.value;
+    } else if (currentPage === 'suppliers') {
+      const s = document.getElementById('supplier-search-input');
+      if (s && typeof supplierSearchQuery !== 'undefined') supplierSearchQuery = s.value;
+    } else if (currentPage === 'alerts') {
+      const s = document.getElementById('alerts-search-input');
+      if (s && typeof alertSearchQuery !== 'undefined') alertSearchQuery = s.value.trim();
+    } else if (currentPage === 'auditLog' && typeof auditFilters !== 'undefined') {
+      const q = document.getElementById('al-q');
+      if (q) auditFilters.q = q.value.trim();
+      const u = document.getElementById('al-user');
+      if (u) auditFilters.user = u.value.trim();
+      const cat = document.getElementById('al-category');
+      if (cat) auditFilters.category = cat.value;
+      const act = document.getElementById('al-action');
+      if (act) auditFilters.action = act.value;
+    }
+  } catch (e) { }
+}
+
+function captureAppNavigationState() {
+  syncActiveDomInputsToState();
+  const pagSnapshot = {};
+  if (typeof paginationRegistry !== 'undefined' && paginationRegistry) {
+    Object.keys(paginationRegistry).forEach(k => {
+      const st = paginationRegistry[k];
+      if (st) {
+        pagSnapshot[k] = {
+          page: Number(st.page) || 1,
+          pageSize: Number(st.pageSize) || 10
+        };
+      }
+    });
   }
-  if (currentUser && currentUser.role === 'staff' && page === 'dashboard') {
-    page = 'staffDashboard';
+
+  return {
+    userId: currentUser ? currentUser.id : null,
+    role: currentUser ? currentUser.role : null,
+    page: currentPage,
+    timestamp: Date.now(),
+    inventory: {
+      q: typeof invSearchQuery !== 'undefined' ? invSearchQuery : '',
+      type: typeof invTypeFilter !== 'undefined' ? invTypeFilter : '',
+      status: typeof invStatusFilter !== 'undefined' ? invStatusFilter : '',
+      sortField: typeof invSortField !== 'undefined' ? invSortField : 'name',
+      sortAsc: typeof invSortAsc !== 'undefined' ? Boolean(invSortAsc) : true,
+      expandedIds: (typeof invExpandedProductIds !== 'undefined' && invExpandedProductIds instanceof Set) ? Array.from(invExpandedProductIds) : [],
+      expandedMoveIds: (typeof invExpandedMovementsProductIds !== 'undefined' && invExpandedMovementsProductIds instanceof Set) ? Array.from(invExpandedMovementsProductIds) : [],
+      showAllMoves: typeof invShowAllMovements !== 'undefined' ? Boolean(invShowAllMovements) : false
+    },
+    sales: {
+      status: typeof salesFilterStatus !== 'undefined' ? salesFilterStatus : 'all',
+      q: typeof salesSearchQuery !== 'undefined' ? salesSearchQuery : '',
+      from: typeof salesDateFrom !== 'undefined' ? salesDateFrom : currentYearStartISO(),
+      to: typeof salesDateTo !== 'undefined' ? salesDateTo : currentYearEndISO(),
+      year: typeof salesYearFilter !== 'undefined' ? salesYearFilter : 'current'
+    },
+    purchaseOrders: {
+      view: typeof poViewMode !== 'undefined' ? poViewMode : 'list',
+      detailId: typeof poDetailId !== 'undefined' ? poDetailId : null,
+      status: typeof poFilterStatus !== 'undefined' ? poFilterStatus : '',
+      q: typeof poSearch !== 'undefined' ? poSearch : '',
+      from: typeof poDateFrom !== 'undefined' ? poDateFrom : currentYearStartISO(),
+      to: typeof poDateTo !== 'undefined' ? poDateTo : todayISO(),
+      year: typeof poYearFilter !== 'undefined' ? poYearFilter : 'current',
+      supplierId: typeof poSupplierId !== 'undefined' ? poSupplierId : '',
+      createStockFilter: typeof poCreateStockFilter !== 'undefined' ? poCreateStockFilter : 'low_out',
+      itemRows: (typeof poItemRows !== 'undefined' && Array.isArray(poItemRows)) ? poItemRows : [],
+      initialNotes: window._poInitialNotes || ''
+    },
+    reports: {
+      tab: typeof reportActiveTab !== 'undefined' ? reportActiveTab : 'all',
+      from: typeof reportDateFrom !== 'undefined' ? reportDateFrom : currentYearStartISO(),
+      to: typeof reportDateTo !== 'undefined' ? reportDateTo : currentYearEndISO(),
+      year: typeof reportYearFilter !== 'undefined' ? reportYearFilter : 'current',
+      product: typeof reportProductFilter !== 'undefined' ? reportProductFilter : 'all',
+      brand: typeof reportBrandFilter !== 'undefined' ? reportBrandFilter : 'all',
+      supplier: typeof reportSupplierFilter !== 'undefined' ? reportSupplierFilter : 'all',
+      txType: typeof reportTxTypeFilter !== 'undefined' ? reportTxTypeFilter : 'all',
+      q: typeof reportSearchQuery !== 'undefined' ? reportSearchQuery : '',
+      breakdownsExpanded: typeof salesHistoryBreakdownsExpanded !== 'undefined' ? Boolean(salesHistoryBreakdownsExpanded) : true,
+      mixSortField: typeof reportMixingSortField !== 'undefined' ? reportMixingSortField : 'date',
+      mixSortAsc: typeof reportMixingSortAsc !== 'undefined' ? Boolean(reportMixingSortAsc) : false,
+      tpView: typeof topProductsViewMode !== 'undefined' ? topProductsViewMode : 'overview',
+      tpRank: typeof topProductsRanking !== 'undefined' ? topProductsRanking : 'qty',
+      tpExpanded: (typeof topProductsExpandedKeys !== 'undefined' && topProductsExpandedKeys instanceof Set) ? Array.from(topProductsExpandedKeys) : []
+    },
+    alerts: {
+      tab: typeof alertTab !== 'undefined' ? alertTab : 'needing_po',
+      q: typeof alertSearchQuery !== 'undefined' ? alertSearchQuery : '',
+      supplier: typeof alertSupplierFilter !== 'undefined' ? alertSupplierFilter : 'all',
+      size: typeof alertContainerSizeFilter !== 'undefined' ? alertContainerSizeFilter : 'all',
+      status: typeof alertStockStatusFilter !== 'undefined' ? alertStockStatusFilter : 'all',
+      sizeMode: typeof alertSizeFilter !== 'undefined' ? alertSizeFilter : 'low_only',
+      selectedKeys: (typeof LowStockService !== 'undefined' && LowStockService.selectedKeys instanceof Set) ? Array.from(LowStockService.selectedKeys) : []
+    },
+    approvals: {
+      tab: typeof currentApprovalsTab !== 'undefined' ? currentApprovalsTab : 'adjustments',
+      tabExplicit: Boolean(window._approvalsTabExplicitlySet),
+      q: typeof approvalsSearchQuery !== 'undefined' ? approvalsSearchQuery : '',
+      adjStatus: typeof approvalsAdjStatusFilter !== 'undefined' ? approvalsAdjStatusFilter : 'pending',
+      histFilter: typeof approvalsHistoryFilter !== 'undefined' ? approvalsHistoryFilter : 'all',
+      from: typeof approvalsDateFrom !== 'undefined' ? approvalsDateFrom : currentYearStartISO(),
+      to: typeof approvalsDateTo !== 'undefined' ? approvalsDateTo : currentYearEndISO(),
+      year: typeof approvalsYearFilter !== 'undefined' ? approvalsYearFilter : 'current'
+    },
+    receiving: {
+      type: typeof currentMovementType !== 'undefined' ? currentMovementType : 'receiving',
+      poId: typeof receivingPOId !== 'undefined' ? receivingPOId : '',
+      view: typeof adjActiveView !== 'undefined' ? adjActiveView : 'entry',
+      reqStatus: typeof adjRequestFilterStatus !== 'undefined' ? adjRequestFilterStatus : 'all',
+      supplier: typeof bulkAdjSupplierFilter !== 'undefined' ? bulkAdjSupplierFilter : '',
+      batchNote: typeof bulkAdjBatchNote !== 'undefined' ? bulkAdjBatchNote : '',
+      rows: (typeof bulkAdjustmentRows !== 'undefined' && Array.isArray(bulkAdjustmentRows)) ? bulkAdjustmentRows : []
+    },
+    suppliers: {
+      q: typeof supplierSearchQuery !== 'undefined' ? supplierSearchQuery : '',
+      status: typeof supplierStatusFilter !== 'undefined' ? supplierStatusFilter : 'all',
+      sort: typeof supplierSortBy !== 'undefined' ? supplierSortBy : 'name_asc',
+      expandedIds: (typeof expandedSupplierIds !== 'undefined' && expandedSupplierIds instanceof Set) ? Array.from(expandedSupplierIds) : []
+    },
+    auditLog: {
+      category: (typeof auditFilters !== 'undefined' && auditFilters) ? (auditFilters.category || '') : '',
+      action: (typeof auditFilters !== 'undefined' && auditFilters) ? (auditFilters.action || '') : '',
+      user: (typeof auditFilters !== 'undefined' && auditFilters) ? (auditFilters.user || '') : '',
+      from: (typeof auditFilters !== 'undefined' && auditFilters) ? auditFilters.from : currentYearStartISO(),
+      to: (typeof auditFilters !== 'undefined' && auditFilters) ? auditFilters.to : currentYearEndISO(),
+      q: (typeof auditFilters !== 'undefined' && auditFilters) ? (auditFilters.q || '') : '',
+      year: typeof auditYearFilter !== 'undefined' ? auditYearFilter : 'current'
+    },
+    pos: {
+      q: typeof posSearchQuery !== 'undefined' ? posSearchQuery : '',
+      cat: typeof posCategoryFilter !== 'undefined' ? posCategoryFilter : '',
+      page: typeof posCurrentPage !== 'undefined' ? (Number(posCurrentPage) || 1) : 1,
+      cart: Array.isArray(cart) ? cart : [],
+      customerName: typeof currentSaleCustomerName === 'string' ? currentSaleCustomerName : ''
+    },
+    dashboard: {
+      expandedTxnIds: (typeof adminExpandedTxnIds !== 'undefined' && adminExpandedTxnIds instanceof Set) ? Array.from(adminExpandedTxnIds) : [],
+      staffMovements: (typeof staffMovementsState !== 'undefined' && staffMovementsState) ? { ...staffMovementsState } : null
+    },
+    pagination: pagSnapshot
+  };
+}
+
+function restoreAppNavigationState(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return;
+  try {
+    if (snapshot.pagination && typeof snapshot.pagination === 'object' && typeof getPaginationState === 'function') {
+      Object.keys(snapshot.pagination).forEach(k => {
+        const savedPag = snapshot.pagination[k];
+        if (savedPag) {
+          const st = getPaginationState(k);
+          if (savedPag.pageSize && PAGINATION_PAGE_SIZES.includes(Number(savedPag.pageSize))) {
+            st.pageSize = Number(savedPag.pageSize);
+          }
+          if (savedPag.page) {
+            st.page = Math.max(1, Number(savedPag.page) || 1);
+          }
+        }
+      });
+    }
+
+    if (snapshot.inventory) {
+      const inv = snapshot.inventory;
+      if (typeof invSearchQuery !== 'undefined') invSearchQuery = inv.q || '';
+      if (typeof invTypeFilter !== 'undefined') invTypeFilter = inv.type || '';
+      if (typeof invStatusFilter !== 'undefined') invStatusFilter = inv.status || '';
+      if (typeof invSortField !== 'undefined') invSortField = inv.sortField || 'name';
+      if (typeof invSortAsc !== 'undefined') invSortAsc = inv.sortAsc !== undefined ? Boolean(inv.sortAsc) : true;
+      if (typeof invExpandedProductIds !== 'undefined' && Array.isArray(inv.expandedIds)) {
+        invExpandedProductIds = new Set(inv.expandedIds);
+      }
+      if (typeof invExpandedMovementsProductIds !== 'undefined' && Array.isArray(inv.expandedMoveIds)) {
+        invExpandedMovementsProductIds = new Set(inv.expandedMoveIds);
+      }
+      if (typeof invShowAllMovements !== 'undefined') invShowAllMovements = Boolean(inv.showAllMoves);
+    }
+
+    if (snapshot.sales) {
+      const sh = snapshot.sales;
+      if (typeof salesFilterStatus !== 'undefined') salesFilterStatus = sh.status || 'all';
+      if (typeof salesSearchQuery !== 'undefined') salesSearchQuery = sh.q || '';
+      if (typeof salesDateFrom !== 'undefined' && sh.from !== undefined) salesDateFrom = sh.from;
+      if (typeof salesDateTo !== 'undefined' && sh.to !== undefined) salesDateTo = sh.to;
+      if (typeof salesYearFilter !== 'undefined') salesYearFilter = sh.year || 'current';
+    }
+
+    if (snapshot.purchaseOrders) {
+      const po = snapshot.purchaseOrders;
+      if (typeof poViewMode !== 'undefined') poViewMode = po.view || 'list';
+      if (typeof poDetailId !== 'undefined') poDetailId = po.detailId || null;
+      if (typeof poFilterStatus !== 'undefined') poFilterStatus = po.status || '';
+      if (typeof poSearch !== 'undefined') poSearch = po.q || '';
+      if (typeof poDateFrom !== 'undefined' && po.from !== undefined) poDateFrom = po.from;
+      if (typeof poDateTo !== 'undefined' && po.to !== undefined) poDateTo = po.to;
+      if (typeof poYearFilter !== 'undefined') poYearFilter = po.year || 'current';
+      if (typeof poSupplierId !== 'undefined') poSupplierId = po.supplierId || '';
+      if (typeof poCreateStockFilter !== 'undefined') poCreateStockFilter = po.createStockFilter || 'low_out';
+      if (typeof poItemRows !== 'undefined' && Array.isArray(po.itemRows) && po.itemRows.length > 0) {
+        poItemRows = po.itemRows;
+      }
+      if (po.initialNotes !== undefined) window._poInitialNotes = po.initialNotes;
+    }
+
+    if (snapshot.reports) {
+      const rep = snapshot.reports;
+      if (typeof reportActiveTab !== 'undefined') reportActiveTab = rep.tab || 'all';
+      if (typeof reportDateFrom !== 'undefined' && rep.from !== undefined) reportDateFrom = rep.from;
+      if (typeof reportDateTo !== 'undefined' && rep.to !== undefined) reportDateTo = rep.to;
+      if (typeof reportYearFilter !== 'undefined') reportYearFilter = rep.year || 'current';
+      if (typeof reportProductFilter !== 'undefined') reportProductFilter = rep.product || 'all';
+      if (typeof reportBrandFilter !== 'undefined') reportBrandFilter = rep.brand || 'all';
+      if (typeof reportSupplierFilter !== 'undefined') reportSupplierFilter = rep.supplier || 'all';
+      if (typeof reportTxTypeFilter !== 'undefined') reportTxTypeFilter = rep.txType || 'all';
+      if (typeof reportSearchQuery !== 'undefined') reportSearchQuery = rep.q || '';
+      if (typeof salesHistoryBreakdownsExpanded !== 'undefined' && rep.breakdownsExpanded !== undefined) {
+        salesHistoryBreakdownsExpanded = Boolean(rep.breakdownsExpanded);
+      }
+      if (typeof reportMixingSortField !== 'undefined') reportMixingSortField = rep.mixSortField || 'date';
+      if (typeof reportMixingSortAsc !== 'undefined' && rep.mixSortAsc !== undefined) reportMixingSortAsc = Boolean(rep.mixSortAsc);
+      if (typeof topProductsViewMode !== 'undefined') topProductsViewMode = rep.tpView || 'overview';
+      if (typeof topProductsRanking !== 'undefined') topProductsRanking = rep.tpRank || 'qty';
+      if (typeof topProductsExpandedKeys !== 'undefined' && Array.isArray(rep.tpExpanded)) {
+        topProductsExpandedKeys = new Set(rep.tpExpanded);
+      }
+    }
+
+    if (snapshot.alerts) {
+      const al = snapshot.alerts;
+      if (typeof alertTab !== 'undefined') alertTab = al.tab || 'needing_po';
+      if (typeof alertSearchQuery !== 'undefined') alertSearchQuery = al.q || '';
+      if (typeof alertSupplierFilter !== 'undefined') alertSupplierFilter = al.supplier || 'all';
+      if (typeof alertContainerSizeFilter !== 'undefined') alertContainerSizeFilter = al.size || 'all';
+      if (typeof alertStockStatusFilter !== 'undefined') alertStockStatusFilter = al.status || 'all';
+      if (typeof alertSizeFilter !== 'undefined') alertSizeFilter = al.sizeMode || 'low_only';
+      if (typeof LowStockService !== 'undefined' && LowStockService.selectedKeys instanceof Set && Array.isArray(al.selectedKeys)) {
+        LowStockService.selectedKeys.clear();
+        al.selectedKeys.forEach(k => LowStockService.selectedKeys.add(k));
+      }
+    }
+
+    if (snapshot.approvals) {
+      const ap = snapshot.approvals;
+      if (typeof currentApprovalsTab !== 'undefined') currentApprovalsTab = ap.tab || 'adjustments';
+      window._approvalsTabExplicitlySet = Boolean(ap.tabExplicit);
+      if (typeof approvalsSearchQuery !== 'undefined') approvalsSearchQuery = ap.q || '';
+      if (typeof approvalsAdjStatusFilter !== 'undefined') approvalsAdjStatusFilter = ap.adjStatus || 'pending';
+      if (typeof approvalsHistoryFilter !== 'undefined') approvalsHistoryFilter = ap.histFilter || 'all';
+      if (typeof approvalsDateFrom !== 'undefined' && ap.from !== undefined) approvalsDateFrom = ap.from;
+      if (typeof approvalsDateTo !== 'undefined' && ap.to !== undefined) approvalsDateTo = ap.to;
+      if (typeof approvalsYearFilter !== 'undefined') approvalsYearFilter = ap.year || 'current';
+    }
+
+    if (snapshot.receiving) {
+      const rcv = snapshot.receiving;
+      if (typeof currentMovementType !== 'undefined') currentMovementType = rcv.type || 'receiving';
+      if (typeof receivingPOId !== 'undefined') receivingPOId = rcv.poId || '';
+      if (typeof adjActiveView !== 'undefined') adjActiveView = rcv.view || 'entry';
+      if (typeof adjRequestFilterStatus !== 'undefined') adjRequestFilterStatus = rcv.reqStatus || 'all';
+      if (typeof bulkAdjSupplierFilter !== 'undefined') bulkAdjSupplierFilter = rcv.supplier || '';
+      if (typeof bulkAdjBatchNote !== 'undefined') bulkAdjBatchNote = rcv.batchNote || '';
+      if (typeof bulkAdjustmentRows !== 'undefined' && Array.isArray(rcv.rows) && rcv.rows.length > 0) {
+        bulkAdjustmentRows = rcv.rows;
+      }
+    }
+
+    if (snapshot.suppliers) {
+      const sup = snapshot.suppliers;
+      if (typeof supplierSearchQuery !== 'undefined') supplierSearchQuery = sup.q || '';
+      if (typeof supplierStatusFilter !== 'undefined') supplierStatusFilter = sup.status || 'all';
+      if (typeof supplierSortBy !== 'undefined') supplierSortBy = sup.sort || 'name_asc';
+      if (typeof expandedSupplierIds !== 'undefined' && Array.isArray(sup.expandedIds)) {
+        expandedSupplierIds = new Set(sup.expandedIds);
+      }
+    }
+
+    if (snapshot.auditLog && typeof auditFilters !== 'undefined') {
+      const alog = snapshot.auditLog;
+      auditFilters.category = alog.category || '';
+      auditFilters.action = alog.action || '';
+      auditFilters.user = alog.user || '';
+      if (alog.from !== undefined) auditFilters.from = alog.from;
+      if (alog.to !== undefined) auditFilters.to = alog.to;
+      auditFilters.q = alog.q || '';
+      if (typeof auditYearFilter !== 'undefined') auditYearFilter = alog.year || 'current';
+    }
+
+    if (snapshot.pos) {
+      const p = snapshot.pos;
+      if (typeof posSearchQuery !== 'undefined') posSearchQuery = p.q || '';
+      if (typeof posCategoryFilter !== 'undefined') posCategoryFilter = p.cat || '';
+      if (typeof posCurrentPage !== 'undefined') posCurrentPage = Math.max(1, Number(p.page) || 1);
+      if (Array.isArray(p.cart)) cart = p.cart;
+      if (typeof p.customerName === 'string') currentSaleCustomerName = p.customerName;
+    }
+
+    if (snapshot.dashboard) {
+      const d = snapshot.dashboard;
+      if (typeof adminExpandedTxnIds !== 'undefined' && Array.isArray(d.expandedTxnIds)) {
+        adminExpandedTxnIds = new Set(d.expandedTxnIds);
+      }
+      if (typeof staffMovementsState !== 'undefined' && d.staffMovements) {
+        Object.assign(staffMovementsState, d.staffMovements);
+      }
+    }
+  } catch (e) {
+    console.warn('Error restoring navigation state snapshot:', e);
   }
-  if (currentUser && currentUser.role === 'admin' && page === 'staffDashboard') {
-    page = 'dashboard';
+}
+
+function resetAllModuleNavigationStates() {
+  try {
+    if (typeof invSearchQuery !== 'undefined') invSearchQuery = '';
+    if (typeof invTypeFilter !== 'undefined') invTypeFilter = '';
+    if (typeof invStatusFilter !== 'undefined') invStatusFilter = '';
+    if (typeof invSortField !== 'undefined') invSortField = 'name';
+    if (typeof invSortAsc !== 'undefined') invSortAsc = true;
+    if (typeof invExpandedProductIds !== 'undefined' && invExpandedProductIds instanceof Set) invExpandedProductIds.clear();
+
+    if (typeof salesFilterStatus !== 'undefined') salesFilterStatus = 'all';
+    if (typeof salesSearchQuery !== 'undefined') salesSearchQuery = '';
+    if (typeof salesDateFrom !== 'undefined') salesDateFrom = currentYearStartISO();
+    if (typeof salesDateTo !== 'undefined') salesDateTo = currentYearEndISO();
+    if (typeof salesYearFilter !== 'undefined') salesYearFilter = 'current';
+
+    if (typeof poViewMode !== 'undefined') poViewMode = 'list';
+    if (typeof poDetailId !== 'undefined') poDetailId = null;
+    if (typeof poFilterStatus !== 'undefined') poFilterStatus = '';
+    if (typeof poSearch !== 'undefined') poSearch = '';
+    if (typeof poDateFrom !== 'undefined') poDateFrom = currentYearStartISO();
+    if (typeof poDateTo !== 'undefined') poDateTo = todayISO();
+    if (typeof poYearFilter !== 'undefined') poYearFilter = 'current';
+    if (typeof poSupplierId !== 'undefined') poSupplierId = '';
+    if (typeof poCreateStockFilter !== 'undefined') poCreateStockFilter = 'low_out';
+    if (typeof poItemRows !== 'undefined') poItemRows = [];
+
+    if (typeof reportActiveTab !== 'undefined') reportActiveTab = 'all';
+    if (typeof reportDateFrom !== 'undefined') reportDateFrom = currentYearStartISO();
+    if (typeof reportDateTo !== 'undefined') reportDateTo = currentYearEndISO();
+    if (typeof reportYearFilter !== 'undefined') reportYearFilter = 'current';
+    if (typeof reportProductFilter !== 'undefined') reportProductFilter = 'all';
+    if (typeof reportBrandFilter !== 'undefined') reportBrandFilter = 'all';
+    if (typeof reportSupplierFilter !== 'undefined') reportSupplierFilter = 'all';
+    if (typeof reportTxTypeFilter !== 'undefined') reportTxTypeFilter = 'all';
+    if (typeof reportSearchQuery !== 'undefined') reportSearchQuery = '';
+    if (typeof topProductsViewMode !== 'undefined') topProductsViewMode = 'overview';
+    if (typeof topProductsRanking !== 'undefined') topProductsRanking = 'qty';
+
+    if (typeof alertTab !== 'undefined') alertTab = 'needing_po';
+    if (typeof alertSearchQuery !== 'undefined') alertSearchQuery = '';
+    if (typeof alertSupplierFilter !== 'undefined') alertSupplierFilter = 'all';
+    if (typeof alertContainerSizeFilter !== 'undefined') alertContainerSizeFilter = 'all';
+    if (typeof alertStockStatusFilter !== 'undefined') alertStockStatusFilter = 'all';
+    if (typeof alertSizeFilter !== 'undefined') alertSizeFilter = 'low_only';
+
+    if (typeof currentApprovalsTab !== 'undefined') currentApprovalsTab = 'adjustments';
+    window._approvalsTabExplicitlySet = false;
+    if (typeof approvalsSearchQuery !== 'undefined') approvalsSearchQuery = '';
+    if (typeof approvalsAdjStatusFilter !== 'undefined') approvalsAdjStatusFilter = 'pending';
+    if (typeof approvalsHistoryFilter !== 'undefined') approvalsHistoryFilter = 'all';
+    if (typeof approvalsDateFrom !== 'undefined') approvalsDateFrom = currentYearStartISO();
+    if (typeof approvalsDateTo !== 'undefined') approvalsDateTo = currentYearEndISO();
+    if (typeof approvalsYearFilter !== 'undefined') approvalsYearFilter = 'current';
+
+    if (typeof currentMovementType !== 'undefined') currentMovementType = 'receiving';
+    if (typeof receivingPOId !== 'undefined') receivingPOId = '';
+    if (typeof adjActiveView !== 'undefined') adjActiveView = 'entry';
+    if (typeof adjRequestFilterStatus !== 'undefined') adjRequestFilterStatus = 'all';
+    if (typeof bulkAdjSupplierFilter !== 'undefined') bulkAdjSupplierFilter = '';
+    if (typeof bulkAdjBatchNote !== 'undefined') bulkAdjBatchNote = '';
+    if (typeof bulkAdjustmentRows !== 'undefined') bulkAdjustmentRows = [];
+
+    if (typeof supplierSearchQuery !== 'undefined') supplierSearchQuery = '';
+    if (typeof supplierStatusFilter !== 'undefined') supplierStatusFilter = 'all';
+    if (typeof supplierSortBy !== 'undefined') supplierSortBy = 'name_asc';
+    if (typeof expandedSupplierIds !== 'undefined' && expandedSupplierIds instanceof Set) expandedSupplierIds.clear();
+
+    if (typeof auditFilters !== 'undefined' && auditFilters) {
+      auditFilters.category = '';
+      auditFilters.action = '';
+      auditFilters.user = '';
+      auditFilters.from = currentYearStartISO();
+      auditFilters.to = currentYearEndISO();
+      auditFilters.q = '';
+    }
+    if (typeof auditYearFilter !== 'undefined') auditYearFilter = 'current';
+
+    if (typeof posSearchQuery !== 'undefined') posSearchQuery = '';
+    if (typeof posCategoryFilter !== 'undefined') posCategoryFilter = '';
+    if (typeof posCurrentPage !== 'undefined') posCurrentPage = 1;
+
+    if (typeof staffMovementsState !== 'undefined' && staffMovementsState) {
+      staffMovementsState.search = '';
+      staffMovementsState.typeFilter = 'all';
+      staffMovementsState.dateFilter = 'all';
+      staffMovementsState.page = 1;
+    }
+
+    if (typeof paginationRegistry !== 'undefined' && paginationRegistry) {
+      Object.keys(paginationRegistry).forEach(k => {
+        if (paginationRegistry[k]) {
+          paginationRegistry[k].page = 1;
+          paginationRegistry[k].pageSize = DEFAULT_PAGINATION_SIZE;
+        }
+      });
+    }
+  } catch (e) { }
+}
+
+function getPrimaryReportPaginationKey(tab) {
+  const map = {
+    all: 'rep_top_products',
+    sales: 'rep_top_products',
+    history: 'reports_sales_history',
+    inventory: 'rep_inventory_stock',
+    low_stock: 'rep_low_stock',
+    transactions: 'rep_transactions',
+    purchase_orders: 'rep_pos',
+    receiving: 'rep_receiving',
+    supplier_report: 'rep_suppliers',
+    previous_inventory: 'rep_stock_movements',
+    mixing: 'rep_color_mixing',
+    returns: 'rep_returns'
+  };
+  if ((tab === 'all' || tab === 'sales') && typeof topProductsViewMode !== 'undefined' && topProductsViewMode === 'breakdown') {
+    return 'rep_top_variants';
   }
-  const roleAllowedPages = {
-    admin: ['dashboard', 'approvals', 'inventory', 'alerts', 'purchaseOrders', 'suppliers', 'reports', 'auditLog', 'users', 'pos', 'sales'],
-    cashier: ['pos', 'inventory', 'sales'],
-    staff: ['staffDashboard', 'inventory', 'alerts', 'purchaseOrders', 'receiving', 'suppliers', 'reports']
+  return map[tab] || 'rep_top_products';
+}
+
+function getPrimaryApprovalsPaginationKey(tab) {
+  const map = {
+    adjustments: 'approvals_adjustments',
+    products: 'approvals_products',
+    purchaseOrders: 'approvals_pos',
+    voidRequests: 'approvals_void_requests',
+    history: 'approvals_history'
+  };
+  return map[tab] || 'approvals_adjustments';
+}
+
+function buildRouteQueryString(page) {
+  const targetPage = page || currentPage;
+  if (!targetPage) return '';
+  syncActiveDomInputsToState();
+
+  const params = new URLSearchParams();
+  params.set('page', targetPage);
+
+  const addPaginationParams = (pagKey, pageParam = 'p', sizeParam = 'ps') => {
+    if (typeof getPaginationState !== 'function') return;
+    const st = getPaginationState(pagKey);
+    if (st.page > 1) params.set(pageParam, String(st.page));
+    if (st.pageSize && st.pageSize !== DEFAULT_PAGINATION_SIZE) params.set(sizeParam, String(st.pageSize));
   };
 
-  const userRole = (currentUser && currentUser.role) || 'unauthenticated';
-  const allowed = roleAllowedPages[userRole] || [];
+  if (targetPage === 'inventory') {
+    if (typeof invSearchQuery !== 'undefined' && invSearchQuery) params.set('q', invSearchQuery);
+    if (typeof invTypeFilter !== 'undefined' && invTypeFilter) params.set('type', invTypeFilter);
+    if (typeof invStatusFilter !== 'undefined' && invStatusFilter) params.set('status', invStatusFilter);
+    if (typeof invSortField !== 'undefined') {
+      const sortVal = `${invSortField}_${invSortAsc ? 'asc' : 'desc'}`;
+      if (sortVal !== 'name_asc') params.set('sort', sortVal);
+    }
+    addPaginationParams('inventory_products', 'p', 'ps');
+    addPaginationParams('inventory_movements', 'mp', 'mps');
+  } else if (targetPage === 'sales') {
+    if (typeof salesFilterStatus !== 'undefined' && salesFilterStatus && salesFilterStatus !== 'all') {
+      params.set('status', salesFilterStatus);
+    }
+    if (typeof salesSearchQuery !== 'undefined' && salesSearchQuery) params.set('q', salesSearchQuery);
+    if (typeof salesYearFilter !== 'undefined' && salesYearFilter && salesYearFilter !== 'current') {
+      params.set('year', salesYearFilter);
+    }
+    if (typeof salesDateFrom !== 'undefined' && salesDateFrom !== currentYearStartISO()) {
+      params.set('from', salesDateFrom);
+    }
+    if (typeof salesDateTo !== 'undefined' && salesDateTo !== currentYearEndISO()) {
+      params.set('to', salesDateTo);
+    }
+    addPaginationParams('sales_history', 'p', 'ps');
+  } else if (targetPage === 'purchaseOrders') {
+    const vm = typeof poViewMode !== 'undefined' ? poViewMode : 'list';
+    if (vm && vm !== 'list') {
+      params.set('view', vm);
+      if (vm === 'detail' && typeof poDetailId !== 'undefined' && poDetailId) {
+        params.set('id', poDetailId);
+      } else if (vm === 'create') {
+        if (typeof poSupplierId !== 'undefined' && poSupplierId) params.set('supplier', poSupplierId);
+        if (typeof poCreateStockFilter !== 'undefined' && poCreateStockFilter && poCreateStockFilter !== 'low_out') {
+          params.set('stockFilter', poCreateStockFilter);
+        }
+      }
+    } else {
+      if (typeof poFilterStatus !== 'undefined' && poFilterStatus) params.set('status', poFilterStatus);
+      if (typeof poSearch !== 'undefined' && poSearch) params.set('q', poSearch);
+      if (typeof poYearFilter !== 'undefined' && poYearFilter && poYearFilter !== 'current') {
+        params.set('year', poYearFilter);
+      }
+      if (typeof poDateFrom !== 'undefined' && poDateFrom !== currentYearStartISO()) {
+        params.set('from', poDateFrom);
+      }
+      if (typeof poDateTo !== 'undefined' && poDateTo !== todayISO()) {
+        params.set('to', poDateTo);
+      }
+      addPaginationParams('purchase_orders', 'p', 'ps');
+    }
+  } else if (targetPage === 'reports') {
+    const tab = typeof reportActiveTab !== 'undefined' ? reportActiveTab : 'all';
+    if (tab && tab !== 'all') params.set('tab', tab);
+    if (typeof reportYearFilter !== 'undefined' && reportYearFilter && reportYearFilter !== 'current') {
+      params.set('year', reportYearFilter);
+    }
+    if (typeof reportDateFrom !== 'undefined' && reportDateFrom !== currentYearStartISO()) {
+      params.set('from', reportDateFrom);
+    }
+    if (typeof reportDateTo !== 'undefined' && reportDateTo !== currentYearEndISO()) {
+      params.set('to', reportDateTo);
+    }
+    if (typeof reportSearchQuery !== 'undefined' && reportSearchQuery) params.set('q', reportSearchQuery);
+    if (typeof reportProductFilter !== 'undefined' && reportProductFilter && reportProductFilter !== 'all') {
+      params.set('product', reportProductFilter);
+    }
+    if (typeof reportBrandFilter !== 'undefined' && reportBrandFilter && reportBrandFilter !== 'all') {
+      params.set('brand', reportBrandFilter);
+    }
+    if (typeof reportSupplierFilter !== 'undefined' && reportSupplierFilter && reportSupplierFilter !== 'all') {
+      params.set('supplier', reportSupplierFilter);
+    }
+    if (typeof reportTxTypeFilter !== 'undefined' && reportTxTypeFilter && reportTxTypeFilter !== 'all') {
+      params.set('txType', reportTxTypeFilter);
+    }
+    if (typeof topProductsViewMode !== 'undefined' && topProductsViewMode && topProductsViewMode !== 'overview') {
+      params.set('tpView', topProductsViewMode);
+    }
+    if (typeof topProductsRanking !== 'undefined' && topProductsRanking && topProductsRanking !== 'qty') {
+      params.set('tpRank', topProductsRanking);
+    }
+    addPaginationParams(getPrimaryReportPaginationKey(tab), 'p', 'ps');
+  } else if (targetPage === 'alerts') {
+    if (typeof alertTab !== 'undefined' && alertTab && alertTab !== 'needing_po') params.set('tab', alertTab);
+    if (typeof alertSearchQuery !== 'undefined' && alertSearchQuery) params.set('q', alertSearchQuery);
+    if (typeof alertSupplierFilter !== 'undefined' && alertSupplierFilter && alertSupplierFilter !== 'all') {
+      params.set('supplier', alertSupplierFilter);
+    }
+    if (typeof alertContainerSizeFilter !== 'undefined' && alertContainerSizeFilter && alertContainerSizeFilter !== 'all') {
+      params.set('size', String(alertContainerSizeFilter));
+    }
+    if (typeof alertStockStatusFilter !== 'undefined' && alertStockStatusFilter && alertStockStatusFilter !== 'all') {
+      params.set('status', alertStockStatusFilter);
+    }
+    if (typeof alertSizeFilter !== 'undefined' && alertSizeFilter && alertSizeFilter !== 'low_only') {
+      params.set('sizeMode', alertSizeFilter);
+    }
+    addPaginationParams('low_stock_alerts', 'p', 'ps');
+  } else if (targetPage === 'approvals') {
+    const tab = typeof currentApprovalsTab !== 'undefined' ? currentApprovalsTab : 'adjustments';
+    if (tab && (tab !== 'adjustments' || window._approvalsTabExplicitlySet)) params.set('tab', tab);
+    if (typeof approvalsSearchQuery !== 'undefined' && approvalsSearchQuery) params.set('q', approvalsSearchQuery);
+    if (typeof approvalsAdjStatusFilter !== 'undefined' && approvalsAdjStatusFilter && approvalsAdjStatusFilter !== 'pending') {
+      params.set('adjStatus', approvalsAdjStatusFilter);
+    }
+    if (typeof approvalsHistoryFilter !== 'undefined' && approvalsHistoryFilter && approvalsHistoryFilter !== 'all') {
+      params.set('histFilter', approvalsHistoryFilter);
+    }
+    if (typeof approvalsYearFilter !== 'undefined' && approvalsYearFilter && approvalsYearFilter !== 'current') {
+      params.set('year', approvalsYearFilter);
+    }
+    if (typeof approvalsDateFrom !== 'undefined' && approvalsDateFrom !== currentYearStartISO()) {
+      params.set('from', approvalsDateFrom);
+    }
+    if (typeof approvalsDateTo !== 'undefined' && approvalsDateTo !== currentYearEndISO()) {
+      params.set('to', approvalsDateTo);
+    }
+    addPaginationParams(getPrimaryApprovalsPaginationKey(tab), 'p', 'ps');
+  } else if (targetPage === 'receiving') {
+    const mvType = typeof currentMovementType !== 'undefined' ? currentMovementType : 'receiving';
+    if (mvType && mvType !== 'receiving') params.set('type', mvType);
+    if (mvType === 'receiving' && typeof receivingPOId !== 'undefined' && receivingPOId) {
+      params.set('poId', receivingPOId);
+    }
+    if (mvType === 'adjustment') {
+      if (typeof adjActiveView !== 'undefined' && adjActiveView && adjActiveView !== 'entry') {
+        params.set('view', adjActiveView);
+      }
+      if (typeof adjRequestFilterStatus !== 'undefined' && adjRequestFilterStatus && adjRequestFilterStatus !== 'all') {
+        params.set('status', adjRequestFilterStatus);
+      }
+      if (typeof bulkAdjSupplierFilter !== 'undefined' && bulkAdjSupplierFilter) {
+        params.set('supplier', bulkAdjSupplierFilter);
+      }
+      addPaginationParams('adj_requests', 'p', 'ps');
+    }
+  } else if (targetPage === 'suppliers') {
+    if (typeof supplierSearchQuery !== 'undefined' && supplierSearchQuery) params.set('q', supplierSearchQuery);
+    if (typeof supplierStatusFilter !== 'undefined' && supplierStatusFilter && supplierStatusFilter !== 'all') {
+      params.set('status', supplierStatusFilter);
+    }
+    if (typeof supplierSortBy !== 'undefined' && supplierSortBy && supplierSortBy !== 'name_asc') {
+      params.set('sort', supplierSortBy);
+    }
+    addPaginationParams('suppliers', 'p', 'ps');
+  } else if (targetPage === 'auditLog' && typeof auditFilters !== 'undefined') {
+    if (auditFilters.q) params.set('q', auditFilters.q);
+    if (auditFilters.category) params.set('cat', auditFilters.category);
+    if (auditFilters.action) params.set('act', auditFilters.action);
+    if (auditFilters.user) params.set('user', auditFilters.user);
+    if (typeof auditYearFilter !== 'undefined' && auditYearFilter && auditYearFilter !== 'current') {
+      params.set('year', auditYearFilter);
+    }
+    if (auditFilters.from !== currentYearStartISO()) params.set('from', auditFilters.from || '');
+    if (auditFilters.to !== currentYearEndISO()) params.set('to', auditFilters.to || '');
+    addPaginationParams('audit_log', 'p', 'ps');
+  } else if (targetPage === 'pos') {
+    if (typeof posSearchQuery !== 'undefined' && posSearchQuery) params.set('q', posSearchQuery);
+    if (typeof posCategoryFilter !== 'undefined' && posCategoryFilter) params.set('cat', posCategoryFilter);
+    if (typeof posCurrentPage !== 'undefined' && Number(posCurrentPage) > 1) params.set('p', String(posCurrentPage));
+  } else if (targetPage === 'staffDashboard' && typeof staffMovementsState !== 'undefined') {
+    if (staffMovementsState.search) params.set('q', staffMovementsState.search);
+    if (staffMovementsState.typeFilter && staffMovementsState.typeFilter !== 'all') {
+      params.set('type', staffMovementsState.typeFilter);
+    }
+    if (staffMovementsState.dateFilter && staffMovementsState.dateFilter !== 'all') {
+      params.set('date', staffMovementsState.dateFilter);
+    }
+    if (Number(staffMovementsState.page) > 1) params.set('p', String(staffMovementsState.page));
+  }
 
-  if (!allowed.includes(page)) {
+  return params.toString();
+}
+
+function parseRouteFromLocation() {
+  const searchParams = new URLSearchParams(window.location.search || '');
+  let rawPage = searchParams.get('page') || searchParams.get('module') || searchParams.get('route') || '';
+
+  // Support hash routes like #/inventory?q=test or #inventory or #page=inventory
+  if (!rawPage && window.location.hash) {
+    const hashClean = window.location.hash.replace(/^#\/?/, '');
+    if (hashClean) {
+      const [hashPath, hashQuery] = hashClean.split('?');
+      if (hashPath && hashPath.includes('=')) {
+        const hp = new URLSearchParams(hashClean);
+        rawPage = hp.get('page') || hp.get('module') || '';
+        hp.forEach((v, k) => { if (!searchParams.has(k)) searchParams.set(k, v); });
+      } else if (hashPath) {
+        rawPage = hashPath;
+        if (hashQuery) {
+          const hp = new URLSearchParams(hashQuery);
+          hp.forEach((v, k) => { if (!searchParams.has(k)) searchParams.set(k, v); });
+        }
+      }
+    }
+  }
+
+  // Support direct path segments like /inventory, /purchaseOrders, /reports
+  if (!rawPage && window.location.pathname) {
+    const parts = window.location.pathname.split('/').filter(Boolean);
+    if (parts.length > 0) {
+      const lastSeg = parts[parts.length - 1];
+      const lastLower = lastSeg.toLowerCase();
+      if (lastLower !== 'sales&inventory' && lastLower !== 'index.php' && lastLower !== 'index.html' && lastLower !== 'admin.php' && lastLower !== 'login.php') {
+        if (PAGE_ALIASES[lastLower] || PAGE_ALIASES[lastSeg]) {
+          rawPage = lastSeg;
+        }
+      }
+    }
+  }
+
+  return {
+    hasExplicitPage: Boolean(rawPage),
+    rawPage: rawPage,
+    params: searchParams
+  };
+}
+
+function applyURLParamsToModuleState(page, params) {
+  if (!page || !params) return;
+
+  const applyPaginationFromParams = (pagKey, pageParam = 'p', sizeParam = 'ps') => {
+    if (typeof getPaginationState !== 'function') return;
+    const st = getPaginationState(pagKey);
+    if (params.has(sizeParam)) {
+      const sz = Number(params.get(sizeParam));
+      if (PAGINATION_PAGE_SIZES.includes(sz)) st.pageSize = sz;
+    }
+    if (params.has(pageParam)) {
+      st.page = Math.max(1, Number(params.get(pageParam)) || 1);
+    } else {
+      st.page = 1;
+    }
+  };
+
+  if (page === 'inventory') {
+    if (typeof invSearchQuery !== 'undefined') invSearchQuery = params.get('q') || '';
+    if (typeof invTypeFilter !== 'undefined') invTypeFilter = params.get('type') || '';
+    if (typeof invStatusFilter !== 'undefined') invStatusFilter = params.get('status') || '';
+    if (typeof invSortField !== 'undefined') {
+      const sortParam = params.get('sort') || 'name_asc';
+      const lastUnderscore = sortParam.lastIndexOf('_');
+      if (lastUnderscore > 0) {
+        invSortField = sortParam.slice(0, lastUnderscore);
+        invSortAsc = sortParam.slice(lastUnderscore + 1) !== 'desc';
+      } else {
+        invSortField = 'name';
+        invSortAsc = true;
+      }
+    }
+    applyPaginationFromParams('inventory_products', 'p', 'ps');
+    applyPaginationFromParams('inventory_movements', 'mp', 'mps');
+  } else if (page === 'sales') {
+    if (typeof salesFilterStatus !== 'undefined') salesFilterStatus = params.get('status') || 'all';
+    if (typeof salesSearchQuery !== 'undefined') salesSearchQuery = params.get('q') || '';
+    if (typeof salesYearFilter !== 'undefined') salesYearFilter = params.get('year') || 'current';
+    if (typeof salesDateFrom !== 'undefined') {
+      salesDateFrom = params.has('from') ? params.get('from') : (salesYearFilter === 'all' ? '' : currentYearStartISO());
+    }
+    if (typeof salesDateTo !== 'undefined') {
+      salesDateTo = params.has('to') ? params.get('to') : (salesYearFilter === 'all' ? '' : currentYearEndISO());
+    }
+    applyPaginationFromParams('sales_history', 'p', 'ps');
+  } else if (page === 'purchaseOrders') {
+    const vm = params.get('view') || 'list';
+    if (typeof poViewMode !== 'undefined') poViewMode = ['list', 'create', 'detail'].includes(vm) ? vm : 'list';
+    if (poViewMode === 'detail') {
+      if (typeof poDetailId !== 'undefined') poDetailId = params.get('id') || poDetailId || null;
+      if (!poDetailId || (db && Array.isArray(db.purchaseOrders) && db.purchaseOrders.length > 0 && !db.purchaseOrders.some(o => o.id === poDetailId))) {
+        poViewMode = 'list';
+        poDetailId = null;
+      }
+    } else if (poViewMode === 'create') {
+      if (params.has('supplier') && typeof poSupplierId !== 'undefined') poSupplierId = params.get('supplier') || '';
+      if (params.has('stockFilter') && typeof poCreateStockFilter !== 'undefined') poCreateStockFilter = params.get('stockFilter') || 'low_out';
+      if (typeof poItemRows !== 'undefined' && (!Array.isArray(poItemRows) || poItemRows.length === 0) && typeof newPORow === 'function') {
+        poItemRows = [newPORow('')];
+      }
+    } else {
+      if (typeof poFilterStatus !== 'undefined') poFilterStatus = params.get('status') || '';
+      if (typeof poSearch !== 'undefined') poSearch = params.get('q') || '';
+      if (typeof poYearFilter !== 'undefined') poYearFilter = params.get('year') || 'current';
+      if (typeof poDateFrom !== 'undefined') {
+        poDateFrom = params.has('from') ? params.get('from') : (poYearFilter === 'all' ? '' : currentYearStartISO());
+      }
+      if (typeof poDateTo !== 'undefined') {
+        poDateTo = params.has('to') ? params.get('to') : (poYearFilter === 'all' ? '' : todayISO());
+      }
+      applyPaginationFromParams('purchase_orders', 'p', 'ps');
+    }
+  } else if (page === 'reports') {
+    let tab = params.get('tab') || 'all';
+    const isAdmin = currentUser && currentUser.role === 'admin';
+    if (!isAdmin && (tab === 'sales' || tab === 'history' || tab === 'returns')) {
+      tab = 'all';
+    }
+    if (typeof reportActiveTab !== 'undefined') reportActiveTab = tab;
+    if (typeof reportYearFilter !== 'undefined') reportYearFilter = params.get('year') || 'current';
+    if (typeof reportDateFrom !== 'undefined') {
+      reportDateFrom = params.has('from') ? params.get('from') : (reportYearFilter === 'all' ? '' : currentYearStartISO());
+    }
+    if (typeof reportDateTo !== 'undefined') {
+      reportDateTo = params.has('to') ? params.get('to') : (reportYearFilter === 'all' ? '' : currentYearEndISO());
+    }
+    if (typeof reportSearchQuery !== 'undefined') reportSearchQuery = params.get('q') || '';
+    if (typeof reportProductFilter !== 'undefined') reportProductFilter = params.get('product') || 'all';
+    if (typeof reportBrandFilter !== 'undefined') reportBrandFilter = params.get('brand') || 'all';
+    if (typeof reportSupplierFilter !== 'undefined') reportSupplierFilter = params.get('supplier') || 'all';
+    if (typeof reportTxTypeFilter !== 'undefined') reportTxTypeFilter = params.get('txType') || 'all';
+    if (typeof topProductsViewMode !== 'undefined') topProductsViewMode = params.get('tpView') || 'overview';
+    if (typeof topProductsRanking !== 'undefined') topProductsRanking = params.get('tpRank') || 'qty';
+    applyPaginationFromParams(getPrimaryReportPaginationKey(tab), 'p', 'ps');
+  } else if (page === 'alerts') {
+    if (typeof alertTab !== 'undefined') alertTab = params.get('tab') || 'needing_po';
+    if (typeof alertSearchQuery !== 'undefined') alertSearchQuery = params.get('q') || '';
+    if (typeof alertSupplierFilter !== 'undefined') alertSupplierFilter = params.get('supplier') || 'all';
+    if (typeof alertContainerSizeFilter !== 'undefined') alertContainerSizeFilter = params.get('size') || 'all';
+    if (typeof alertStockStatusFilter !== 'undefined') alertStockStatusFilter = params.get('status') || 'all';
+    if (typeof alertSizeFilter !== 'undefined') alertSizeFilter = params.get('sizeMode') || 'low_only';
+    applyPaginationFromParams('low_stock_alerts', 'p', 'ps');
+  } else if (page === 'approvals') {
+    if (params.has('tab')) {
+      if (typeof currentApprovalsTab !== 'undefined') currentApprovalsTab = params.get('tab') || 'adjustments';
+      window._approvalsTabExplicitlySet = true;
+    }
+    if (typeof approvalsSearchQuery !== 'undefined') approvalsSearchQuery = params.get('q') || '';
+    if (typeof approvalsAdjStatusFilter !== 'undefined') approvalsAdjStatusFilter = params.get('adjStatus') || 'pending';
+    if (typeof approvalsHistoryFilter !== 'undefined') approvalsHistoryFilter = params.get('histFilter') || 'all';
+    if (typeof approvalsYearFilter !== 'undefined') approvalsYearFilter = params.get('year') || 'current';
+    if (typeof approvalsDateFrom !== 'undefined') {
+      approvalsDateFrom = params.has('from') ? params.get('from') : (approvalsYearFilter === 'all' ? '' : currentYearStartISO());
+    }
+    if (typeof approvalsDateTo !== 'undefined') {
+      approvalsDateTo = params.has('to') ? params.get('to') : (approvalsYearFilter === 'all' ? '' : currentYearEndISO());
+    }
+    const tab = typeof currentApprovalsTab !== 'undefined' ? currentApprovalsTab : 'adjustments';
+    applyPaginationFromParams(getPrimaryApprovalsPaginationKey(tab), 'p', 'ps');
+  } else if (page === 'receiving') {
+    let mvType = params.get('type') || (params.get('view') === 'requests' ? 'adjustment' : 'receiving');
+    if (!['receiving', 'adjustment', 'colormix'].includes(mvType)) mvType = 'receiving';
+    if (typeof currentMovementType !== 'undefined') currentMovementType = mvType;
+    if (params.has('poId') && typeof receivingPOId !== 'undefined') receivingPOId = params.get('poId') || '';
+    if (typeof adjActiveView !== 'undefined') adjActiveView = params.get('view') || 'entry';
+    if (typeof adjRequestFilterStatus !== 'undefined') adjRequestFilterStatus = params.get('status') || 'all';
+    if (typeof bulkAdjSupplierFilter !== 'undefined') bulkAdjSupplierFilter = params.get('supplier') || '';
+    applyPaginationFromParams('adj_requests', 'p', 'ps');
+  } else if (page === 'suppliers') {
+    if (typeof supplierSearchQuery !== 'undefined') supplierSearchQuery = params.get('q') || '';
+    if (typeof supplierStatusFilter !== 'undefined') supplierStatusFilter = params.get('status') || 'all';
+    if (typeof supplierSortBy !== 'undefined') supplierSortBy = params.get('sort') || 'name_asc';
+    applyPaginationFromParams('suppliers', 'p', 'ps');
+  } else if (page === 'auditLog' && typeof auditFilters !== 'undefined') {
+    auditFilters.q = params.get('q') || '';
+    auditFilters.category = params.get('cat') || '';
+    auditFilters.action = params.get('act') || '';
+    auditFilters.user = params.get('user') || '';
+    if (typeof auditYearFilter !== 'undefined') auditYearFilter = params.get('year') || 'current';
+    auditFilters.from = params.has('from') ? params.get('from') : (auditYearFilter === 'all' ? '' : currentYearStartISO());
+    auditFilters.to = params.has('to') ? params.get('to') : (auditYearFilter === 'all' ? '' : currentYearEndISO());
+    applyPaginationFromParams('audit_log', 'p', 'ps');
+  } else if (page === 'pos') {
+    if (typeof posSearchQuery !== 'undefined') posSearchQuery = params.get('q') || '';
+    if (typeof posCategoryFilter !== 'undefined') posCategoryFilter = params.get('cat') || '';
+    if (typeof posCurrentPage !== 'undefined') posCurrentPage = Math.max(1, Number(params.get('p')) || 1);
+  } else if (page === 'staffDashboard' && typeof staffMovementsState !== 'undefined') {
+    staffMovementsState.search = params.get('q') || '';
+    staffMovementsState.typeFilter = params.get('type') || 'all';
+    staffMovementsState.dateFilter = params.get('date') || 'all';
+    staffMovementsState.page = Math.max(1, Number(params.get('p')) || 1);
+  }
+}
+
+function saveNavStateToStorage(snapshot) {
+  if (!currentUser || !currentUser.id) return;
+  try {
+    const key = getNavStateKey(currentUser.id);
+    const serialized = JSON.stringify(snapshot);
+    sessionStorage.setItem(key, serialized);
+    localStorage.setItem(key, serialized);
+  } catch (e) { }
+}
+
+function loadNavStateFromStorage(userId) {
+  const key = getNavStateKey(userId);
+  try {
+    if (window.history && window.history.state && window.history.state.userId === userId && window.history.state.page) {
+      return window.history.state;
+    }
+  } catch (e) { }
+  try {
+    const rawSession = sessionStorage.getItem(key);
+    if (rawSession) {
+      const parsed = JSON.parse(rawSession);
+      if (parsed && parsed.userId === userId) return parsed;
+    }
+  } catch (e) { }
+  try {
+    const rawLocal = localStorage.getItem(key);
+    if (rawLocal) {
+      const parsed = JSON.parse(rawLocal);
+      if (parsed && parsed.userId === userId) return parsed;
+    }
+  } catch (e) { }
+  return null;
+}
+
+function clearNavStateStorage(userId) {
+  try {
+    sessionStorage.removeItem(PENDING_AUTH_ROUTE_KEY);
+    if (userId) {
+      const key = getNavStateKey(userId);
+      sessionStorage.removeItem(key);
+      localStorage.removeItem(key);
+    }
+  } catch (e) { }
+}
+
+function syncRouteState(options = {}) {
+  if (!currentUser || !currentPage || _isBootingRoute) return;
+  try {
+    const snapshot = captureAppNavigationState();
+    saveNavStateToStorage(snapshot);
+
+    const qs = buildRouteQueryString(currentPage);
+    const basePath = getCleanBasePath();
+    const targetUrl = basePath + (qs ? '?' + qs : '');
+    const currentUrl = window.location.pathname + window.location.search;
+
+    if (_isHandlingPopState) {
+      window.history.replaceState(snapshot, document.title, targetUrl);
+      return;
+    }
+
+    const now = Date.now();
+    const shouldPush = Boolean(options.push) && !options.replace && (targetUrl !== currentUrl) && ((now - _lastHistoryPushTs) > 60);
+
+    if (shouldPush) {
+      window.history.pushState(snapshot, document.title, targetUrl);
+      _lastHistoryPushTs = now;
+    } else {
+      window.history.replaceState(snapshot, document.title, targetUrl);
+    }
+  } catch (e) {
+    console.warn('Route state sync warning:', e);
+  }
+}
+
+function scheduleRouteStateSync() {
+  if (_routeSyncTimer) clearTimeout(_routeSyncTimer);
+  _routeSyncTimer = setTimeout(() => {
+    syncRouteState({ push: false });
+  }, 60);
+}
+
+function restoreAuthenticatedRouteOnBoot(initialRoute) {
+  if (!currentUser) return;
+  _isBootingRoute = true;
+  let restrictedRedirectMsg = '';
+
+  try {
+    const savedSnapshot = loadNavStateFromStorage(currentUser.id);
+    if (savedSnapshot) {
+      restoreAppNavigationState(savedSnapshot);
+    }
+
+    const route = initialRoute || parseRouteFromLocation();
+    let candidatePage = '';
+    if (route && route.hasExplicitPage) {
+      candidatePage = route.rawPage;
+    } else if (savedSnapshot && savedSnapshot.page) {
+      candidatePage = savedSnapshot.page;
+    } else {
+      candidatePage = defaultPageFor(currentUser.role);
+    }
+
+    const normPage = normalizePageId(candidatePage, currentUser.role);
+    const userRole = currentUser.role;
+
+    if (!isPageAllowedForRole(normPage, userRole)) {
+      const pageLabel = PAGE_TITLES[normPage] || candidatePage;
+      const fallbackPage = (savedSnapshot && savedSnapshot.page && isPageAllowedForRole(savedSnapshot.page, userRole))
+        ? normalizePageId(savedSnapshot.page, userRole)
+        : defaultPageFor(userRole);
+      const fallbackLabel = PAGE_TITLES[fallbackPage] || fallbackPage;
+
+      if (typeof logAudit === 'function') {
+        logAudit(
+          'UNAUTHORIZED_ACCESS',
+          pageLabel,
+          `Unauthorized URL access/refresh attempt to ${pageLabel} by ${currentUser.name || currentUser.username} (${userRole})`,
+          {
+            entityName: pageLabel,
+            fieldChanged: 'URL Route Access Check',
+            oldValue: `Role: ${userRole} · Requested: ${pageLabel}`,
+            newValue: `Redirected to ${fallbackLabel}`,
+            reason: `Attempted to access or refresh unauthorized module "${pageLabel}"`
+          }
+        );
+      }
+
+      currentPage = fallbackPage;
+      restrictedRedirectMsg = `Access denied: Your role (${userRole}) is not authorized to access ${pageLabel}. Redirected to ${fallbackLabel}.`;
+    } else {
+      currentPage = normPage;
+      if (route && route.hasExplicitPage) {
+        applyURLParamsToModuleState(currentPage, route.params);
+      }
+    }
+  } finally {
+    _isBootingRoute = false;
+  }
+
+  syncRouteState({ replace: true });
+
+  if (restrictedRedirectMsg) {
+    setTimeout(() => {
+      if (typeof showToast === 'function') {
+        showToast(restrictedRedirectMsg, 'error');
+      }
+    }, 50);
+  }
+}
+
+if (!window._mrgrRouterListenersAttached) {
+  window._mrgrRouterListenersAttached = true;
+
+  window.addEventListener('popstate', (event) => {
+    if (!currentUser) return;
+    _isHandlingPopState = true;
+    try {
+      if (event.state && event.state.userId === currentUser.id) {
+        restoreAppNavigationState(event.state);
+      }
+      const route = parseRouteFromLocation();
+      const rawTarget = route.hasExplicitPage
+        ? route.rawPage
+        : ((event.state && event.state.page) ? event.state.page : defaultPageFor(currentUser.role));
+      const normPage = normalizePageId(rawTarget, currentUser.role);
+
+      if (!isPageAllowedForRole(normPage, currentUser.role)) {
+        const pageLabel = PAGE_TITLES[normPage] || rawTarget;
+        const fallbackPage = defaultPageFor(currentUser.role);
+        currentPage = fallbackPage;
+        if (typeof showToast === 'function') {
+          showToast(`Access denied: Your role (${currentUser.role}) is not authorized to access ${pageLabel}.`, 'error');
+        }
+      } else {
+        currentPage = normPage;
+        if (route.hasExplicitPage) {
+          applyURLParamsToModuleState(currentPage, route.params);
+        }
+      }
+
+      renderApp();
+      syncRouteState({ replace: true });
+    } finally {
+      _isHandlingPopState = false;
+    }
+  });
+
+  document.addEventListener('input', (e) => {
+    if (!currentUser || !currentPage) return;
+    if (e.target && e.target.closest && e.target.closest('#page-content')) {
+      scheduleRouteStateSync();
+    }
+  });
+
+  document.addEventListener('change', (e) => {
+    if (!currentUser || !currentPage) return;
+    if (e.target && e.target.closest && e.target.closest('#page-content')) {
+      scheduleRouteStateSync();
+    }
+  });
+
+  window.addEventListener('beforeunload', () => {
+    if (currentUser && currentPage) {
+      syncRouteState({ replace: true });
+    }
+  });
+}
+
+function goTo(page, options = {}) {
+  const userRole = (currentUser && currentUser.role) || 'unauthenticated';
+  const normalized = normalizePageId(page, userRole);
+  page = normalized || page;
+
+  if (!isPageAllowedForRole(page, userRole)) {
     const pageLabel = PAGE_TITLES[page] || page;
     if (typeof logAudit === 'function') {
       logAudit(
@@ -404,16 +1547,35 @@ function goTo(page) {
       );
     }
     showToast(`Access denied: Your role (${userRole}) is not authorized to access ${pageLabel}.`, 'error');
-    return;
+    if (currentUser && (!currentPage || !isPageAllowedForRole(currentPage, userRole))) {
+      currentPage = defaultPageFor(userRole);
+      syncRouteState({ replace: true });
+      renderApp();
+    }
+    return false;
   }
+
+  if (options && options.fromSidebar) {
+    if (page === 'purchaseOrders' && typeof poViewMode !== 'undefined') {
+      poViewMode = 'list';
+      if (typeof poDetailId !== 'undefined') poDetailId = null;
+    }
+  }
+
   if (window.innerWidth <= 768) {
     const shellEl = document.querySelector('.shell');
     if (shellEl && shellEl.classList.contains('mobile-open')) {
       shellEl.classList.remove('mobile-open');
     }
   }
+
   currentPage = page;
+  syncRouteState({
+    push: options.push !== undefined ? Boolean(options.push) : true,
+    replace: Boolean(options.replace)
+  });
   renderApp();
+  return true;
 }
 
 /**
@@ -445,7 +1607,10 @@ function goToReportsSalesHistory() {
 }
 
 function renderPage() {
-  document.getElementById('page-title').textContent = PAGE_TITLES[currentPage] || 'MRGR Color Center';
+  const pageTitleEl = document.getElementById('page-title');
+  if (pageTitleEl) {
+    pageTitleEl.textContent = PAGE_TITLES[currentPage] || 'MRGR Color Center';
+  }
   const target = document.getElementById('page-content');
   if (!target) return;
   const renderers = {
@@ -472,6 +1637,9 @@ function renderPage() {
     if (currentPage === 'purchaseOrders') initPOPage();
     if (currentPage === 'dashboard' || currentPage === 'staffDashboard' || currentPage === 'alerts') LowStockService.syncUI();
     if (typeof updateNavBadges === 'function') updateNavBadges();
+    if (!_isHandlingPopState && !_isBootingRoute && typeof syncRouteState === 'function') {
+      syncRouteState({ push: false });
+    }
   } catch (err) {
     console.error('Error rendering page:', err);
     target.innerHTML = `
@@ -542,70 +1710,120 @@ async function handleLogin(e) {
   e.preventDefault();
   const username = document.getElementById('li-username').value.trim();
   const password = document.getElementById('li-password').value;
-  const matchedByUsername = db.users.find(u => u.username.toLowerCase() === username.toLowerCase());
-  const user = matchedByUsername && matchedByUsername.password === password ? matchedByUsername : null;
   const errorSlot = document.getElementById('login-error-slot');
-  if (!user) {
-    logAudit(
-      'LOGIN_FAILED',
-      'Authentication',
-      `Failed login attempt for username "${username || 'unknown'}" (Invalid credentials)`,
-      {
-        userOverride: {
-          id: matchedByUsername ? matchedByUsername.id : '',
-          name: matchedByUsername ? `${matchedByUsername.name} (@${username})` : (username || 'Unknown User'),
-          role: matchedByUsername ? matchedByUsername.role : 'unauthenticated'
-        },
-        entityName: matchedByUsername ? `${matchedByUsername.name} (@${username})` : `Username: ${username || 'Unknown'}`,
-        fieldChanged: 'User Authentication',
-        oldValue: 'Signed Out',
-        newValue: 'Login Failed (Incorrect Username or Password)',
-        reason: 'Invalid username or password entered at login screen'
-      }
-    );
-    errorSlot.innerHTML = `<div class="login-error">Incorrect username or password.</div>`;
-    return false;
+  if (errorSlot) errorSlot.innerHTML = '';
+
+  const submitBtn = e.target.querySelector('button[type="submit"]');
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.innerText = 'Signing in…';
   }
-  if (user.status !== 'active') {
-    logAudit(
-      'LOGIN_FAILED',
-      'Authentication',
-      `Blocked login attempt for deactivated account "${user.name}" (@${user.username})`,
-      {
-        userOverride: { id: user.id, name: user.name, role: user.role },
-        entityName: `${user.name} (@${user.username})`,
-        fieldChanged: 'User Authentication',
-        oldValue: 'Account Status: Inactive',
-        newValue: 'Login Blocked (Deactivated Account)',
-        reason: 'Attempted to sign in with a deactivated user account'
+
+  try {
+    const res = await fetch('api/auth.php?action=login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok || !data.success || !data.user) {
+      const errMsg = data.error || 'Incorrect username or password.';
+      const matchedUser = db && db.users ? db.users.find(u => u.username.toLowerCase() === username.toLowerCase()) : null;
+      logAudit(
+        'LOGIN_FAILED',
+        'Authentication',
+        `Failed login attempt for username "${username || 'unknown'}" (${errMsg})`,
+        {
+          userOverride: {
+            id: matchedUser ? matchedUser.id : '',
+            name: matchedUser ? `${matchedUser.name} (@${username})` : (username || 'Unknown User'),
+            role: matchedUser ? matchedUser.role : 'unauthenticated'
+          },
+          entityName: matchedUser ? `${matchedUser.name} (@${username})` : `Username: ${username || 'Unknown'}`,
+          fieldChanged: 'User Authentication',
+          oldValue: 'Signed Out',
+          newValue: 'Login Failed',
+          reason: errMsg
+        }
+      );
+      if (errorSlot) {
+        errorSlot.innerHTML = `<div class="login-error">${escapeHtml(errMsg)}</div>`;
       }
-    );
-    errorSlot.innerHTML = `<div class="login-error">This account has been deactivated. Contact the administrator.</div>`;
-    return false;
-  }
-  currentUser = user;
-  logAudit(
-    'LOGIN',
-    'Session',
-    `${user.name} (@${user.username}) signed in as ${{ admin: 'Administrator', cashier: 'Cashier', staff: 'Inventory Staff' }[user.role] || user.role}`,
-    {
-      entityName: `${user.name} (@${user.username})`,
-      fieldChanged: 'Session Status',
-      oldValue: 'Signed Out',
-      newValue: `Signed In (${{ admin: 'Administrator', cashier: 'Cashier', staff: 'Inventory Staff' }[user.role] || user.role})`
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.innerText = 'Log in';
+      }
+      return false;
     }
-  );
-  if (typeof loadDB === 'function') {
-    try { await loadDB(); } catch (e) { }
+
+    const user = data.user;
+    currentUser = user;
+    logAudit(
+      'LOGIN',
+      'Session',
+      `${user.name} (@${user.username}) signed in as ${{ admin: 'Administrator', cashier: 'Cashier', staff: 'Inventory Staff' }[user.role] || user.role}`,
+      {
+        entityName: `${user.name} (@${user.username})`,
+        fieldChanged: 'Session Status',
+        oldValue: 'Signed Out',
+        newValue: `Signed In (${{ admin: 'Administrator', cashier: 'Cashier', staff: 'Inventory Staff' }[user.role] || user.role})`
+      }
+    );
+    if (typeof loadDB === 'function') {
+      try { await loadDB(); } catch (e) { }
+    }
+    cart = [];
+    currentSaleCustomerName = '';
+    resetAllModuleNavigationStates();
+
+    let targetPageAfterLogin = defaultPageFor(user.role);
+    let pendingParams = null;
+    try {
+      const pendingRaw = sessionStorage.getItem(PENDING_AUTH_ROUTE_KEY);
+      sessionStorage.removeItem(PENDING_AUTH_ROUTE_KEY);
+      const urlRoute = parseRouteFromLocation();
+      if (urlRoute && urlRoute.hasExplicitPage) {
+        const normUrlPage = normalizePageId(urlRoute.rawPage, user.role);
+        if (isPageAllowedForRole(normUrlPage, user.role)) {
+          targetPageAfterLogin = normUrlPage;
+          pendingParams = urlRoute.params;
+        }
+      } else if (pendingRaw) {
+        const parsedPending = JSON.parse(pendingRaw);
+        if (parsedPending && parsedPending.rawPage) {
+          const normPendingPage = normalizePageId(parsedPending.rawPage, user.role);
+          if (isPageAllowedForRole(normPendingPage, user.role)) {
+            targetPageAfterLogin = normPendingPage;
+            pendingParams = new URLSearchParams(parsedPending.search || '');
+          }
+        }
+      }
+    } catch (e) { }
+
+    currentPage = targetPageAfterLogin;
+    if (pendingParams) {
+      applyURLParamsToModuleState(currentPage, pendingParams);
+    }
+
+    await storage.set(SESSION_KEY, JSON.stringify({ userId: user.id, username: user.username, role: user.role }));
+    syncRouteState({ replace: true });
+    renderApp();
+    return false;
+  } catch (err) {
+    console.error('Login error', err);
+    if (errorSlot) {
+      errorSlot.innerHTML = `<div class="login-error">Authentication connection error. Please try again.</div>`;
+    }
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.innerText = 'Log in';
+    }
+    return false;
   }
-  currentPage = defaultPageFor(user.role);
-  cart = [];
-  await storage.set(SESSION_KEY, JSON.stringify({ userId: user.id }));
-  renderApp();
-  return false;
 }
 
-function logout() {
+async function logout() {
   if (currentUser) {
     logAudit(
       'LOGOUT',
@@ -619,11 +1837,27 @@ function logout() {
       }
     );
   }
+  try {
+    await fetch('api/auth.php?action=logout', { method: 'POST' });
+  } catch (e) { }
+
+  const loggedOutUserId = currentUser ? currentUser.id : null;
   stopLiveClock();
   currentUser = null;
   currentPage = null;
   cart = [];
+  currentSaleCustomerName = '';
+  clearNavStateStorage(loggedOutUserId);
+  resetAllModuleNavigationStates();
   try { localStorage.removeItem(SESSION_KEY); } catch (e) { }
+  try { localStorage.removeItem(DB_KEY); } catch (e) { }
+  try {
+    const cleanPath = getCleanBasePath();
+    window.history.replaceState(null, document.title, cleanPath);
+  } catch (e) { }
+  if (db && Array.isArray(db.sales)) {
+    db.sales = [];
+  }
   renderApp();
 }
 
@@ -1451,17 +2685,27 @@ function staffLabel(name) {
   return escapeHtml(name || '') + (role ? ` (${role})` : '');
 }
 
-/* PO deliveries, sales, returns & adjustments log "[Received/Sold/Added/Deducted N × SL, ...]" or Opened Stock in the note; read size/containers back from it. */
-function movementSizeInfo(note) {
+/* PO deliveries, sales, returns & adjustments log "[Received/Sold/Added/Deducted/Reverted N × SL, ...]" or Opened Stock in the note; read size/containers back from it. */
+function movementSizeInfo(note, mObj = null) {
   const str = String(note || '');
-  const m = str.match(/(?:Received|Sold|Return|Exchange|Added|Deducted|Adjusted)[^\d]*(\d+(?:\.\d+)?)\s*[×x]\s*(\d+(?:\.\d+)?)L/i)
-    || str.match(/\[(?:[A-Za-z/–—\s]+\s+)?(\d+(?:\.\d+)?)\s*[×x]\s*(\d+(?:\.\d+)?)L/i);
+  const m = str.match(/(?:Received|Sold|Return|Exchange|Added|Deducted|Adjusted|Reverted|Void|Restored)[^\d]*(\d+(?:\.\d+)?)\s*[×x]\s*(\d+(?:\.\d+)?)L/i)
+    || str.match(/\[(?:[A-Za-z/–—\s]+\s+)?(\d+(?:\.\d+)?)\s*[×x]\s*(\d+(?:\.\d+)?)L/i)
+    || str.match(/(\d+(?:\.\d+)?)\s*[×x]\s*(\d+(?:\.\d+)?)L/i);
   if (m) return { units: Number(m[1]), size: Number(m[2]), openedLiters: 0, openedCanSize: null };
 
-  const mOpen = str.match(/(?:Disposed|Deducted)\s+(\d+(?:\.\d+)?)L\s+(?:leftover\s+)?from\s+(?:(\d+(?:\.\d+)?)L\s+)?(?:opened\s+can|Opened\s*\/\s*Used\s*Stock)/i);
+  const mOpen = str.match(/(?:Disposed|Deducted|Restored)\s+(\d+(?:\.\d+)?)L\s+(?:leftover\s+)?from\s+(?:(\d+(?:\.\d+)?)L\s+)?(?:opened\s+can|Opened\s*\/\s*Used\s*Stock)/i);
   if (mOpen) {
     return { units: 0, size: null, openedLiters: Number(mOpen[1]), openedCanSize: mOpen[2] ? Number(mOpen[2]) : null };
   }
+
+  // Fallback to containerSize or container_size on the movement object itself if present
+  if (mObj && (mObj.containerSize || mObj.container_size)) {
+    const cSz = Number(mObj.containerSize || mObj.container_size);
+    const absQty = Math.abs(Number(mObj.qtyChange || 0));
+    const units = cSz > 0 ? Math.max(1, Math.round(absQty / cSz)) : 1;
+    return { units, size: cSz, openedLiters: 0, openedCanSize: null };
+  }
+
   return { units: 0, size: null, openedLiters: 0, openedCanSize: null };
 }
 
@@ -1478,14 +2722,21 @@ function movementLineQtyText(l) {
   return (l.qty > 0 ? '+' : '') + formatStock(l.qty) + ' L';
 }
 
-function movementBalanceTrail(noteStr) {
+function movementBalanceTrail(noteStr, size = null) {
   if (!noteStr) return '';
   const str = String(noteStr);
-  const canMatch = str.match(/(\d+(?:\.\d+)?L\s+(?:Cans|Units):\s*\d+\s*(?:→|->)\s*\d+)/i);
+  const canMatch = str.match(/(\d+(?:\.\d+)?L\s+(?:Cans|Units):\s*\d+\s*(?:→|->)\s*\d+)/i)
+    || str.match(/((?:Cans|Units):\s*\d+\s*(?:→|->)\s*\d+)/i);
   const openMatch = str.match(/(Opened(?:\s*Stock)?:\s*[\d.]+L\s*(?:→|->)\s*[\d.]+L)/i);
   const stockMatch = str.match(/(Stock:\s*[\d.]+L\s*(?:→|->)\s*[\d.]+L)/i);
   const parts = [];
-  if (canMatch) parts.push(canMatch[1].replace(/\s*(?:->|→)\s*/g, '→').replace(/\bCans:/i, 'Units:'));
+  if (canMatch) {
+    let t = canMatch[1].replace(/\s*(?:->|→)\s*/g, '→').replace(/\bCans:/i, 'Units:');
+    if (size && !/^\d+(?:\.\d+)?L/i.test(t)) {
+      t = `${size}L ` + t;
+    }
+    parts.push(t);
+  }
   if (openMatch) parts.push(openMatch[1].replace(/\s*(?:->|→)\s*/g, '→'));
   if (stockMatch) parts.push(stockMatch[1].replace(/\s*(?:->|→)\s*/g, '→'));
   return parts.join(' · ');
@@ -1498,10 +2749,10 @@ function groupStockMovements(movesList) {
   // Exclude custom color mix non-product entries so only real inventory item movements remain
   sorted.filter(m => m.type !== 'colormix' || m.productId).forEach(m => {
     const noteStr = String(m.note || '');
-    const ref = (noteStr.match(/OR-\d+-\d+/) || noteStr.match(/PO Delivery:\s*(\S+)/) || [])[0] || '';
+    const ref = (noteStr.match(/OR-[\dA-Za-z-]+/) || noteStr.match(/PO Delivery:\s*(\S+)/) || [])[0] || '';
     const key = [m.type, m.date, m.staffName, ref].join('|');
-    const sz = movementSizeInfo(noteStr);
-    const balanceTrail = movementBalanceTrail(noteStr);
+    const sz = movementSizeInfo(noteStr, m);
+    const balanceTrail = movementBalanceTrail(noteStr, sz.size);
     const isOpenedEntry = sz.openedLiters > 0 || /\[Opened\s*\/\s*Used\s*Stock\]/i.test(String(m.productName || ''));
     const sizeSuffix = sz.size
       ? ` — ${sz.size}L Container`
@@ -1642,8 +2893,8 @@ function movementNoteFormatted(m) {
   if (!rawNote) return '<span class="muted">—</span>';
 
   // Extract reference number
-  const orMatch = rawNote.match(/\b(OR-\d{4}-\d+)\b/);
-  const poMatch = rawNote.match(/\b(PO-\d{4}-\d+)\b/);
+  const orMatch = rawNote.match(/\b(OR-[\dA-Za-z-]+)\b/);
+  const poMatch = rawNote.match(/\b(PO-[\dA-Za-z-]+)\b/);
   const recMatch = rawNote.match(/Receipt:\s*(\S+)/i);
   const poProgMatch = rawNote.match(/PO:\s*(\d+\/\d+)/i);
 
@@ -1668,7 +2919,7 @@ function movementNoteFormatted(m) {
 
   // Clean note text by stripping brackets and references
   let cleaned = combinedRaw
-    .replace(/\[(?:Received|Sold|Return|Exchange|Added|Deducted|Adjusted)?[^\]]*\]/gi, '')
+    .replace(/\[(?:Received|Sold|Return|Exchange|Added|Deducted|Adjusted|Reverted|Void|Restored)?[^\]]*\]/gi, '')
     .replace(/\s*\(SZ-\d+\)/gi, '')
     .replace(/\s*\[(?:SZ|PRD)-\d+\]/gi, '')
     .trim();
@@ -1679,9 +2930,11 @@ function movementNoteFormatted(m) {
 
   // Remove redundant boilerplate prefixes that the ref badge already conveys
   cleaned = cleaned
-    .replace(/^(?:Sold via POS|PO Delivery:?|Customer Return\s*\/\s*Exchange:?|Exchange Replacement Issued:?)\s*/i, '')
+    .replace(/^(?:Sold via POS|PO Delivery:?|Customer Return\s*\/\s*Exchange:?|Exchange Replacement Issued:?|Void Sale Reversal:?)\s*/i, '')
     .replace(/^Receipt:\s*/i, '')
     .replace(/PO:\s*\d+\/\d+/gi, '')
+    .replace(/Reverted\s+\d+(?:\.\d+)?\s*[×x]\s*\d+(?:\.\d+)?L\s+to\s+stock\.?/i, '')
+    .replace(/·?\s*(?:\d+(?:\.\d+)?L\s+)?(?:Units|Stock):\s*[\d.]+.*$/i, '')
     .replace(/^[·:\-\s]+|[·:\-\s]+$/g, '')
     .trim();
 
@@ -1946,21 +3199,39 @@ if (typeof window.generatePONumber !== 'function') {
   };
 }
 
+if (typeof window.poSellingPricePerLiter !== 'function') {
+  window.poSellingPricePerLiter = function (product) {
+    return product && product.price ? Number(product.price) : 0;
+  };
+}
+
+if (typeof window.poPurchaseCostPerLiter !== 'function') {
+  window.poPurchaseCostPerLiter = function (product) {
+    const sellingPrice = window.poSellingPricePerLiter(product);
+    return Number((sellingPrice * 0.85).toFixed(2));
+  };
+}
+
+if (typeof window.poPurchaseCostPerUnit !== 'function') {
+  window.poPurchaseCostPerUnit = function (product, size) {
+    const costPerLiter = window.poPurchaseCostPerLiter(product);
+    return Number((costPerLiter * (Number(size) || 1)).toFixed(2));
+  };
+}
+
 if (typeof window.poUnitCost !== 'function') {
   window.poUnitCost = function (product, size) {
-    const pricePerLiter = product && product.price ? Number(product.price) : 0;
-    return Number((pricePerLiter * (Number(size) || 1)).toFixed(2));
+    return window.poPurchaseCostPerUnit(product, size);
   };
 }
 
 if (typeof window.poSuggestedQty !== 'function') {
   window.poSuggestedQty = function (p, size = 0) {
-    if (!p) return 5;
+    if (!p) return 10;
     const s = size > 0 ? normalizeCanSize(size) : ((productSizes(p) || [])[0] || 1);
     const count = productCanCount(p, s);
     const thresh = productSizeThreshold(p, s);
-    const minBatch = s >= 16 ? 1 : (s >= 4 ? 2 : 5);
-    const needed = Math.max(minBatch, (thresh * 2) - count);
+    const needed = Math.max(10, (thresh * 2) - count);
     return Math.min(1000, needed);
   };
 }
@@ -2356,11 +3627,17 @@ const LowStockService = {
     // 6. Floating quick action bar (Alerts page only)
     const bar = document.getElementById('alerts-floating-bar');
     if (bar) {
-      if (count > 0) {
+      const modalRoot = document.getElementById('modal-root');
+      const isModalOpen = modalRoot && modalRoot.innerHTML.trim().length > 0;
+      if (count > 0 && !isModalOpen) {
         bar.style.display = 'flex';
         const label = document.getElementById('alerts-floating-label');
         if (label) {
           label.textContent = `${count} container size${count === 1 ? '' : 's'} across ${prodCount} product${prodCount === 1 ? '' : 's'} selected for purchase order`;
+        }
+        const btn = document.getElementById('alerts-floating-btn');
+        if (btn) {
+          btn.innerHTML = `⚡ Create Purchase Order (${count === 1 ? '1 Size' : `${count} Sizes`}) &rarr;`;
         }
       } else {
         bar.style.display = 'none';
@@ -2370,6 +3647,9 @@ const LowStockService = {
 
   // 6. Unified Purchase Order Creation & Confirmation Service
   openPOCreationModal({ items = null, isSingle = false } = {}) {
+    const bar = document.getElementById('alerts-floating-bar');
+    if (bar) bar.style.display = 'none';
+
     let targetItems = items;
     if (!targetItems) {
       const summary = this.getSelectedSummary();
@@ -2417,6 +3697,8 @@ const LowStockService = {
       }
 
       const suggestedQty = poSuggestedQty(p, s);
+      const sellingPricePerLiter = typeof poSellingPricePerLiter === 'function' ? poSellingPricePerLiter(p) : (Number(p.price) || 0);
+      const purchaseCostPerLiter = typeof poPurchaseCostPerLiter === 'function' ? poPurchaseCostPerLiter(p) : Number((sellingPricePerLiter * 0.85).toFixed(2));
       const unitCost = poUnitCost(p, s);
 
       validatedItems.push({
@@ -2431,7 +3713,9 @@ const LowStockService = {
         key: getAlertSizeKey(p.id, s, sizeId),
         stock: productCanCount(p, s),
         threshold: productSizeThreshold(p, s),
-        suggestedQty: Math.max(1, suggestedQty),
+        suggestedQty: Math.max(10, suggestedQty),
+        sellingPricePerLiter: sellingPricePerLiter,
+        purchaseCostPerLiter: purchaseCostPerLiter,
         unitCost: unitCost,
         supplier: supplier
       });
@@ -2476,7 +3760,7 @@ const LowStockService = {
             ⚠️ Some items were excluded: ${skippedItems.join(' · ')}
           </div>
         ` : ''}
-        Review and confirm restock details for <b>${validatedItems.length} container size(s)</b> across <b>${groups.length} supplier order${groups.length === 1 ? '' : 's'}</b>. Quantities default to calculated suggested amounts and can be adjusted below.
+        Review and confirm restock details for <b>${validatedItems.length} container size(s)</b> across <b>${groups.length} supplier order${groups.length === 1 ? '' : 's'}</b>. Minimum order quantity is <b>10 units</b> per product and container size.
       </div>
 
       <div style="display:flex; flex-direction:column; gap:16px; max-height:55vh; overflow-y:auto; padding-right:4px;">
@@ -2502,19 +3786,19 @@ const LowStockService = {
                     <tr style="background:#F2EDE4;">
                       <th style="text-align:left;">Product Name</th>
                       <th style="text-align:left;">Color Variant</th>
-                      <th style="text-align:left;">Supplier</th>
                       <th style="text-align:center;">Container Size</th>
                       <th style="text-align:right;">Current Stock</th>
-                      <th style="text-align:right;">Min Threshold</th>
-                      <th style="text-align:center; width:110px;">Suggested Order Qty</th>
-                      <th style="text-align:right; width:100px;">Estimated Cost</th>
+                      <th style="text-align:center; width:130px;">Order Quantity (Min: 10)</th>
+                      <th style="text-align:right;">Purchase Cost Per Liter</th>
+                      <th style="text-align:right;">Purchase Cost Per Unit</th>
+                      <th style="text-align:right; width:110px;">Line Total</th>
                     </tr>
                   </thead>
                   <tbody>
                     ${g.items.map((it, itIdx) => {
-        const lineTotal = it.suggestedQty * it.unitCost;
+        const lineTotal = Number((it.suggestedQty * it.unitCost).toFixed(2));
         return `
-                        <tr style="border-bottom:1px solid #EFEAE0;">
+                        <tr style="border-bottom:1px solid #EFEAE0;" id="po-modal-row-${escapeAttr(it.key)}">
                           <td style="font-weight:700; color:var(--ink);">
                             ${escapeHtml(it.productName)}
                             <div class="muted small" style="font-weight:400; font-size:11px;">${escapeHtml(it.brand)}</div>
@@ -2526,31 +3810,37 @@ const LowStockService = {
                               <code style="font-size:10px; color:var(--teal);">(${it.colorHex})</code>
                             </div>
                           </td>
-                          <td style="color:var(--ink-soft); font-size:11.5px;">${escapeHtml(g.supplier.name)}</td>
                           <td style="text-align:center;">
                             <span class="badge" style="background:#FFF; border:1px solid #DDD; font-weight:700; padding:2px 7px;">${fmtSize(it.size)}</span>
                           </td>
                           <td style="text-align:right; font-weight:700; color:${it.stock <= 0 ? 'var(--danger)' : '#B45309'};">
                             ${it.stock} unit${it.stock === 1 ? '' : 's'}
-                          </td>
-                          <td style="text-align:right; font-weight:600; color:var(--ink);">
-                            ${it.threshold} unit${it.threshold === 1 ? '' : 's'}
+                            <div class="muted small" style="font-weight:400; font-size:10px;">Min: ${it.threshold}</div>
                           </td>
                           <td style="text-align:center;">
                             <input type="number"
                                    id="po-qty-${escapeAttr(it.key)}"
                                    class="po-modal-qty-input"
-                                   min="1"
+                                   min="10"
                                    max="1000"
+                                   step="1"
                                    value="${it.suggestedQty}"
                                    data-gidx="${gIdx}"
                                    data-itidx="${itIdx}"
                                    data-key="${escapeAttr(it.key)}"
                                    data-unit-cost="${it.unitCost}"
                                    oninput="LowStockService.updateModalTotals()"
+                                   onkeydown="if(['-','e','E','+','.'].includes(event.key)){event.preventDefault();}"
                                    style="width:75px; padding:4px 6px; text-align:right; font-weight:700; font-size:12.5px; border:1px solid var(--line); border-radius:4px; background:#fff;">
+                            <div id="po-modal-qty-err-${escapeAttr(it.key)}" class="po-qty-validation-msg" style="display:none; margin-top:3px;">Minimum order quantity is 10 units.</div>
                           </td>
-                          <td style="text-align:right; font-weight:700; color:var(--teal-dark);" id="po-line-total-${escapeAttr(it.key)}">
+                          <td style="text-align:right; font-family:'Space Grotesk',sans-serif; font-weight:600; color:var(--ink);">
+                            ${peso(it.purchaseCostPerLiter)}
+                          </td>
+                          <td style="text-align:right; font-family:'Space Grotesk',sans-serif; font-weight:600; color:var(--ink);">
+                            ${peso(it.unitCost)}
+                          </td>
+                          <td style="text-align:right; font-weight:700; color:var(--teal-dark); font-family:'Space Grotesk',sans-serif;" id="po-line-total-${escapeAttr(it.key)}">
                             ${peso(lineTotal)}
                           </td>
                         </tr>
@@ -2601,10 +3891,22 @@ const LowStockService = {
       let groupSubtotal = 0;
       g.items.forEach((it, itIdx) => {
         const input = document.getElementById(`po-qty-${it.key}`);
-        let q = input ? parseInt(input.value, 10) : it.suggestedQty;
-        if (isNaN(q) || q < 1) q = 1;
-        it.suggestedQty = q;
-        const lineTotal = q * it.unitCost;
+        const errEl = document.getElementById(`po-modal-qty-err-${it.key}`);
+        const rawVal = input ? String(input.value).trim() : String(it.suggestedQty);
+        let q = rawVal === '' ? 0 : Math.floor(Number(rawVal) || 0);
+        if (q > 1000) {
+          q = 1000;
+          if (input) input.value = 1000;
+        }
+        const isInvalid = rawVal === '' || q < 10;
+        if (errEl) {
+          errEl.style.display = isInvalid ? 'block' : 'none';
+        }
+        if (input) {
+          input.style.borderColor = isInvalid ? 'var(--danger, #C1443D)' : 'var(--line)';
+        }
+        it.suggestedQty = Math.max(0, q);
+        const lineTotal = Number((it.suggestedQty * it.unitCost).toFixed(2));
         groupSubtotal += lineTotal;
         const lineEl = document.getElementById(`po-line-total-${it.key}`);
         if (lineEl) lineEl.textContent = peso(lineTotal);
@@ -2618,16 +3920,42 @@ const LowStockService = {
   },
 
   async executePOCreation() {
-    const btn = document.getElementById('btn-submit-po-confirm');
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = 'Saving Purchase Order(s)...';
-    }
-
     const groups = window._poModalGroups || [];
     if (!groups.length) {
       closeModal();
       return;
+    }
+
+    // Validate minimum order quantity of 10 units per product-size row
+    let hasInvalidQty = false;
+    let firstInvalidInput = null;
+    for (const g of groups) {
+      for (const it of g.items) {
+        const input = document.getElementById(`po-qty-${it.key}`);
+        const errEl = document.getElementById(`po-modal-qty-err-${it.key}`);
+        const rawVal = input ? String(input.value).trim() : String(it.suggestedQty);
+        const q = rawVal === '' ? 0 : Math.floor(Number(rawVal) || 0);
+        if (rawVal === '' || q < 10) {
+          hasInvalidQty = true;
+          if (errEl) errEl.style.display = 'block';
+          if (input) {
+            input.style.borderColor = 'var(--danger, #C1443D)';
+            if (!firstInvalidInput) firstInvalidInput = input;
+          }
+        }
+      }
+    }
+
+    if (hasInvalidQty) {
+      showToast('Minimum order quantity is 10 units.', 'error');
+      if (firstInvalidInput) firstInvalidInput.focus();
+      return { success: false, error: 'Minimum order quantity is 10 units.' };
+    }
+
+    const btn = document.getElementById('btn-submit-po-confirm');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Saving Purchase Order(s)...';
     }
 
     const notesEl = document.getElementById('po-confirm-notes');
@@ -2647,7 +3975,7 @@ const LowStockService = {
       for (const it of g.items) {
         const input = document.getElementById(`po-qty-${it.key}`);
         let q = input ? parseInt(input.value, 10) : it.suggestedQty;
-        if (isNaN(q) || q < 1) q = 1;
+        if (isNaN(q) || q < 10) q = 10;
         if (q > 1000) q = 1000;
 
         const lineCost = Number((q * it.unitCost).toFixed(2));
@@ -2663,8 +3991,12 @@ const LowStockService = {
           color: it.color,
           size: it.size,
           qty: q,
-          pricePerLiter: it.unitCost / (it.size || 1),
-          unitCost: it.unitCost
+          sellingPricePerLiter: it.sellingPricePerLiter,
+          purchaseCostPerLiter: it.purchaseCostPerLiter,
+          pricePerLiter: it.purchaseCostPerLiter,
+          purchaseCostPerUnit: it.unitCost,
+          unitCost: it.unitCost,
+          lineTotal: lineCost
         });
       }
 

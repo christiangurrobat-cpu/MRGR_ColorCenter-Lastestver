@@ -113,15 +113,26 @@ CREATE TABLE IF NOT EXISTS `suppliers` (
 CREATE TABLE IF NOT EXISTS `sales` (
     `id` VARCHAR(50) NOT NULL PRIMARY KEY,
     `receipt_no` VARCHAR(50) DEFAULT NULL,
+    `customer_name` VARCHAR(150) DEFAULT NULL,
     `date` DATETIME NOT NULL,
+    `cashier_id` VARCHAR(50) DEFAULT NULL,
     `cashier_name` VARCHAR(150) NOT NULL,
     `subtotal` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    `discount_pct` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+    `discount_amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     `total` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     `status` VARCHAR(50) NOT NULL DEFAULT 'completed',
+    `payment_method` VARCHAR(50) NOT NULL DEFAULT 'Cash',
+    `cash_tendered` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    `change_amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    `void_reason` TEXT NULL,
+    `voided_at` DATETIME NULL,
+    `voided_by` VARCHAR(150) NULL,
     `refund_total` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     `returns_json` LONGTEXT NULL,
     `items_json` LONGTEXT NOT NULL,
-    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    KEY `idx_sales_cashier_id` (`cashier_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ------------------------------------------------------------
@@ -135,9 +146,11 @@ CREATE TABLE IF NOT EXISTS `movements` (
     `size_id` VARCHAR(50) NULL,
     `container_size` DECIMAL(10,2) NULL,
     `product_name` VARCHAR(200) NOT NULL,
+    `color_hex` VARCHAR(20) NULL,
     `qty_change` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     `staff_name` VARCHAR(150) NOT NULL,
     `note` TEXT,
+    `formula_json` LONGTEXT NULL,
     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     KEY `idx_mv_product_id` (`product_id`),
     KEY `idx_mv_size_id` (`size_id`)
@@ -207,9 +220,10 @@ CREATE TABLE IF NOT EXISTS `adjustment_requests` (
 -- ============================================================
 
 -- Data for `users`
-INSERT IGNORE INTO `users` (`id`, `username`, `password`, `name`, `role`, `status`, `created_at`) VALUES ('u1', 'admin', 'admin123', 'Mike Revadulla', 'admin', 'active', '2026-10-02 01:42:44');
-INSERT IGNORE INTO `users` (`id`, `username`, `password`, `name`, `role`, `status`, `created_at`) VALUES ('u2', 'cashier', 'cashier123', 'Ana Cruz', 'cashier', 'active', '2026-10-02 01:42:44');
-INSERT IGNORE INTO `users` (`id`, `username`, `password`, `name`, `role`, `status`, `created_at`) VALUES ('u3', 'staff', 'staff123', 'Jun Santos', 'staff', 'active', '2026-10-02 01:42:44');
+INSERT IGNORE INTO `users` (`id`, `username`, `password`, `name`, `role`, `status`, `created_at`) VALUES ('u1', 'admin', '$2y$12$pypllNrNfBXoN3/qggDnIeu3PWQ10WLaN3pYwJX4c/48IpMg6qKSS', 'Mike Revadulla', 'admin', 'active', '2026-10-02 01:42:44');
+INSERT IGNORE INTO `users` (`id`, `username`, `password`, `name`, `role`, `status`, `created_at`) VALUES ('u2', 'cashier', '$2y$12$aYSWglMUx4ahxMeBd5i9OemIBOnsucCo3ntLs37XUYvsxbzt2AjRK', 'Ana Cruz', 'cashier', 'active', '2026-10-02 01:42:44');
+INSERT IGNORE INTO `users` (`id`, `username`, `password`, `name`, `role`, `status`, `created_at`) VALUES ('u3', 'staff', '$2y$12$agToMvb0awrn.MTz21h9Nes9Tu9u36D6KX1Gq7j4gvkOHjC2mFqBe', 'Jun Santos', 'staff', 'active', '2026-10-02 01:42:44');
+INSERT IGNORE INTO `users` (`id`, `username`, `password`, `name`, `role`, `status`, `created_at`) VALUES ('u4', 'cashier2', '$2y$12$aYSWglMUx4ahxMeBd5i9OemIBOnsucCo3ntLs37XUYvsxbzt2AjRK', 'Maria Santos', 'cashier', 'active', '2026-10-02 01:42:44');
 
 -- Data for `products`
 INSERT IGNORE INTO `products` (`id`, `name`, `brand`, `type`, `color`, `price`, `stock`, `can_stock`, `opened_stock`, `opened_can_size`, `threshold`, `status`, `created_at`, `updated_at`) VALUES ('p_mu32tg2nbh443', 'Paint', 'Boysen', 'Automotive Paint', 'Green', '111.00', '0.00', '{\"1\":0,\"16\":0}', '0.20', '1', '5.00', 'active', '2026-10-02 01:42:44', '2026-10-29 00:59:49');

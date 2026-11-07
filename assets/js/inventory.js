@@ -36,10 +36,11 @@ function onInventorySortSelectChange() {
 }
 
 function filterPendingApprovalProducts() {
+  invStatusFilter = 'pending';
+  resetPaginationPage('inventory_products');
   const el = document.getElementById('inv-status-filter');
   if (el) {
     el.value = 'pending';
-    resetPaginationPage('inventory_products');
     renderInventoryTable(true);
   }
 }
@@ -63,6 +64,7 @@ function renderInventoryMovementsPanel() {
   const wrap = document.getElementById('inv-movements-content');
   if (wrap) {
     wrap.innerHTML = inventoryMovementsSectionHtml();
+    if (typeof syncRouteState === 'function') syncRouteState({ push: false });
   } else if (typeof renderPage === 'function') {
     renderPage();
   }
@@ -181,6 +183,7 @@ function renderInventoryTable(keepPage = false) {
 
   const tableEl = document.getElementById('inventory-table');
   if (tableEl) tableEl.innerHTML = inventoryTableHtml();
+  if (typeof syncRouteState === 'function') syncRouteState({ push: false });
 }
 
 function clearInventorySearch() {
@@ -327,6 +330,7 @@ function toggleProductInventoryDetails(productId) {
     if (caret) caret.textContent = '▶';
     if (parentRow) parentRow.classList.remove('expanded');
   }
+  if (typeof syncRouteState === 'function') syncRouteState({ push: false });
 }
 
 function openProductStockDetailsModal(productId) {
@@ -984,18 +988,10 @@ function getProductSearchableText(p) {
 function inventoryTableHtml() {
   const canManage = currentUser && (currentUser.role === 'admin' || currentUser.role === 'staff');
   const isAuthorized = Boolean(currentUser && (currentUser.role === 'admin' || currentUser.role === 'staff'));
-  const searchInput = document.getElementById('inv-search');
-  const rawQ = searchInput ? searchInput.value : (invSearchQuery || '');
-  invSearchQuery = rawQ;
+  const rawQ = invSearchQuery || '';
   const q = String(rawQ || '').trim().toLowerCase();
-
-  const typeFilterEl = document.getElementById('inv-type-filter');
-  const typeFilter = typeFilterEl ? typeFilterEl.value : (invTypeFilter || '');
-  invTypeFilter = typeFilter;
-
-  const statusFilterEl = document.getElementById('inv-status-filter');
-  const statusFilter = statusFilterEl ? statusFilterEl.value : (invStatusFilter || '');
-  invStatusFilter = statusFilter;
+  const typeFilter = invTypeFilter || '';
+  const statusFilter = invStatusFilter || '';
 
   let list = (db && Array.isArray(db.products)) ? [...db.products] : [];
   list = list.filter(p => p && (p.type || '').toLowerCase() !== 'accessory');

@@ -360,6 +360,24 @@ textarea {
   box-shadow: none;
 }
 
+.btn:disabled,
+.btn[disabled] {
+  background: #DDD6CA !important;
+  color: #8C8275 !important;
+  border-color: #CFC7B8 !important;
+  cursor: not-allowed !important;
+  opacity: 0.65;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.btn.ghost:disabled,
+.btn.ghost[disabled] {
+  background: transparent !important;
+  color: #9A9083 !important;
+  border-color: transparent !important;
+}
+
 .login-error {
   background: var(--danger-bg);
   color: var(--danger);

@@ -744,6 +744,7 @@ function renderPOListRows(keepPage = false) {
   }
   const el = document.getElementById('po-list-rows');
   if (el) el.innerHTML = renderPOListRowsHTML();
+  if (typeof syncRouteState === 'function') syncRouteState({ push: false });
 }
 
 function viewPODetail(id) {
@@ -752,6 +753,7 @@ function viewPODetail(id) {
   closePOProductPicker();
   poViewMode = 'detail';
   poDetailId = id;
+  if (typeof syncRouteState === 'function') syncRouteState({ push: true });
   renderPage();
 }
 
@@ -761,6 +763,7 @@ function backToPOList() {
   closePOProductPicker();
   poViewMode = 'list';
   poDetailId = null;
+  if (typeof syncRouteState === 'function') syncRouteState({ push: true });
   renderPage();
 }
 
@@ -848,8 +851,9 @@ function poDetailPage() {
             <tr>
               <th>#</th>
               <th>Product</th>
-              <th>Brand</th>
-              <th class="right">Unit Cost</th>
+              <th>Brand &amp; Size</th>
+              <th class="right">Purchase Cost Per Liter</th>
+              <th class="right">Purchase Cost Per Unit</th>
               <th class="right">Ordered</th>
               <th class="right">Received</th>
               <th class="right">Remaining</th>
@@ -872,6 +876,7 @@ function poDetailPage() {
           const variant = p ? productSizeVariantBySize(p, size) : null;
           const sizeId = item.sizeId || (variant ? variant.sizeId : null);
           const prodId = p ? (p.productId || p.id) : item.productId;
+          const costInfo = getPOItemCostDetails(item);
 
           return `
               <tr style="animation:poRowIn .2s ease-out ${i * 30}ms both">
@@ -885,15 +890,16 @@ function poDetailPage() {
                 </td>
                 <td class="muted small">
                   <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
-                    <span>${escapeHtml(item.brand || '')} · <strong>${size}L</strong></span>
+                    <span>${escapeHtml(item.brand || '')} · <strong>${fmtSize(size)}</strong></span>
                   </div>
                 </td>
-                <td class="right">${peso(item.unitCost)}</td>
+                <td class="right" style="font-family:'Space Grotesk',sans-serif;">${peso(costInfo.purchaseCostPerLiter)}</td>
+                <td class="right" style="font-family:'Space Grotesk',sans-serif; font-weight:600;">${peso(costInfo.purchaseCostPerUnit)}</td>
                 <td class="right"><strong>${formatStock(ordered)}</strong></td>
                 <td class="right" style="color:${received > 0 ? 'var(--teal)' : 'var(--ink-soft)'}; font-weight:600;">${formatStock(received)}</td>
                 <td class="right" style="color:${remaining > 0 ? '#C1443D' : 'var(--success)'}; font-weight:700;">${formatStock(remaining)}</td>
                 <td class="center">${statusBadge}</td>
-                <td class="right" style="font-weight:700; color:var(--teal-dark);">${peso(item.unitCost * ordered)}</td>
+                <td class="right" style="font-weight:700; color:var(--teal-dark); font-family:'Space Grotesk',sans-serif;">${peso(costInfo.lineTotal)}</td>
               </tr>`;
         }).join('')}
           </tbody>
@@ -1128,21 +1134,23 @@ function printPO(id) {
       ${po.notes ? `<br><strong>Notes:</strong> ${escapeHtml(po.notes)}` : ''}
     </div>
     <table>
-      <thead><tr><th>#</th><th>Product</th><th>Brand</th><th class="right">Unit Cost</th><th class="right">Ordered</th><th class="right">Received</th><th class="right">Remaining</th><th class="right">Total</th></tr></thead>
+      <thead><tr><th>#</th><th>Product</th><th>Brand &amp; Size</th><th class="right">Purchase Cost Per Liter</th><th class="right">Purchase Cost Per Unit</th><th class="right">Ordered</th><th class="right">Received</th><th class="right">Remaining</th><th class="right">Line Total</th></tr></thead>
       <tbody>${items.map((item, i) => {
     const ordered = Number(item.qty || 0);
     const received = Number(item.receivedQty !== undefined ? item.receivedQty : (po.status === 'received' ? ordered : 0));
     const remaining = Math.max(0, Number((ordered - received).toFixed(2)));
     const hex = getProductHex(productById(item.productId));
+    const costInfo = getPOItemCostDetails(item);
     return `<tr>
           <td>${i + 1}</td>
           <td>${escapeHtml(item.productName)}${hex ? ` (${hex})` : ''}${item.color && item.color !== '-' ? ` (${escapeHtml(item.color)})` : ''}</td>
-          <td>${escapeHtml(item.brand || '')}</td>
-          <td class="right">₱${Number(item.unitCost).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
+          <td>${escapeHtml(item.brand || '')} · ${fmtSize(costInfo.size)}</td>
+          <td class="right">₱${Number(costInfo.purchaseCostPerLiter).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          <td class="right">₱${Number(costInfo.purchaseCostPerUnit).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
           <td class="right">${formatStock(ordered)}</td>
           <td class="right">${formatStock(received)}</td>
           <td class="right">${formatStock(remaining)}</td>
-          <td class="right">₱${Number(item.unitCost * ordered).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
+          <td class="right">₱${Number(costInfo.lineTotal).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
         </tr>`;
   }).join('')}</tbody>
     </table>
@@ -1200,8 +1208,17 @@ function togglePOProductExpand(index) {
     if (product) {
       poSizesFor(product).forEach(s => {
         if (productSizeStatus(product, s) === 'ok') {
-          if (row.qtys && row.qtys[s]) {
+          if (row.qtys && row.qtys[s] !== undefined) {
             delete row.qtys[s];
+          }
+          if (row.touchedSizes && row.touchedSizes[s]) {
+            delete row.touchedSizes[s];
+          }
+          if (row.invalidSizes && row.invalidSizes[s]) {
+            delete row.invalidSizes[s];
+          }
+          if (row.rawInputs && row.rawInputs[s] !== undefined) {
+            delete row.rawInputs[s];
           }
         }
       });
@@ -1218,10 +1235,14 @@ function startCreatePO() {
   poSupplierId = '';
   poCreateStockFilter = 'low_out';
   poItemRows = [newPORow('')];
+  if (typeof syncRouteState === 'function') syncRouteState({ push: true });
   renderPage();
 }
 
 function poCreatePage() {
+  if (!Array.isArray(poItemRows) || poItemRows.length === 0) {
+    poItemRows = [newPORow('')];
+  }
   const supplierOptions = db.suppliers
     .filter(s => s.status === 'active')
     .map(s => {
@@ -1248,11 +1269,11 @@ function poCreatePage() {
     <div class="alert-banner warning" style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
       <span style="font-size:18px;">🔍</span>
       <div>
-        <b>Check Low-Stock Order Before Submitting:</b> Low-stock &amp; out-of-stock sizes have been loaded with recommended quantities. Staff can verify container sizes, change quantities, add notes, and submit for approval.
+        <b>Check Low-Stock Order Before Submitting:</b> Low-stock &amp; out-of-stock sizes have been loaded with recommended quantities (minimum ${PO_MIN_QTY} units per container size). Staff can verify container sizes, change quantities, add notes, and submit for approval.
       </div>
     </div>
   ` : ''}
-  <form id="po-create-form" onsubmit="return submitPO(event)">
+  <form id="po-create-form" novalidate onsubmit="return submitPO(event)">
     <div class="form-grid">
       <div class="field">
         <label>Supplier <span style="color:var(--danger);">*</span></label>
@@ -1271,6 +1292,12 @@ function poCreatePage() {
       <div class="po-items-toolbar">
         <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
           <h4 style="margin:0;">Order Items</h4>
+          <span class="badge ghost small po-min-order-rule-badge" title="Each ordered product and container size requires at least 10 units">
+            📦 Min. Order Quantity: <b>${PO_MIN_QTY} units</b> per container size
+          </span>
+          <span class="badge ghost small po-cost-rule-badge" title="Purchase Cost Per Liter = Selling Price Per Liter × 0.85 (15% supplier cost deduction)">
+            🏷️ Purchase Cost: <b>15% off</b> Selling Price/L
+          </span>
           <div class="po-stock-filter-wrapper">
             <label for="po-stock-filter" style="font-size:12px; font-weight:600; color:var(--ink-soft); margin:0;">Filter Sizes:</label>
             <select id="po-stock-filter" class="po-filter-select" onchange="onPOStockFilterChange(this.value)">
@@ -1333,8 +1360,7 @@ function onPOSupplierChange() {
       lowSizes.forEach(s => {
         const count = productCanCount(p, s);
         const thresh = productSizeThreshold(p, s);
-        const minBatch = s >= 16 ? 1 : (s >= 4 ? 2 : 5);
-        qtys[s] = Math.min(PO_MAX_QTY, Math.max(minBatch, (thresh * 2) - count));
+        qtys[s] = Math.min(PO_MAX_QTY, Math.max(PO_MIN_QTY, (thresh * 2) - count));
       });
       // Good stock sizes have 0 quantity by default
       return newPORow(p.id, qtys, false);
@@ -1401,7 +1427,8 @@ function renderPOItemRows() {
     }
 
     const allSizes = poSizesFor(product);
-    const pricePerLiter = Number(product.price) || 0;
+    const sellingPricePerLiter = poSellingPricePerLiter(product);
+    const purchaseCostPerLiter = poPurchaseCostPerLiter(product);
     const isExpanded = Boolean(row.expanded);
 
     const totalProductCans = allSizes.reduce((sum, s) => sum + productCanCount(product, s), 0);
@@ -1418,7 +1445,7 @@ function renderPOItemRows() {
     allSizes.forEach(s => {
       const currentQty = Number(row.qtys && row.qtys[s]) || 0;
       if (currentQty > 0) {
-        const pricePerCan = poUnitCost(product, s);
+        const pricePerCan = poPurchaseCostPerUnit(product, s);
         grandTotal += Number((currentQty * pricePerCan).toFixed(2));
         totalCans += currentQty;
         validLineCount++;
@@ -1500,13 +1527,17 @@ function renderPOItemRows() {
     const rowSpan = visibleSizes.length;
     return visibleSizes.map((s, sizeIdx) => {
       const currentQty = Number(row.qtys && row.qtys[s]) || 0;
+      const rawInputVal = (row.rawInputs && row.rawInputs[s] !== undefined)
+        ? row.rawInputs[s]
+        : (currentQty > 0 ? String(currentQty) : '0');
+      const isRowInvalid = isPOSizeRowInvalid(row, s);
       const canCount = productCanCount(product, s);
       const thresh = productSizeThreshold(product, s);
       const st = productSizeStatus(product, s);
       const isLow = st === 'low' || st === 'out';
 
-      const pricePerCan = poUnitCost(product, s);
-      const lineTotal = Number((currentQty * pricePerCan).toFixed(2));
+      const purchaseCostPerUnit = poPurchaseCostPerUnit(product, s);
+      const lineTotal = Number((currentQty * purchaseCostPerUnit).toFixed(2));
 
       const isFirstSizeRow = sizeIdx === 0;
 
@@ -1540,7 +1571,7 @@ function renderPOItemRows() {
       }
 
       return `
-        <tr class="po-size-row ${isFirstSizeRow ? 'po-group-first-row' : ''} ${currentQty > 0 ? 'has-order-qty' : ''}"
+        <tr class="po-size-row ${isFirstSizeRow ? 'po-group-first-row' : ''} ${currentQty >= PO_MIN_QTY ? 'has-order-qty' : ''} ${isRowInvalid ? 'po-row-invalid' : ''}"
             id="po-size-row-${index}-${s}"
             style="animation:poRowIn .18s ease-out both;">
           ${productCellHtml}
@@ -1554,28 +1585,36 @@ function renderPOItemRows() {
           </td>
           <td class="po-cell-qty center">
             <div class="po-table-qty-group">
-              <button type="button" class="po-table-qty-btn minus" onclick="stepPOQty(${index}, ${s}, -1)" title="Decrease quantity">−</button>
+              <button type="button" class="po-table-qty-btn minus" onclick="stepPOQty(${index}, ${s}, -1)" title="Decrease quantity (min ${PO_MIN_QTY} units)">−</button>
               <input type="number"
                      id="po-qty-${index}-${s}"
-                     class="po-table-qty-input ${currentQty > 0 ? 'active' : ''}"
-                     min="0"
+                     class="po-table-qty-input ${currentQty >= PO_MIN_QTY ? 'active' : ''} ${isRowInvalid ? 'invalid' : ''}"
+                     min="${PO_MIN_QTY}"
                      max="${PO_MAX_QTY}"
                      step="1"
-                     value="${currentQty > 0 ? currentQty : 0}"
-                     placeholder="0"
+                     value="${escapeHtml(rawInputVal)}"
+                     placeholder="${PO_MIN_QTY}"
                      onclick="this.select()"
                      onfocus="this.select()"
                      oninput="onPOQtyChange(${index}, ${s}, this.value)"
-                     onkeydown="if(['-','e','E','+'].includes(event.key)){event.preventDefault();}">
+                     onblur="onPOQtyBlur(${index}, ${s}, this.value)"
+                     onkeydown="if(['-','e','E','+','.'].includes(event.key)){event.preventDefault();}">
               <button type="button" class="po-table-qty-btn plus" onclick="stepPOQty(${index}, ${s}, 1)" title="Increase quantity">+</button>
               <span class="po-table-qty-unit">units</span>
             </div>
+            <div class="po-qty-feedback-wrap" id="po-qty-feedback-${index}-${s}">
+              ${isRowInvalid
+          ? `<div class="po-qty-validation-msg" id="po-qty-err-${index}-${s}">Minimum order quantity is 10 units.</div>`
+          : `<div class="po-qty-min-hint">Min: ${PO_MIN_QTY} units</div>`}
+            </div>
           </td>
-          <td class="po-cell-price-l right" style="font-family:'Space Grotesk',sans-serif; font-size:13px; color:var(--ink-soft);">
-            ${peso(pricePerLiter)}
+          <td class="po-cell-price-l right" id="po-cost-liter-${index}-${s}" style="font-family:'Space Grotesk',sans-serif; font-size:13.5px; font-weight:600; color:var(--ink);" title="Selling Price: ${peso(sellingPricePerLiter)}/L × 0.85 (15% deduction)">
+            <div class="po-cost-per-liter-val">${peso(purchaseCostPerLiter)}</div>
+            <div class="po-selling-price-ref">Sell: ${peso(sellingPricePerLiter)}/L (-15%)</div>
           </td>
-          <td class="po-cell-price-can right" id="po-can-price-${index}-${s}" style="font-family:'Space Grotesk',sans-serif; font-size:13.5px; font-weight:600; color:var(--ink);">
-            ${peso(pricePerCan)}
+          <td class="po-cell-price-can right" id="po-can-price-${index}-${s}" style="font-family:'Space Grotesk',sans-serif; font-size:13.5px; font-weight:600; color:var(--ink);" title="${peso(purchaseCostPerLiter)}/L × ${s}L">
+            <div class="po-cost-per-unit-val">${peso(purchaseCostPerUnit)}</div>
+            <div class="po-unit-size-ref">${fmtSize(s)} container</div>
           </td>
           <td class="po-cell-line-total right" id="po-line-total-${index}-${s}" style="font-family:'Space Grotesk',sans-serif; font-size:14px; font-weight:700;">
             <span class="po-line-total-val ${lineTotal > 0 ? 'has-total' : 'zero'}">${peso(lineTotal)}</span>
@@ -1591,12 +1630,12 @@ function renderPOItemRows() {
       <table class="po-create-order-table">
         <thead>
           <tr>
-            <th style="min-width:280px; text-align:left;">Product</th>
-            <th style="min-width:110px; text-align:center;">Container Size</th>
-            <th style="min-width:130px; text-align:center;">Available Stock</th>
-            <th style="min-width:160px; text-align:center;">Order Quantity</th>
-            <th style="min-width:120px; text-align:right;">Price per Liter</th>
-            <th style="min-width:120px; text-align:right;">Price per Unit</th>
+            <th style="min-width:270px; text-align:left;">Product</th>
+            <th style="min-width:105px; text-align:center;">Container Size</th>
+            <th style="min-width:125px; text-align:center;">Available Stock</th>
+            <th style="min-width:175px; text-align:center;">Order Quantity <div style="font-size:10px; font-weight:500; text-transform:none; color:var(--ink-soft);">Min. 10 units / size</div></th>
+            <th style="min-width:135px; text-align:right;">Purchase Cost Per Liter</th>
+            <th style="min-width:135px; text-align:right;">Purchase Cost Per Unit</th>
             <th style="min-width:130px; text-align:right;">Line Total</th>
             <th style="width:40px; text-align:center;"></th>
           </tr>
@@ -1620,18 +1659,130 @@ function renderPOItemRows() {
 }
 
 
+const PO_MIN_QTY = 10; // minimum order quantity per product and container size
 const PO_MAX_QTY = 1000; // maximum quantity allowed per size per product
+const PO_PURCHASE_COST_MULTIPLIER = 0.85; // 15% deduction from selling price per liter
 const PO_SIZES = [1, 4, 16];
 /* Each product has its own can sizes (p.sizes); fall back to the defaults while no product is chosen */
 function poSizesFor(product) { return product ? productSizes(product) : PO_SIZES; }
 
 function newPORow(productId, qtys, expanded = false) {
-  return { id: uid('poi'), productId: productId || '', qtys: { ...(qtys || {}) }, expanded: Boolean(expanded) };
+  const initialQtys = { ...(qtys || {}) };
+  const touchedSizes = {};
+  const invalidSizes = {};
+  Object.keys(initialQtys).forEach(k => {
+    const q = Number(initialQtys[k]) || 0;
+    if (q > 0) {
+      touchedSizes[k] = true;
+      if (q < PO_MIN_QTY) invalidSizes[k] = true;
+    }
+  });
+  return {
+    id: uid('poi'),
+    productId: productId || '',
+    qtys: initialQtys,
+    rawInputs: {},
+    touchedSizes,
+    invalidSizes,
+    expanded: Boolean(expanded)
+  };
+}
+
+/**
+ * Returns the original Selling Price Per Liter of a product (unchanged).
+ */
+function poSellingPricePerLiter(product) {
+  return product && product.price ? Number(product.price) : 0;
+}
+
+/**
+ * Calculates Purchase Cost Per Liter = Selling Price Per Liter × 0.85 (15% deduction).
+ * Formula applied once and only to the purchase cost calculation.
+ */
+function poPurchaseCostPerLiter(product) {
+  const sellingPricePerLiter = poSellingPricePerLiter(product);
+  return Number((sellingPricePerLiter * PO_PURCHASE_COST_MULTIPLIER).toFixed(2));
+}
+
+/**
+ * Calculates Purchase Cost Per Unit = Purchase Cost Per Liter × Container Volume.
+ * Supports 1L, 2L, 4L, 8L, 16L, and any newly added container sizes.
+ */
+function poPurchaseCostPerUnit(product, size) {
+  const costPerLiter = poPurchaseCostPerLiter(product);
+  const volume = Number(size) || 1;
+  return Number((costPerLiter * volume).toFixed(2));
 }
 
 function poUnitCost(product, size) {
-  const pricePerLiter = product && product.price ? Number(product.price) : 0;
-  return Number((pricePerLiter * (Number(size) || 1)).toFixed(2));
+  return poPurchaseCostPerUnit(product, size);
+}
+
+/**
+ * Resolves historical purchase cost details recorded on a PO item without re-applying the 15% deduction.
+ */
+function getPOItemCostDetails(item) {
+  const size = Number(item && item.size) || 1;
+  const qty = Number(item && (item.qty !== undefined ? item.qty : item.orderedQty)) || 0;
+  let purchaseCostPerUnit = Number(item && (item.purchaseCostPerUnit !== undefined ? item.purchaseCostPerUnit : item.unitCost));
+  let purchaseCostPerLiter = Number(item && item.purchaseCostPerLiter);
+
+  if (!Number.isFinite(purchaseCostPerUnit) || purchaseCostPerUnit <= 0) {
+    const p = item && item.productId ? productById(item.productId) : null;
+    if (p) {
+      purchaseCostPerLiter = poPurchaseCostPerLiter(p);
+      purchaseCostPerUnit = poPurchaseCostPerUnit(p, size);
+    } else {
+      purchaseCostPerLiter = 0;
+      purchaseCostPerUnit = 0;
+    }
+  } else if (!Number.isFinite(purchaseCostPerLiter) || purchaseCostPerLiter <= 0) {
+    purchaseCostPerLiter = Number((purchaseCostPerUnit / size).toFixed(2));
+  }
+
+  const lineTotal = Number((purchaseCostPerUnit * qty).toFixed(2));
+  return {
+    size,
+    qty,
+    purchaseCostPerLiter: Number(purchaseCostPerLiter.toFixed(2)),
+    purchaseCostPerUnit: Number(purchaseCostPerUnit.toFixed(2)),
+    lineTotal
+  };
+}
+
+window.PO_MIN_QTY = PO_MIN_QTY;
+window.PO_MAX_QTY = PO_MAX_QTY;
+window.PO_PURCHASE_COST_MULTIPLIER = PO_PURCHASE_COST_MULTIPLIER;
+window.poSellingPricePerLiter = poSellingPricePerLiter;
+window.poPurchaseCostPerLiter = poPurchaseCostPerLiter;
+window.poPurchaseCostPerUnit = poPurchaseCostPerUnit;
+window.poUnitCost = poUnitCost;
+window.getPOItemCostDetails = getPOItemCostDetails;
+
+function isPOSizeRowInvalid(row, size) {
+  if (!row) return false;
+  if (row.invalidSizes && row.invalidSizes[size]) return true;
+  const q = Number(row.qtys && row.qtys[size]) || 0;
+  if (q > 0 && q < PO_MIN_QTY) return true;
+  if (row.touchedSizes && row.touchedSizes[size] && q < PO_MIN_QTY) return true;
+  return false;
+}
+
+function renderPOSizeRowValidationDOM(index, size, isInvalid) {
+  const feedbackEl = document.getElementById(`po-qty-feedback-${index}-${size}`);
+  if (feedbackEl) {
+    feedbackEl.innerHTML = isInvalid
+      ? `<div class="po-qty-validation-msg" id="po-qty-err-${index}-${size}">Minimum order quantity is 10 units.</div>`
+      : `<div class="po-qty-min-hint">Min: ${PO_MIN_QTY} units</div>`;
+  }
+  const inputEl = document.getElementById(`po-qty-${index}-${size}`);
+  if (inputEl) {
+    inputEl.classList.toggle('invalid', Boolean(isInvalid));
+  }
+  const rowEl = document.getElementById(`po-size-row-${index}-${size}`);
+  if (rowEl) {
+    rowEl.classList.toggle('po-row-invalid', Boolean(isInvalid));
+  }
 }
 
 function poRowTotals(row) {
@@ -1643,7 +1794,7 @@ function poRowTotals(row) {
       const q = Number(row.qtys && row.qtys[s]) || 0;
       if (q > 0) {
         hasQty = true;
-        lineTotal += q * poUnitCost(product, s);
+        lineTotal += q * poPurchaseCostPerUnit(product, s);
       }
     });
   }
@@ -1661,7 +1812,7 @@ function calculatePOGrandSummary() {
     poSizesFor(p).forEach(s => {
       const q = Number(r.qtys && r.qtys[s]) || 0;
       if (q > 0) {
-        grand += q * poUnitCost(p, s);
+        grand += q * poPurchaseCostPerUnit(p, s);
         totalCans += q;
         validLines++;
       }
@@ -1691,26 +1842,36 @@ function updatePOGrandTotalDisplay() {
 function onPOQtyChange(index, size, rawValue) {
   const row = poItemRows[index];
   if (!row) return;
+  if (!row.qtys) row.qtys = {};
+  if (!row.rawInputs) row.rawInputs = {};
+  if (!row.touchedSizes) row.touchedSizes = {};
+  if (!row.invalidSizes) row.invalidSizes = {};
 
-  let valStr = String(rawValue || '').trim();
+  const valStr = String(rawValue === undefined || rawValue === null ? '' : rawValue).trim();
+  row.rawInputs[size] = valStr;
+  row.touchedSizes[size] = true;
+
   let qty = 0;
   if (valStr !== '') {
-    qty = Math.max(0, parseInt(valStr, 10) || 0);
+    const parsed = Number(valStr);
+    qty = Number.isFinite(parsed) ? Math.floor(parsed) : 0;
   }
 
   if (qty > PO_MAX_QTY) {
     qty = PO_MAX_QTY;
+    row.rawInputs[size] = String(PO_MAX_QTY);
     showToast(`Maximum quantity per size is ${PO_MAX_QTY}.`, 'error');
     const inputEl = document.getElementById(`po-qty-${index}-${size}`);
     if (inputEl) inputEl.value = PO_MAX_QTY;
   }
 
-  if (!row.qtys) row.qtys = {};
-  row.qtys[size] = qty;
+  const isInvalid = valStr === '' || qty < PO_MIN_QTY;
+  row.invalidSizes[size] = isInvalid;
+  row.qtys[size] = Math.max(0, qty);
 
   const product = row.productId ? productById(row.productId) : null;
-  const pricePerCan = poUnitCost(product, size);
-  const lineTotal = Number((qty * pricePerCan).toFixed(2));
+  const pricePerCan = poPurchaseCostPerUnit(product, size);
+  const lineTotal = Number((row.qtys[size] * pricePerCan).toFixed(2));
 
   // update the line total cell for this container size row
   const lineTotalEl = document.getElementById(`po-line-total-${index}-${size}`);
@@ -1721,23 +1882,53 @@ function onPOQtyChange(index, size, rawValue) {
   // update input active style
   const inputEl = document.getElementById(`po-qty-${index}-${size}`);
   if (inputEl) {
-    inputEl.classList.toggle('active', qty > 0);
+    inputEl.classList.toggle('active', row.qtys[size] >= PO_MIN_QTY);
   }
 
-  // highlight size row if qty > 0
+  // highlight size row if qty >= PO_MIN_QTY
   const rowEl = document.getElementById(`po-size-row-${index}-${size}`);
   if (rowEl) {
-    rowEl.classList.toggle('has-order-qty', qty > 0);
+    rowEl.classList.toggle('has-order-qty', row.qtys[size] >= PO_MIN_QTY);
   }
 
+  renderPOSizeRowValidationDOM(index, size, isInvalid);
   updatePOGrandTotalDisplay();
+}
+
+function onPOQtyBlur(index, size, rawValue) {
+  const row = poItemRows[index];
+  if (!row) return;
+  const q = Number(row.qtys && row.qtys[size]) || 0;
+  const isInvalid = isPOSizeRowInvalid(row, size);
+  renderPOSizeRowValidationDOM(index, size, isInvalid);
+  if (isInvalid && q < PO_MIN_QTY) {
+    showToast('Minimum order quantity is 10 units.', 'error');
+  }
 }
 
 function stepPOQty(index, size, delta) {
   const row = poItemRows[index];
   if (!row) return;
-  const current = Number(row.qtys && row.qtys[size]) || 0;
-  const next = Math.max(0, Math.min(PO_MAX_QTY, current + delta));
+  if (!row.qtys) row.qtys = {};
+  if (!row.touchedSizes) row.touchedSizes = {};
+  if (!row.invalidSizes) row.invalidSizes = {};
+  if (!row.rawInputs) row.rawInputs = {};
+
+  const current = Number(row.qtys[size]) || 0;
+  let next = current + delta;
+
+  if (delta > 0 && next < PO_MIN_QTY) {
+    next = PO_MIN_QTY;
+  } else if (delta < 0 && current <= PO_MIN_QTY) {
+    row.touchedSizes[size] = true;
+    row.invalidSizes[size] = true;
+    renderPOSizeRowValidationDOM(index, size, true);
+    showToast('Minimum order quantity is 10 units.', 'error');
+    return;
+  }
+
+  next = Math.max(PO_MIN_QTY, Math.min(PO_MAX_QTY, next));
+  row.rawInputs[size] = String(next);
   const inputEl = document.getElementById(`po-qty-${index}-${size}`);
   if (inputEl) inputEl.value = next;
   onPOQtyChange(index, size, next);
@@ -1764,21 +1955,27 @@ function removePOItemRow(index) {
 }
 
 function poSuggestedQty(p, size = 0) {
-  if (!p) return 5;
+  if (!p) return PO_MIN_QTY;
   const s = size > 0 ? normalizeCanSize(size) : ((productSizes(p) || [])[0] || 1);
   const count = productCanCount(p, s);
   const thresh = productSizeThreshold(p, s);
-  const minBatch = s >= 16 ? 1 : (s >= 4 ? 2 : 5);
-  const needed = Math.max(minBatch, (thresh * 2) - count);
+  const needed = Math.max(PO_MIN_QTY, (thresh * 2) - count);
   return Math.min(PO_MAX_QTY, needed);
 }
+window.poSuggestedQty = poSuggestedQty;
 
 function addAllSupplierProductsToPO() {
   const supplier = poSupplierId ? db.suppliers.find(s => s.id === poSupplierId) : null;
   if (!supplier) { showToast('Select a supplier first.', 'error'); return; }
   const supplied = getProductsForSupplier(supplier.id);
   if (!supplied.length) { showToast('No products linked to this supplier.', 'error'); return; }
-  poItemRows = supplied.map(p => newPORow(p.id, {}, true));
+  poItemRows = supplied.map(p => {
+    const qtys = {};
+    poSizesFor(p).forEach(s => {
+      qtys[s] = poSuggestedQty(p, s);
+    });
+    return newPORow(p.id, qtys, true);
+  });
   renderPOItemRows();
   showToast(`Loaded ${supplied.length} product(s) from ${supplier.name}.`);
 }
@@ -1794,13 +1991,11 @@ function addLowStockToPO() {
     if (!poItemRows.some(r => r.productId === p.id)) {
       const qtys = {};
       const lowSizes = productLowSizes(p);
-      const hasNonStandard = lowSizes.some(s => ![1, 4, 16].includes(s));
       if (lowSizes.length > 0) {
         lowSizes.forEach(s => {
           const count = productCanCount(p, s);
           const thresh = productSizeThreshold(p, s);
-          const minBatch = s >= 16 ? 1 : (s >= 4 ? 2 : 5);
-          qtys[s] = Math.min(PO_MAX_QTY, Math.max(minBatch, (thresh * 2) - count));
+          qtys[s] = Math.min(PO_MAX_QTY, Math.max(PO_MIN_QTY, (thresh * 2) - count));
         });
       } else {
         const primarySize = (productSizes(p) || [])[0] || 1;
@@ -1828,14 +2023,46 @@ async function submitPO(e) {
     const validRows = poItemRows.filter(r => r.productId && productById(r.productId));
     if (validRows.length === 0) { showToast('Add at least one product to the order.', 'error'); return false; }
 
-    // One PO item per product + size (only sizes with order quantity > 0)
+    // Validate minimum order quantity (10 units) separately on every product-size row
+    let hasInvalidMinQty = false;
+    let firstInvalidInputEl = null;
+
+    poItemRows.forEach((row, rowIdx) => {
+      if (!row || !row.productId) return;
+      const p = productById(row.productId);
+      if (!p || p.status !== 'active') return;
+      const allSizes = poSizesFor(p);
+      const visibleSizes = allSizes.filter(s => isSizeVisibleInPO(p, s, row, poCreateStockFilter));
+
+      visibleSizes.forEach(s => {
+        const inputEl = document.getElementById(`po-qty-${rowIdx}-${s}`);
+        const rawVal = inputEl ? String(inputEl.value).trim() : String((row.qtys && row.qtys[s]) || 0);
+        const parsedQty = rawVal === '' ? 0 : Math.floor(Number(rawVal) || 0);
+        const rowInvalid = isPOSizeRowInvalid(row, s) || (parsedQty > 0 && parsedQty < PO_MIN_QTY);
+        if (rowInvalid) {
+          if (!row.invalidSizes) row.invalidSizes = {};
+          row.invalidSizes[s] = true;
+          renderPOSizeRowValidationDOM(rowIdx, s, true);
+          hasInvalidMinQty = true;
+          if (!firstInvalidInputEl && inputEl) firstInvalidInputEl = inputEl;
+        }
+      });
+    });
+
+    // One PO item per product + size (only sizes with order quantity >= PO_MIN_QTY)
     const items = [];
     validRows.forEach(row => {
       const p = productById(row.productId);
       poSizesFor(p).forEach(s => {
         const q = Number(row.qtys && row.qtys[s]) || 0;
-        if (q > 0) {
+        if (q > 0 && q < PO_MIN_QTY) {
+          hasInvalidMinQty = true;
+        } else if (q >= PO_MIN_QTY) {
           const variant = productSizeVariantBySize(p, s);
+          const sellingPricePerLiter = poSellingPricePerLiter(p);
+          const purchaseCostPerLiter = poPurchaseCostPerLiter(p);
+          const purchaseCostPerUnit = poPurchaseCostPerUnit(p, s);
+          const lineTotal = Number((q * purchaseCostPerUnit).toFixed(2));
           items.push({
             productId: p.productId || p.id,
             product_id: p.productId || p.id,
@@ -1846,15 +2073,37 @@ async function submitPO(e) {
             color: p.color,
             size: s,
             qty: q,
-            pricePerLiter: Number(p.price) || 0,
-            unitCost: poUnitCost(p, s)
+            sellingPricePerLiter,
+            purchaseCostPerLiter,
+            pricePerLiter: purchaseCostPerLiter,
+            purchaseCostPerUnit,
+            unitCost: purchaseCostPerUnit,
+            lineTotal
           });
         }
       });
     });
 
+    if (hasInvalidMinQty) {
+      showToast('Minimum order quantity is 10 units.', 'error');
+      if (firstInvalidInputEl) firstInvalidInputEl.focus();
+      return false;
+    }
+
     if (items.length === 0) {
-      showToast('Enter an order quantity for at least one container size before submitting.', 'error');
+      // Flag visible size rows so the user sees the minimum order quantity requirement on each row
+      poItemRows.forEach((row, rowIdx) => {
+        if (!row || !row.productId) return;
+        const p = productById(row.productId);
+        if (!p) return;
+        const visibleSizes = poSizesFor(p).filter(s => isSizeVisibleInPO(p, s, row, poCreateStockFilter));
+        visibleSizes.forEach(s => {
+          if (!row.invalidSizes) row.invalidSizes = {};
+          row.invalidSizes[s] = true;
+          renderPOSizeRowValidationDOM(rowIdx, s, true);
+        });
+      });
+      showToast('Minimum order quantity is 10 units.', 'error');
       return false;
     }
 
@@ -2135,8 +2384,7 @@ function loadPOWithProducts(supplierId, products, targetSize = null) {
 
       if (isSelected) {
         if (!hasOpen || window._allowDuplicatePOCreation) {
-          const minBatch = s >= 16 ? 1 : (s >= 4 ? 2 : 5);
-          qtys[s] = Math.min(PO_MAX_QTY, Math.max(minBatch, (thresh * 2) - count));
+          qtys[s] = Math.min(PO_MAX_QTY, Math.max(PO_MIN_QTY, (thresh * 2) - count));
           addedAny = true;
         } else {
           qtys[s] = 0;
@@ -2349,19 +2597,18 @@ function duplicatePO(id) {
   const grouped = {};
   items.forEach(it => {
     if (!grouped[it.productId]) {
-      grouped[it.productId] = { qtys: {}, showAllSizes: false };
+      grouped[it.productId] = { qtys: {}, showAllSizes: true };
     }
     const sz = Number(it.size) || 1;
-    grouped[it.productId].qtys[sz] = Number(it.qty) || 0;
-    if (![1, 4, 16].includes(sz)) {
-      grouped[it.productId].showAllSizes = true;
-    }
+    const rawQty = Number(it.qty) || 0;
+    grouped[it.productId].qtys[sz] = rawQty > 0 ? Math.max(PO_MIN_QTY, rawQty) : 0;
   });
 
   poItemRows = Object.keys(grouped).map(pid => newPORow(pid, grouped[pid].qtys, grouped[pid].showAllSizes));
   if (!poItemRows.length) poItemRows = [newPORow('')];
 
   window._poInitialNotes = `Reorder from ${po.poNumber}`;
+  if (typeof syncRouteState === 'function') syncRouteState({ push: true });
   renderPage();
   showToast(`Draft created from ${po.poNumber}. Review quantities and submit.`);
 }
@@ -2533,7 +2780,7 @@ function renderPOProductPickerContent(index, suppliedProducts, currentProductId)
       const otherRow = selectedInOtherRows.get(p.id);
       const isLow = productHasLowStock(p);
       const lowSummary = isLow ? productLowSizesSummary(p) : '';
-      const price = p.price ? `${peso(p.price)}/L` : '—';
+      const costPerL = p.price ? `${peso(poPurchaseCostPerLiter(p))}/L` : '—';
       const isLinked = hasSupplied && suppliedProducts.some(sp => sp.id === p.id);
 
       return `
@@ -2546,7 +2793,7 @@ function renderPOProductPickerContent(index, suppliedProducts, currentProductId)
                 ${isLinked ? `<span class="badge" style="background:#EAF4F3; color:var(--teal-dark); font-size:9.5px; padding:1px 5px;">Linked</span>` : ''}
               </div>
               <div class="po-picker-item-sub">
-                ${escapeHtml(p.brand || '')}${p.type ? ' · ' + escapeHtml(p.type) : ''} · Price: ${price}
+                ${escapeHtml(p.brand || '')}${p.type ? ' · ' + escapeHtml(p.type) : ''} · Purchase Cost: ${costPerL}
               </div>
             </div>
             <div class="po-picker-item-right">
@@ -2650,6 +2897,9 @@ function selectPOProduct(index, productId, event) {
   const prevProductId = poItemRows[index].productId;
   poItemRows[index].productId = productId;
   poItemRows[index].qtys = {};
+  poItemRows[index].rawInputs = {};
+  poItemRows[index].touchedSizes = {};
+  poItemRows[index].invalidSizes = {};
   poItemRows[index].expanded = false;
 
   const sizes = productSizes(p);
@@ -2659,8 +2909,15 @@ function selectPOProduct(index, productId, event) {
     lowSizes.forEach(s => {
       const count = productCanCount(p, s);
       const thresh = productSizeThreshold(p, s);
-      const minBatch = s >= 16 ? 1 : (s >= 4 ? 2 : 5);
-      poItemRows[index].qtys[s] = Math.min(PO_MAX_QTY, Math.max(minBatch, (thresh * 2) - count));
+      poItemRows[index].qtys[s] = Math.min(PO_MAX_QTY, Math.max(PO_MIN_QTY, (thresh * 2) - count));
+      poItemRows[index].touchedSizes[s] = true;
+    });
+  } else if (sizes.length > 0) {
+    // Expand row and pre-fill primary container size with minimum order quantity (10 units)
+    poItemRows[index].expanded = true;
+    sizes.forEach(s => {
+      poItemRows[index].qtys[s] = poSuggestedQty(p, s);
+      poItemRows[index].touchedSizes[s] = true;
     });
   }
 
@@ -2685,6 +2942,9 @@ function clearPOProductRow(index, event) {
   if (!poItemRows[index]) return;
   poItemRows[index].productId = '';
   poItemRows[index].qtys = {};
+  poItemRows[index].rawInputs = {};
+  poItemRows[index].touchedSizes = {};
+  poItemRows[index].invalidSizes = {};
   poItemRows[index].expanded = false;
   closePOProductPicker();
   renderPOItemRows();

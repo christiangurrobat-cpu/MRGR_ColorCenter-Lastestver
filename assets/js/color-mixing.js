@@ -9,6 +9,7 @@ const PAINT_COLOR_DICTIONARY = [
   { name: 'Pearl White', hex: '#F8F6F0', r: 248, g: 246, b: 240, family: 'White' },
   { name: 'Warm White', hex: '#F5F2EB', r: 245, g: 242, b: 235, family: 'White' },
   { name: 'Off White', hex: '#F2EDE4', r: 242, g: 237, b: 228, family: 'White' },
+  { name: 'Cream', hex: '#FFFDE5', r: 255, g: 253, b: 229, family: 'Cream' },
   { name: 'Ivory', hex: '#FFFFF0', r: 255, g: 255, b: 240, family: 'Cream' },
   { name: 'Alabaster', hex: '#F2F0EB', r: 242, g: 240, b: 235, family: 'White' },
   { name: 'Cream', hex: '#FFFDD0', r: 255, g: 253, b: 208, family: 'Cream' },
@@ -17,6 +18,7 @@ const PAINT_COLOR_DICTIONARY = [
   { name: 'Eggshell', hex: '#F0EAD6', r: 240, g: 234, b: 214, family: 'Cream' },
 
   // Yellows & Golds
+  { name: 'Lemon Custard', hex: '#FFFCCA', r: 255, g: 252, b: 202, family: 'Yellow' },
   { name: 'Buttercup Yellow', hex: '#FCE883', r: 252, g: 232, b: 131, family: 'Yellow' },
   { name: 'Lemon Yellow', hex: '#FFF44F', r: 255, g: 244, b: 79, family: 'Yellow' },
   { name: 'Canary Yellow', hex: '#FFEF00', r: 255, g: 239, b: 0, family: 'Yellow' },
@@ -57,10 +59,14 @@ const PAINT_COLOR_DICTIONARY = [
   { name: 'Oxblood', hex: '#4A0000', r: 74, g: 0, b: 0, family: 'Red' },
 
   // Pinks & Magentas
+  { name: 'Pastel Rose', hex: '#F7B9BE', r: 247, g: 185, b: 190, family: 'Pink' },
   { name: 'Rose Pink', hex: '#FF66CC', r: 255, g: 102, b: 204, family: 'Pink' },
   { name: 'Blush Pink', hex: '#DE5D83', r: 222, g: 93, b: 131, family: 'Pink' },
+  { name: 'Flamingo Pink', hex: '#F4A3A9', r: 244, g: 163, b: 169, family: 'Pink' },
+  { name: 'Flamingo Pink', hex: '#F18D95', r: 241, g: 141, b: 149, family: 'Pink' },
   { name: 'Flamingo Pink', hex: '#FC8EAC', r: 252, g: 142, b: 172, family: 'Pink' },
   { name: 'Coral Pink', hex: '#F88379', r: 248, g: 131, b: 121, family: 'Pink' },
+  { name: 'Sunset Coral', hex: '#F89B72', r: 248, g: 155, b: 114, family: 'Orange' },
   { name: 'Magenta', hex: '#FF00FF', r: 255, g: 0, b: 255, family: 'Pink' },
   { name: 'Fuchsia', hex: '#C154C1', r: 193, g: 84, b: 193, family: 'Pink' },
   { name: 'Hot Pink', hex: '#FF69B4', r: 255, g: 105, b: 180, family: 'Pink' },
@@ -68,6 +74,8 @@ const PAINT_COLOR_DICTIONARY = [
   { name: 'Bubblegum', hex: '#FFC1CC', r: 255, g: 193, b: 204, family: 'Pink' },
 
   // Violets & Purples
+  { name: 'Lavender Mist', hex: '#C5BFC2', r: 197, g: 191, b: 194, family: 'Purple' },
+  { name: 'Lavender Mist', hex: '#CAB0E7', r: 202, g: 176, b: 231, family: 'Purple' },
   { name: 'Lilac', hex: '#C8A2C8', r: 200, g: 162, b: 200, family: 'Purple' },
   { name: 'Lavender', hex: '#E6E6FA', r: 230, g: 230, b: 250, family: 'Purple' },
   { name: 'Wisteria', hex: '#C9A0DC', r: 201, g: 160, b: 220, family: 'Purple' },
@@ -81,8 +89,10 @@ const PAINT_COLOR_DICTIONARY = [
   { name: 'Mauve', hex: '#E0B0FF', r: 224, g: 176, b: 255, family: 'Purple' },
 
   // Blues & Cyans
+  { name: 'Ocean Aqua', hex: '#A0CDF5', r: 160, g: 205, b: 245, family: 'Blue' },
+  { name: 'Baby Blue', hex: '#89C1F2', r: 137, g: 193, b: 242, family: 'Blue' },
+  { name: 'Baby Blue', hex: '#CEE6FA', r: 206, g: 230, b: 250, family: 'Blue' },
   { name: 'Sky Blue', hex: '#87CEEB', r: 135, g: 206, b: 235, family: 'Blue' },
-  { name: 'Baby Blue', hex: '#89CFF0', r: 137, g: 207, b: 240, family: 'Blue' },
   { name: 'Powder Blue', hex: '#B0E0E6', r: 176, g: 224, b: 230, family: 'Blue' },
   { name: 'Ice Blue', hex: '#AFEEEE', r: 175, g: 238, b: 238, family: 'Blue' },
   { name: 'Cyan Blue', hex: '#00E5FF', r: 0, g: 229, b: 255, family: 'Blue' },
@@ -100,6 +110,7 @@ const PAINT_COLOR_DICTIONARY = [
   { name: 'Slate Blue', hex: '#6A5ACD', r: 106, g: 90, b: 205, family: 'Blue' },
 
   // Greens & Olives
+  { name: 'Sage Meadow', hex: '#BBE19D', r: 187, g: 225, b: 157, family: 'Green' },
   { name: 'Mint Green', hex: '#98FF98', r: 152, g: 255, b: 152, family: 'Green' },
   { name: 'Seafoam Green', hex: '#93E9BE', r: 147, g: 233, b: 190, family: 'Green' },
   { name: 'Pistachio', hex: '#93C572', r: 147, g: 197, b: 114, family: 'Green' },
@@ -113,11 +124,13 @@ const PAINT_COLOR_DICTIONARY = [
   { name: 'Hunter Green', hex: '#2E5B37', r: 46, g: 91, b: 55, family: 'Green' },
   { name: 'Pine Green', hex: '#01796F', r: 1, g: 121, b: 111, family: 'Green' },
   { name: 'Olive Green', hex: '#808000', r: 128, g: 128, b: 0, family: 'Green' },
+  { name: 'Olive Grove', hex: '#D1CE98', r: 209, g: 206, b: 152, family: 'Green' },
   { name: 'Army Green', hex: '#4B5320', r: 75, g: 83, b: 32, family: 'Green' },
   { name: 'Sage Green', hex: '#9DC183', r: 157, g: 193, b: 131, family: 'Green' },
   { name: 'Celadon', hex: '#ACE1AF', r: 172, g: 225, b: 175, family: 'Green' },
 
   // Browns & Earth Tones
+  { name: 'Creamy Latte', hex: '#D3BFAB', r: 211, g: 191, b: 171, family: 'Brown' },
   { name: 'Tan', hex: '#D2B48C', r: 210, g: 180, b: 140, family: 'Brown' },
   { name: 'Sand', hex: '#C2B280', r: 194, g: 178, b: 128, family: 'Brown' },
   { name: 'Caramel', hex: '#FFD59A', r: 255, g: 213, b: 154, family: 'Brown' },
@@ -130,6 +143,7 @@ const PAINT_COLOR_DICTIONARY = [
   { name: 'Espresso', hex: '#2B1700', r: 43, g: 23, b: 0, family: 'Brown' },
 
   // Grays, Silvers & Blacks
+  { name: 'Modern Slate', hex: '#A6AAAE', r: 166, g: 170, b: 174, family: 'Gray' },
   { name: 'Pure Black', hex: '#000000', r: 0, g: 0, b: 0, family: 'Black' },
   { name: 'Jet Black', hex: '#1B1B1B', r: 27, g: 27, b: 27, family: 'Black' },
   { name: 'Charcoal Gray', hex: '#36454F', r: 54, g: 69, b: 79, family: 'Gray' },
@@ -200,6 +214,31 @@ function getProductDefaultColor(product) {
   return '#1F6F6B';
 }
 
+function getProductColorName(product) {
+  if (!product) return 'Standard';
+  if (product.color && product.color !== '-' && !product.color.startsWith('#')) {
+    return product.color;
+  }
+  if (product.colorName && product.colorName !== '-') {
+    return product.colorName;
+  }
+  const str = `${product.name || ''}`.toLowerCase();
+  if (typeof PAINT_COLOR_DICTIONARY !== 'undefined') {
+    for (const item of PAINT_COLOR_DICTIONARY) {
+      if (str.includes(item.name.toLowerCase())) {
+        return item.name;
+      }
+    }
+  }
+  if (product.color && product.color.startsWith('#') && typeof hexToRgb === 'function' && typeof detectMixedColorName === 'function') {
+    const rgb = hexToRgb(product.color);
+    const det = detectMixedColorName(rgb.r, rgb.g, rgb.b);
+    if (det && det.name) return det.name;
+  }
+  return (product.color && product.color !== '-') ? product.color : 'Original Color';
+}
+window.getProductColorName = getProductColorName;
+
 function subtractivePaintMix(components) {
   if (!components || !components.length) return { r: 255, g: 255, b: 255, hex: '#FFFFFF' };
 
@@ -245,7 +284,11 @@ function subtractivePaintMix(components) {
   return { r: finalR, g: finalG, b: finalB, hex };
 }
 
-function detectMixedColorName(r, g, b) {
+function cleanPresetColorName(rawName) {
+  return String(rawName || '').replace(/^[\p{Emoji}\s]+/u, '').trim() || String(rawName || '').trim();
+}
+
+function detectDictionaryColorOnly(r, g, b) {
   let closest = PAINT_COLOR_DICTIONARY[0];
   let minDistance = Infinity;
 
@@ -261,6 +304,78 @@ function detectMixedColorName(r, g, b) {
       closest = item;
     }
   });
+
+  return closest;
+}
+
+function doesComponentsMatchPreset(preset, components) {
+  if (!preset || !Array.isArray(preset.recipe) || !Array.isArray(components)) return false;
+  if (preset.recipe.length !== components.length || preset.recipe.length === 0) return false;
+  return preset.recipe.every((item, idx) => {
+    const comp = components[idx];
+    if (!comp) return false;
+    const samePct = Math.abs((Number(item.pct) || 0) - (Number(comp.pct) || 0)) < 0.1;
+    if (!samePct) return false;
+    if (item.productId && comp.productId && String(comp.productId) === String(item.productId)) {
+      return true;
+    }
+    const hint = String(item.colorHint || item.name || '').replace(/paint/i, '').trim().toLowerCase();
+    if (!hint) return true;
+    const prod = (comp.productId && typeof productById === 'function') ? productById(comp.productId) : null;
+    const cStr = `${comp.color || ''} ${comp.colorName || ''} ${comp.name || ''} ${prod ? ((prod.color || '') + ' ' + (prod.name || '')) : ''}`.toLowerCase();
+    if (cStr.includes(hint)) return true;
+    if (comp.hex) {
+      const rgb = hexToRgb(comp.hex);
+      const baseDet = detectDictionaryColorOnly(rgb.r, rgb.g, rgb.b);
+      if (baseDet && ((baseDet.family && baseDet.family.toLowerCase() === hint) || (baseDet.name && baseDet.name.toLowerCase().includes(hint)))) {
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
+function detectMixedColorName(r, g, b) {
+  const closest = detectDictionaryColorOnly(r, g, b);
+
+  // Ensure active or matching preset recipe always resolves to the exact preset name
+  if (typeof colorMixStudioState !== 'undefined' && colorMixStudioState && Array.isArray(colorMixStudioState.components) && colorMixStudioState.components.length >= 2 && typeof COLOR_RECIPE_PRESETS !== 'undefined' && Array.isArray(COLOR_RECIPE_PRESETS)) {
+    const studioMix = subtractivePaintMix(colorMixStudioState.components);
+    if (Math.abs(studioMix.r - r) <= 2 && Math.abs(studioMix.g - g) <= 2 && Math.abs(studioMix.b - b) <= 2) {
+      const selIdx = Number(colorMixStudioState.selectedPresetIndex);
+      if (!isNaN(selIdx) && selIdx >= 0 && COLOR_RECIPE_PRESETS[selIdx]) {
+        const selPreset = COLOR_RECIPE_PRESETS[selIdx];
+        if (doesComponentsMatchPreset(selPreset, colorMixStudioState.components)) {
+          const cleanName = cleanPresetColorName(selPreset.name);
+          const dictEntry = PAINT_COLOR_DICTIONARY.find(d => d.name.toLowerCase() === cleanName.toLowerCase());
+          return {
+            name: cleanName,
+            hex: studioMix.hex,
+            r,
+            g,
+            b,
+            family: (dictEntry && dictEntry.family) || (closest && closest.family) || 'Custom'
+          };
+        } else {
+          // User changed percentages or ingredients away from the selected preset
+          colorMixStudioState.selectedPresetIndex = -1;
+        }
+      }
+      const matchedPreset = COLOR_RECIPE_PRESETS.find(p => doesComponentsMatchPreset(p, colorMixStudioState.components));
+      if (matchedPreset) {
+        const cleanName = cleanPresetColorName(matchedPreset.name);
+        const dictEntry = PAINT_COLOR_DICTIONARY.find(d => d.name.toLowerCase() === cleanName.toLowerCase());
+        return {
+          name: cleanName,
+          hex: studioMix.hex,
+          r,
+          g,
+          b,
+          family: (dictEntry && dictEntry.family) || (closest && closest.family) || 'Custom'
+        };
+      }
+    }
+  }
 
   return closest;
 }
@@ -294,10 +409,65 @@ function colorMixAvailableProducts(filterByType = true) {
   return all;
 }
 
+function colorMixModalProducts() {
+  const all = activeProducts();
+  if (colorMixStudioState && colorMixStudioState.typeFilter && colorMixStudioState.typeFilter !== 'all') {
+    const filtered = all.filter(p => (p.type || '').toLowerCase() === colorMixStudioState.typeFilter.toLowerCase());
+    if (filtered.length > 0) return filtered;
+  }
+  return all;
+}
+
+function getInventoryBasePaintTypes() {
+  const prods = (typeof activeProducts === 'function')
+    ? activeProducts()
+    : ((typeof db !== 'undefined' && db && Array.isArray(db.products)) ? db.products.filter(p => p && p.status === 'active') : []);
+  return Array.from(new Set(
+    prods
+      .map(p => (p && p.type ? String(p.type).trim() : ''))
+      .filter(t => t && t !== '-' && t.toLowerCase() !== 'accessory')
+  ));
+}
+
+function getColorMixSelectedProductSlotMap() {
+  const map = new Map();
+  if (!colorMixStudioState || !Array.isArray(colorMixStudioState.components)) return map;
+  colorMixStudioState.components.forEach((c, i) => {
+    if (c && c.productId) {
+      map.set(String(c.productId), i + 1);
+    }
+  });
+  return map;
+}
+
+function getColorMixDuplicateSlots() {
+  const countMap = new Map();
+  const duplicateSlots = new Set();
+  if (!colorMixStudioState || !Array.isArray(colorMixStudioState.components)) return duplicateSlots;
+
+  colorMixStudioState.components.forEach((c, idx) => {
+    if (!c || !c.productId) return;
+    const pid = String(c.productId);
+    if (!countMap.has(pid)) {
+      countMap.set(pid, [idx + 1]);
+    } else {
+      countMap.get(pid).push(idx + 1);
+    }
+  });
+
+  countMap.forEach((slots) => {
+    if (slots.length > 1) {
+      slots.forEach(slot => duplicateSlots.add(slot));
+    }
+  });
+
+  return duplicateSlots;
+}
+
 function initColorMixStudioState() {
   const prods = colorMixAvailableProducts(false);
   const prod1 = prods[0] || null;
-  const prod2 = prods[1] || prod1;
+  const prod2 = (prod1 ? prods.find(p => p.id !== prod1.id) : prods[1]) || null;
 
   colorMixStudioState = {
     components: [
@@ -306,6 +476,8 @@ function initColorMixStudioState() {
         productId: prod1 ? prod1.id : '',
         name: prod1 ? prod1.name : 'Component A',
         brand: prod1 ? prod1.brand : '',
+        colorName: prod1 ? getProductColorName(prod1) : 'White',
+        color: prod1 ? getProductColorName(prod1) : 'White',
         stock: prod1 ? prod1.stock : 0,
         price: prod1 ? prod1.price : 350,
         hex: prod1 ? getProductDefaultColor(prod1) : '#FFFFFF',
@@ -315,8 +487,10 @@ function initColorMixStudioState() {
       {
         id: uid('cmc'),
         productId: prod2 ? prod2.id : '',
-        name: prod2 ? prod2.name : 'Component B',
+        name: prod2 ? prod2.name : (prod1 ? 'Select Component B' : 'Component B'),
         brand: prod2 ? prod2.brand : '',
+        colorName: prod2 ? getProductColorName(prod2) : 'Blue',
+        color: prod2 ? getProductColorName(prod2) : 'Blue',
         stock: prod2 ? prod2.stock : 0,
         price: prod2 ? prod2.price : 450,
         hex: prod2 ? getProductDefaultColor(prod2) : '#1E88E5',
@@ -331,6 +505,7 @@ function initColorMixStudioState() {
     userCustomizedName: false,
     userCustomizedPrice: false,
     note: '',
+    selectedSheen: '',
     typeFilter: 'all',
     openPickerIdx: -1,
     pickerSearch: '',
@@ -436,15 +611,18 @@ function renderColorMixStudio() {
 const CUSTOM_COLOR_PRESETS_KEY = 'mrgr_custom_color_presets';
 
 const DEFAULT_COLOR_RECIPE_PRESETS = [
-  { name: '🌸 Pastel Rose', desc: 'Soft blush pink blend (70% White + 30% Red)', hex: '#F7D6DC', recipe: [{ colorHint: 'white', pct: 70 }, { colorHint: 'red', pct: 30 }] },
-  { name: '🌊 Ocean Aqua', desc: 'Fresh sky-blue tint (60% White + 40% Blue)', hex: '#4A90E2', recipe: [{ colorHint: 'white', pct: 60 }, { colorHint: 'blue', pct: 40 }] },
-  { name: '🌿 Sage Meadow', desc: 'Soothing organic green (50% White + 30% Green + 20% Yellow)', hex: '#7E9F76', recipe: [{ colorHint: 'white', pct: 50 }, { colorHint: 'green', pct: 30 }, { colorHint: 'yellow', pct: 20 }] },
-  { name: '🌅 Sunset Coral', desc: 'Warm glowing earth tone (40% White + 35% Orange + 25% Red)', hex: '#DF6943', recipe: [{ colorHint: 'white', pct: 40 }, { colorHint: 'orange', pct: 35 }, { colorHint: 'red', pct: 25 }] },
-  { name: '☕ Creamy Latte', desc: 'Warm cozy neutral (60% White + 30% Brown + 10% Yellow)', hex: '#A8896C', recipe: [{ colorHint: 'white', pct: 60 }, { colorHint: 'brown', pct: 30 }, { colorHint: 'yellow', pct: 10 }] },
-  { name: '🍋 Lemon Custard', desc: 'Sunny vibrant pastel (70% White + 30% Yellow)', hex: '#FDF289', recipe: [{ colorHint: 'white', pct: 70 }, { colorHint: 'yellow', pct: 30 }] },
-  { name: '🌙 Modern Slate', desc: 'Contemporary cool dark tone (60% White + 35% Black + 5% Blue)', hex: '#586A7A', recipe: [{ colorHint: 'white', pct: 60 }, { colorHint: 'black', pct: 35 }, { colorHint: 'blue', pct: 5 }] },
-  { name: '🍇 Lavender Mist', desc: 'Delicate floral violet (65% White + 25% Purple + 10% Blue)', hex: '#B5A0CC', recipe: [{ colorHint: 'white', pct: 65 }, { colorHint: 'purple', pct: 25 }, { colorHint: 'blue', pct: 10 }] },
-  { name: '🫒 Olive Grove', desc: 'Refined deep olive (40% White + 40% Yellow + 20% Black)', hex: '#728038', recipe: [{ colorHint: 'white', pct: 40 }, { colorHint: 'yellow', pct: 40 }, { colorHint: 'black', pct: 20 }] }
+  { name: '🌸 Pastel Rose', desc: 'Soft blush pink blend (70% White + 30% Red)', hex: '#F7D6DC', recipe: [{ name: 'White Paint', colorHint: 'white', pct: 70 }, { name: 'Red Paint', colorHint: 'red', pct: 30 }] },
+  { name: '🌊 Ocean Aqua', desc: 'Fresh sky-blue tint (60% White + 40% Blue)', hex: '#4A90E2', recipe: [{ name: 'White Paint', colorHint: 'white', pct: 60 }, { name: 'Blue Paint', colorHint: 'blue', pct: 40 }] },
+  { name: '🌿 Sage Meadow', desc: 'Soothing organic green (50% White + 30% Green + 20% Yellow)', hex: '#7E9F76', recipe: [{ name: 'White Paint', colorHint: 'white', pct: 50 }, { name: 'Green Paint', colorHint: 'green', pct: 30 }, { name: 'Yellow Paint', colorHint: 'yellow', pct: 20 }] },
+  { name: '🌅 Sunset Coral', desc: 'Warm glowing earth tone (40% White + 35% Orange + 25% Red)', hex: '#DF6943', recipe: [{ name: 'White Paint', colorHint: 'white', pct: 40 }, { name: 'Orange Paint', colorHint: 'orange', pct: 35 }, { name: 'Red Paint', colorHint: 'red', pct: 25 }] },
+  { name: '☕ Creamy Latte', desc: 'Warm cozy neutral (60% White + 30% Brown + 10% Yellow)', hex: '#A8896C', recipe: [{ name: 'White Paint', colorHint: 'white', pct: 60 }, { name: 'Brown Paint', colorHint: 'brown', pct: 30 }, { name: 'Yellow Paint', colorHint: 'yellow', pct: 10 }] },
+  { name: '🍋 Lemon Custard', desc: 'Sunny vibrant pastel (70% White + 30% Yellow)', hex: '#FDF289', recipe: [{ name: 'White Paint', colorHint: 'white', pct: 70 }, { name: 'Yellow Paint', colorHint: 'yellow', pct: 30 }] },
+  { name: '🌙 Modern Slate', desc: 'Contemporary cool dark tone (60% White + 35% Black + 5% Blue)', hex: '#586A7A', recipe: [{ name: 'White Paint', colorHint: 'white', pct: 60 }, { name: 'Black Paint', colorHint: 'black', pct: 35 }, { name: 'Blue Paint', colorHint: 'blue', pct: 5 }] },
+  { name: '🍇 Lavender Mist', desc: 'Delicate floral violet (65% White + 25% Purple + 10% Blue)', hex: '#B5A0CC', recipe: [{ name: 'White Paint', colorHint: 'white', pct: 65 }, { name: 'Purple Paint', colorHint: 'purple', pct: 25 }, { name: 'Blue Paint', colorHint: 'blue', pct: 10 }] },
+  { name: '🫒 Olive Grove', desc: 'Refined deep olive (40% White + 40% Yellow + 20% Black)', hex: '#728038', recipe: [{ name: 'White Paint', colorHint: 'white', pct: 40 }, { name: 'Yellow Paint', colorHint: 'yellow', pct: 40 }, { name: 'Black Paint', colorHint: 'black', pct: 20 }] },
+  { name: 'Cream', desc: 'Soft warm off-white blend (85% White + 15% Yellow)', hex: '#FFFDD0', recipe: [{ name: 'White Paint', colorHint: 'white', pct: 85 }, { name: 'Yellow Paint', colorHint: 'yellow', pct: 15 }] },
+  { name: 'Flamingo Pink', desc: 'Delicate vibrant pink (60% White + 40% Red)', hex: '#FC8EAC', recipe: [{ name: 'White Paint', colorHint: 'white', pct: 60 }, { name: 'Red Paint', colorHint: 'red', pct: 40 }] },
+  { name: 'Baby Blue', desc: 'Gentle pastel sky blend (50% White + 50% Blue)', hex: '#89C1F2', recipe: [{ name: 'White Paint', colorHint: 'white', pct: 50 }, { name: 'Blue Paint', colorHint: 'blue', pct: 50 }] }
 ];
 
 function loadSavedCustomColorPresets() {
@@ -458,10 +636,27 @@ function loadSavedCustomColorPresets() {
   }
 }
 
-const COLOR_RECIPE_PRESETS = [
-  ...DEFAULT_COLOR_RECIPE_PRESETS,
-  ...loadSavedCustomColorPresets()
-];
+function getColorRecipePresets() {
+  const custom = loadSavedCustomColorPresets();
+  const list = [...DEFAULT_COLOR_RECIPE_PRESETS];
+  custom.forEach(cp => {
+    const cpName = cleanPresetColorName(cp.name).toLowerCase();
+    const idx = list.findIndex(p => cleanPresetColorName(p.name).toLowerCase() === cpName);
+    if (idx < 0) {
+      list.push(cp);
+    }
+  });
+  return list;
+}
+
+const COLOR_RECIPE_PRESETS = getColorRecipePresets();
+
+function syncActiveColorRecipePresets() {
+  const updated = getColorRecipePresets();
+  COLOR_RECIPE_PRESETS.length = 0;
+  COLOR_RECIPE_PRESETS.push(...updated);
+  return COLOR_RECIPE_PRESETS;
+}
 
 function saveMixedColorToPresets({ colorName, detectedName, hex, baseType, components }) {
   if (!colorName || !Array.isArray(components) || !components.length) return;
@@ -497,116 +692,356 @@ function saveMixedColorToPresets({ colorName, detectedName, hex, baseType, compo
   } catch (e) {
     console.warn('Could not persist custom color presets', e);
   }
+  syncActiveColorRecipePresets();
 }
 
-function findMatchingProductForRecipeItem(item, prods, allAvailProds) {
-  const pool = prods && prods.length ? prods : (allAvailProds || []);
+function findMatchingProductForRecipeItem(item, reqLiters = 0, excludeProductIds = new Set(), preferredType = '') {
+  const allActive = (typeof activeProducts === 'function' ? activeProducts() : [])
+    .filter(p => p && p.status === 'active' && !excludeProductIds.has(String(p.id)));
+
   // 1. Exact productId match first (for saved custom mixes)
-  if (item.productId) {
-    const exactInPool = pool.find(prod => prod.id === item.productId) ||
-      (allAvailProds || []).find(prod => prod.id === item.productId);
-    if (exactInPool) return { product: exactInPool, reason: null };
+  if (item.productId && !excludeProductIds.has(String(item.productId))) {
+    const byId = allActive.find(p => String(p.id) === String(item.productId));
+    if (byId) return { product: byId, reason: null };
     const rawProd = typeof productById === 'function' ? productById(item.productId) : null;
-    if (rawProd) {
-      if (productMixAvailableStock(rawProd) <= 0) {
-        return { product: null, reason: `${rawProd.name} is out of stock` };
-      }
-    }
+    if (rawProd && rawProd.status === 'active') return { product: rawProd, reason: null };
   }
 
-  // 2. Match by colorHint or name in available products (above threshold)
+  // 2. Match by colorHint or name
   const hint = String(item.colorHint || item.name || '').trim().toLowerCase();
   if (hint) {
     const matchFn = prod => {
-      const s = `${prod.color || ''} ${prod.name || ''}`.toLowerCase();
-      if (s.includes(hint)) return true;
+      const pColor = String(prod.color || '').trim().toLowerCase();
+      const pName = String(prod.name || '').trim().toLowerCase();
+      if (pColor === hint || pColor.includes(hint) || pName.includes(hint)) return true;
       const hex = getProductDefaultColor(prod);
-      const rgb = hexToRgb(hex);
-      const det = detectMixedColorName(rgb.r, rgb.g, rgb.b);
-      if (det && det.family && det.family.toLowerCase() === hint) return true;
-      if (det && det.name && det.name.toLowerCase().includes(hint)) return true;
+      if (hex) {
+        const rgb = hexToRgb(hex);
+        if (rgb) {
+          const det = detectMixedColorName(rgb.r, rgb.g, rgb.b);
+          if (det && det.family && det.family.toLowerCase() === hint) return true;
+          if (det && det.name && det.name.toLowerCase().includes(hint)) return true;
+        }
+      }
       return false;
     };
-    const found = pool.find(matchFn) || (allAvailProds || []).find(matchFn);
-    if (found) return { product: found, reason: null };
 
-    const lowMatch = (typeof activeProducts === 'function' ? activeProducts() : []).find(matchFn);
-    if (lowMatch) {
-      return { product: null, reason: `${lowMatch.name} is low/out of stock (${formatStock(lowMatch.stock)}L)` };
+    const candidates = allActive.filter(matchFn);
+    if (candidates.length > 0) {
+      // Sort candidates:
+      // Priority 1: Has enough usable stock (usableStock >= reqLiters)
+      // Priority 2: Matches preferredType (e.g. Latex, Automotive Paint)
+      // Priority 3: Prioritize usable opened-container leftovers
+      // Priority 4: Highest usable stock
+      candidates.sort((a, b) => {
+        const aStock = productMixAvailableStock(a);
+        const bStock = productMixAvailableStock(b);
+        const aSufficient = reqLiters > 0 ? (aStock >= reqLiters ? 1 : 0) : (aStock > 0 ? 1 : 0);
+        const bSufficient = reqLiters > 0 ? (bStock >= reqLiters ? 1 : 0) : (bStock > 0 ? 1 : 0);
+        if (aSufficient !== bSufficient) return bSufficient - aSufficient;
+
+        const aTypeMatch = preferredType && (a.type || '').toLowerCase() === preferredType.toLowerCase() ? 1 : 0;
+        const bTypeMatch = preferredType && (b.type || '').toLowerCase() === preferredType.toLowerCase() ? 1 : 0;
+        if (aTypeMatch !== bTypeMatch) return bTypeMatch - aTypeMatch;
+
+        const aOpened = productOpenedStock(a) > 0 ? 1 : 0;
+        const bOpened = productOpenedStock(b) > 0 ? 1 : 0;
+        if (aOpened !== bOpened) return bOpened - aOpened;
+
+        return bStock - aStock;
+      });
+
+      return { product: candidates[0], reason: null };
     }
-    return { product: null, reason: `Missing ${item.name || item.colorHint} paint` };
   }
 
-  return { product: null, reason: 'Missing ingredient in inventory' };
+  return { product: null, reason: `Missing ${item.name || item.colorHint || 'ingredient'} in inventory` };
 }
 
 function evaluateRecipePresetAvailability(preset, totalLiters = (colorMixStudioState && colorMixStudioState.totalLiters ? colorMixStudioState.totalLiters : 1)) {
   if (!preset || !Array.isArray(preset.recipe) || !preset.recipe.length) {
-    return { available: false, lackingReasons: ['Empty recipe'], resolvedItems: [] };
+    return {
+      available: false,
+      lackingReasons: ['Empty recipe'],
+      shortageDescriptions: ['Empty recipe'],
+      ingredients: [],
+      resolvedItems: [],
+      tooltip: 'Empty recipe'
+    };
   }
-  const prods = colorMixAvailableProducts();
-  const allAvailProds = colorMixAvailableProducts(false);
-  const lackingReasons = [];
+
+  const vol = Math.max(0.5, Number(totalLiters) || 0.5);
+  const preferredType = (colorMixStudioState && colorMixStudioState.typeFilter && colorMixStudioState.typeFilter !== 'all')
+    ? colorMixStudioState.typeFilter
+    : (preset.baseType || '');
+
+  const usedProductIds = new Set();
+  const productTotalReqMap = new Map();
   const resolvedItems = [];
-  const litersByProductId = new Map();
 
+  // Pass 1: Match products and aggregate required liters per product ID (avoids double counting)
   preset.recipe.forEach(item => {
-    const reqLiters = Number(((totalLiters * (Number(item.pct) / 100)) || 0).toFixed(2));
-    const { product, reason } = findMatchingProductForRecipeItem(item, prods, allAvailProds);
-    if (!product) {
-      lackingReasons.push(reason || `Missing ${item.name || item.colorHint || 'ingredient'}`);
-      resolvedItems.push({ item, product: null, reqLiters });
-    } else {
-      const prevReq = litersByProductId.get(product.id) || 0;
-      litersByProductId.set(product.id, Number((prevReq + reqLiters).toFixed(2)));
-      resolvedItems.push({ item, product, reqLiters });
+    const pct = Number(item.pct) || 0;
+    const reqLiters = Number(((vol * (pct / 100)) || 0).toFixed(2));
+    const { product, reason } = findMatchingProductForRecipeItem(item, reqLiters, usedProductIds, preferredType);
+    if (product) {
+      usedProductIds.add(String(product.id));
+      const prevTotal = productTotalReqMap.get(String(product.id)) || 0;
+      productTotalReqMap.set(String(product.id), Number((prevTotal + reqLiters).toFixed(2)));
     }
+    resolvedItems.push({ item, product, reqLiters, reason });
   });
 
-  litersByProductId.forEach((totalReq, prodId) => {
-    const prod = typeof productById === 'function' ? productById(prodId) : null;
-    if (prod) {
-      const avail = productMixAvailableStock(prod);
-      if (avail < totalReq) {
-        lackingReasons.push(`${prod.name} (need ${formatStock(totalReq)}L, have ${formatStock(avail)}L)`);
-      }
+  // Pass 2: Evaluate stock sufficiency per ingredient
+  const ingredients = [];
+  const lackingReasons = [];
+  const shortageDescriptions = [];
+
+  resolvedItems.forEach(({ item, product, reqLiters, reason }) => {
+    const rawHint = item.colorHint || (item.name ? item.name.replace(/paint/i, '').trim() : '');
+    const fallbackDisplayName = rawHint ? (rawHint.charAt(0).toUpperCase() + rawHint.slice(1).toLowerCase() + ' Paint') : 'Ingredient';
+    const displayName = item.name || fallbackDisplayName;
+
+    if (!product) {
+      const shortageDesc = `${displayName} needs ${formatStock(reqLiters)} L but only 0.00 L is available.`;
+      lackingReasons.push(reason || shortageDesc);
+      shortageDescriptions.push(shortageDesc);
+      ingredients.push({
+        item,
+        displayName,
+        product: null,
+        productId: null,
+        pct: Number(item.pct) || 0,
+        reqLiters,
+        openedStock: 0,
+        sealedStock: 0,
+        usableStock: 0,
+        isAvailable: false,
+        shortageLiters: reqLiters,
+        statusText: 'Insufficient'
+      });
+      return;
     }
+
+    const openedStock = productOpenedStock(product);
+    const sealedStock = Math.max(0, Number(product.stock) || 0);
+    const usableStock = productMixAvailableStock(product);
+    const totalReqForProduct = productTotalReqMap.get(String(product.id)) || reqLiters;
+    const hasSufficient = usableStock >= totalReqForProduct && usableStock > 0;
+    const shortageLiters = hasSufficient ? 0 : Number(Math.max(0, totalReqForProduct - usableStock).toFixed(2));
+
+    if (!hasSufficient) {
+      const shortageDesc = `${displayName} needs ${formatStock(totalReqForProduct)} L but only ${formatStock(usableStock)} L is available.`;
+      lackingReasons.push(shortageDesc);
+      shortageDescriptions.push(shortageDesc);
+    }
+
+    ingredients.push({
+      item,
+      displayName,
+      product,
+      productId: product.id,
+      productName: product.name,
+      pct: Number(item.pct) || 0,
+      reqLiters,
+      openedStock,
+      sealedStock,
+      usableStock,
+      isAvailable: hasSufficient,
+      shortageLiters,
+      statusText: hasSufficient ? 'Available' : 'Insufficient'
+    });
   });
+
+  const isAvailable = ingredients.length > 0 && ingredients.every(ing => ing.isAvailable);
+
+  // Build clean multiline tooltip strictly matching requirements:
+  // Preset: Flamingo Pink
+  //
+  // Required Ingredients:
+  // - White Paint: 0.60 L — Available
+  // - Red Paint: 0.40 L — Insufficient
+  //
+  // Shortage:
+  // Red Paint needs 0.40 L but only 0.20 L is available.
+  let tooltip = `Preset: ${preset.name}\n\nRequired Ingredients:\n`;
+  ingredients.forEach(ing => {
+    tooltip += `- ${ing.displayName}: ${formatStock(ing.reqLiters)} L — ${ing.isAvailable ? 'Available' : 'Insufficient'}\n`;
+  });
+  if (!isAvailable) {
+    tooltip += `\nShortage:\n${shortageDescriptions.join('\n')}`;
+  } else {
+    tooltip += `\nStatus: Available (${vol} L mix)`;
+  }
 
   return {
-    available: lackingReasons.length === 0,
+    available: isAvailable,
     lackingReasons,
-    resolvedItems
+    shortageDescriptions,
+    ingredients,
+    resolvedItems,
+    tooltip: tooltip.trim()
   };
+}
+
+function isPresetCurrentlyActive(preset, pIdx) {
+  if (!colorMixStudioState || !Array.isArray(colorMixStudioState.components)) return false;
+  if (colorMixStudioState.selectedPresetIndex === pIdx) {
+    if (doesComponentsMatchPreset(preset, colorMixStudioState.components)) {
+      return true;
+    }
+    colorMixStudioState.selectedPresetIndex = -1;
+    return false;
+  }
+  if (Number(colorMixStudioState.selectedPresetIndex) >= 0) {
+    return false;
+  }
+  return doesComponentsMatchPreset(preset, colorMixStudioState.components);
 }
 
 function renderColorMixPresetChipsHtml() {
   const totalLiters = (colorMixStudioState && colorMixStudioState.totalLiters) || 1;
+  const presets = COLOR_RECIPE_PRESETS;
   return `
     <span class="muted small" style="font-size:11px; font-weight:600; margin-right:2px;">💡 Presets:</span>
-    ${COLOR_RECIPE_PRESETS.map((preset, pIdx) => {
+    ${presets.map((preset, pIdx) => {
       const check = evaluateRecipePresetAvailability(preset, totalLiters);
-      const isLacking = !check.available;
-      const tooltip = isLacking
-        ? `${preset.desc} — ⚠️ Lacking ingredients: ${check.lackingReasons.join('; ')}`
-        : preset.desc;
+      const isAvailable = check.available;
+      const isActive = isAvailable && isPresetCurrentlyActive(preset, pIdx);
+      if (!isAvailable && colorMixStudioState && colorMixStudioState.selectedPresetIndex === pIdx) {
+        colorMixStudioState.selectedPresetIndex = -1;
+      }
       return `
-        <button class="cm-preset-chip ${isLacking ? 'lacking' : ''}" type="button" onclick="applyRecipePreset(${pIdx})" title="${escapeHtml(tooltip)}">
-          <span class="cm-color-dot" style="background-color:${preset.hex};"></span>
+        <button class="cm-preset-chip ${isAvailable ? ('available' + (isActive ? ' active' : '')) : 'lacking unavailable'}" 
+                type="button" 
+                ${!isAvailable ? 'aria-disabled="true" data-preset-disabled="true"' : ''}
+                onclick="handleRecipePresetClick(${pIdx})" 
+                title="${escapeHtml(check.tooltip)}">
+          <span class="cm-color-dot" style="background-color:${preset.hex}; ${!isAvailable ? 'filter:grayscale(0.6); opacity:0.6;' : ''}"></span>
           <span>${escapeHtml(preset.name)}</span>
+          ${!isAvailable ? `<span class="cm-preset-tag-insufficient">Unavailable</span>` : ''}
         </button>
       `;
     }).join('')}
   `;
 }
 
-function applyRecipePreset(presetIndex) {
+let currentShortagePresetIndex = -1;
+
+function handleRecipePresetClick(presetIndex) {
   const p = COLOR_RECIPE_PRESETS[presetIndex];
   if (!p) return;
   const totalLiters = (colorMixStudioState && colorMixStudioState.totalLiters) || 1;
   const check = evaluateRecipePresetAvailability(p, totalLiters);
+
   if (!check.available) {
-    showToast(`Cannot load "${p.name}": Lacking ingredients (${check.lackingReasons.join(', ')}).`, 'error');
+    // PREVENT SELECTION!
+    currentShortagePresetIndex = presetIndex;
+    showPresetShortageAlert(p, check, totalLiters);
+    return;
+  }
+
+  // Available -> Dismiss any active shortage alert & apply recipe
+  currentShortagePresetIndex = -1;
+  dismissPresetShortageAlert();
+  applyRecipePreset(presetIndex, check);
+}
+
+function showPresetShortageAlert(preset, check, totalLiters) {
+  const container = document.getElementById('cm-preset-shortage-alert');
+  const vol = formatStock(totalLiters);
+  if (!container) {
+    showToast(`"${preset.name}" is unavailable: ${check.shortageDescriptions[0]}`, 'error');
+    return;
+  }
+
+  container.style.display = 'block';
+  container.innerHTML = `
+    <div class="cm-preset-shortage-box">
+      <div class="row" style="justify-content:space-between; align-items:flex-start; gap:8px;">
+        <div>
+          <div style="font-weight:700; font-size:13px; color:#B91C1C; display:flex; align-items:center; gap:6px;">
+            <span style="font-size:15px;">⚠️</span>
+            <span>Preset: <b>${escapeHtml(preset.name)}</b> — Insufficient Stock</span>
+          </div>
+          <div class="muted small" style="margin-top:2px; font-size:11.5px;">
+            Mixing Volume: <b>${vol} L</b>. Checked usable inventory across opened leftovers &amp; sealed stock:
+          </div>
+        </div>
+        <button type="button" class="btn ghost small" onclick="dismissPresetShortageAlert()" style="font-size:12px; padding:2px 7px; color:#6B7280;" title="Dismiss shortage alert">✕</button>
+      </div>
+
+      <div style="margin-top:9px; background:#FFFFFF; border-radius:6px; padding:8px 12px; border:1px solid #FECACA;">
+        <div style="font-size:11.5px; font-weight:700; margin-bottom:5px; color:#374151;">Required Ingredients:</div>
+        <div style="display:flex; flex-direction:column; gap:4px;">
+          ${check.ingredients.map(ing => `
+            <div class="row" style="justify-content:space-between; align-items:center; font-size:11.5px;">
+              <span>• <b>${escapeHtml(ing.displayName)}</b>: ${formatStock(ing.reqLiters)} L</span>
+              <div class="row" style="gap:6px; align-items:center;">
+                <span class="muted small" style="font-size:10.5px;">(${formatStock(ing.usableStock)} L available · ${formatStock(ing.sealedStock)}L sealed + ${formatStock(ing.openedStock)}L opened)</span>
+                <span class="badge ${ing.isAvailable ? 'ok' : 'low'}" style="font-size:10px; padding:1px 6px;">
+                  ${ing.isAvailable ? '✓ Available' : '⚠️ Insufficient'}
+                </span>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <div style="margin-top:9px; background:#FEF2F2; border-left:3px solid #EF4444; padding:6px 10px; border-radius:0 4px 4px 0;">
+        <div style="font-size:11.5px; font-weight:700; color:#991B1B;">Shortage:</div>
+        <div style="margin-top:2px; font-size:11.5px; color:#B91C1C;">
+          ${check.shortageDescriptions.map(d => `<div>${escapeHtml(d)}</div>`).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+
+  showToast(`Preset "${preset.name}" is unavailable: ${check.shortageDescriptions[0]}`, 'error');
+}
+
+function dismissPresetShortageAlert() {
+  currentShortagePresetIndex = -1;
+  const container = document.getElementById('cm-preset-shortage-alert');
+  if (container) {
+    container.style.display = 'none';
+    container.innerHTML = '';
+  }
+}
+
+function updateActivePresetShortageAlert() {
+  if (currentShortagePresetIndex < 0) return;
+  const p = COLOR_RECIPE_PRESETS[currentShortagePresetIndex];
+  if (!p) {
+    dismissPresetShortageAlert();
+    return;
+  }
+  const totalLiters = (colorMixStudioState && colorMixStudioState.totalLiters) || 1;
+  const check = evaluateRecipePresetAvailability(p, totalLiters);
+  if (check.available) {
+    dismissPresetShortageAlert();
+    showToast(`Preset "${p.name}" is now available at ${formatStock(totalLiters)} L!`, 'ok');
+  } else {
+    showPresetShortageAlert(p, check, totalLiters);
+  }
+}
+
+function refreshColorMixPresetAvailabilityUI() {
+  const presetWrap = document.getElementById('cm-preset-chips-wrap');
+  if (presetWrap && typeof renderColorMixPresetChipsHtml === 'function') {
+    presetWrap.innerHTML = renderColorMixPresetChipsHtml();
+  }
+  updateActivePresetShortageAlert();
+}
+window.refreshColorMixPresetAvailabilityUI = refreshColorMixPresetAvailabilityUI;
+
+function applyRecipePreset(presetIndex, preCheck = null) {
+  const p = COLOR_RECIPE_PRESETS[presetIndex];
+  if (!p) return;
+  const totalLiters = (colorMixStudioState && colorMixStudioState.totalLiters) || 1;
+  const check = preCheck || evaluateRecipePresetAvailability(p, totalLiters);
+  if (!check.available) {
+    showPresetShortageAlert(p, check, totalLiters);
     return;
   }
 
@@ -615,6 +1050,8 @@ function applyRecipePreset(presetIndex) {
     productId: product.id,
     name: product.name,
     brand: product.brand,
+    colorName: getProductColorName(product),
+    color: getProductColorName(product),
     stock: product.stock,
     price: product.price,
     hex: getProductDefaultColor(product),
@@ -623,17 +1060,23 @@ function applyRecipePreset(presetIndex) {
   }));
 
   colorMixStudioState.components = newComponents;
-  if (p.baseType) {
+  colorMixStudioState.selectedPresetIndex = presetIndex;
+  const invTypes = getInventoryBasePaintTypes();
+  const firstProdType = (check.resolvedItems[0] && check.resolvedItems[0].product && check.resolvedItems[0].product.type)
+    ? String(check.resolvedItems[0].product.type).trim()
+    : '';
+  if (p.baseType && invTypes.includes(p.baseType)) {
     colorMixStudioState.baseType = p.baseType;
+  } else if (firstProdType && invTypes.includes(firstProdType)) {
+    colorMixStudioState.baseType = firstProdType;
+  } else if (invTypes.length > 0 && !invTypes.includes(colorMixStudioState.baseType)) {
+    colorMixStudioState.baseType = invTypes[0];
   }
-  if (p.isCustom) {
-    colorMixStudioState.colorName = p.name;
-    colorMixStudioState.userCustomizedName = true;
-    updateColorMixCalculation(false);
-  } else {
-    colorMixStudioState.userCustomizedName = false;
-    updateColorMixCalculation(true);
-  }
+  // Set formula color name cleanly from the preset (stripping emoji e.g. "🌸 Pastel Rose" -> "Pastel Rose")
+  const cleanPresetName = cleanPresetColorName(p.name);
+  colorMixStudioState.colorName = cleanPresetName;
+  colorMixStudioState.userCustomizedName = false;
+  updateColorMixCalculation(true);
   renderColorMixStudio();
   showToast(`Loaded recipe preset: ${p.name}!`, 'ok');
 }
@@ -671,17 +1114,78 @@ function copyHexToClipboard(hex) {
   }
 }
 
+const COLOR_MIX_SHEEN_OPTIONS = ['High Gloss', 'Semi-Gloss', 'Satin', 'Matte', 'Metallic'];
+
+function stripSheenTagsFromNote(noteStr) {
+  let cleaned = String(noteStr || '');
+  // Match longest sheen names first so 'High Gloss' and 'Semi-Gloss' are removed before 'Gloss'
+  const sheenPatterns = ['High Gloss', 'Semi-Gloss', 'Satin', 'Matte', 'Metallic', 'Textured', 'Gloss'];
+  sheenPatterns.forEach(s => {
+    const escaped = s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    cleaned = cleaned.replace(new RegExp(`\\b${escaped}\\s+Finish\\b`, 'gi'), '');
+    cleaned = cleaned.replace(new RegExp(`\\b${escaped}\\b`, 'gi'), '');
+  });
+  cleaned = cleaned
+    .split(/\s*[·,]\s*/)
+    .map(part => part.replace(/^(High|Semi-)$/i, '').trim())
+    .filter(Boolean)
+    .join(' · ');
+  return cleaned.trim();
+}
+
+function getActiveColorMixSheen(state = colorMixStudioState) {
+  if (!state) return '';
+  if (state.selectedSheen && COLOR_MIX_SHEEN_OPTIONS.includes(state.selectedSheen)) {
+    return state.selectedSheen;
+  }
+  const note = String(state.note || '');
+  if (!note) return '';
+  for (const sheen of COLOR_MIX_SHEEN_OPTIONS) {
+    const escaped = sheen.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`\\b${escaped}(\\s+Finish)?\\b`, 'i').test(note)) {
+      return sheen;
+    }
+  }
+  return '';
+}
+
+function syncColorMixSheenButtonsUI() {
+  const activeSheen = getActiveColorMixSheen(colorMixStudioState);
+  document.querySelectorAll('.cm-sheen-btn').forEach(btn => {
+    const btnSheen = btn.getAttribute('data-sheen') || '';
+    if (btnSheen === activeSheen && activeSheen !== '') {
+      btn.classList.add('active');
+      btn.setAttribute('aria-pressed', 'true');
+    } else {
+      btn.classList.remove('active');
+      btn.setAttribute('aria-pressed', 'false');
+    }
+  });
+}
+
+function onColorMixNoteInput(val) {
+  colorMixStudioState.note = val;
+  let matchedSheen = '';
+  for (const sheen of COLOR_MIX_SHEEN_OPTIONS) {
+    const escaped = sheen.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`\\b${escaped}(\\s+Finish)?\\b`, 'i').test(val || '')) {
+      matchedSheen = sheen;
+      break;
+    }
+  }
+  colorMixStudioState.selectedSheen = matchedSheen;
+  syncColorMixSheenButtonsUI();
+}
+
 function applyFinishPreset(sheen) {
   const input = document.getElementById('cm-note');
-  let current = colorMixStudioState.note || '';
-  const sheens = ['Gloss', 'Semi-Gloss', 'Satin', 'Matte', 'Metallic', 'Textured'];
-  sheens.forEach(s => {
-    current = current.replace(new RegExp(s + ' Finish', 'gi'), '').replace(new RegExp(s, 'gi'), '').trim();
-  });
-  current = current.replace(/^[·\s,]+|[·\s,]+$/g, '');
-  colorMixStudioState.note = (current ? current + ' · ' : '') + `${sheen} Finish`;
+  const rawNote = input ? input.value : (colorMixStudioState.note || '');
+  const baseNote = stripSheenTagsFromNote(rawNote);
+
+  colorMixStudioState.selectedSheen = sheen;
+  colorMixStudioState.note = (baseNote ? baseNote + ' · ' : '') + `${sheen} Finish`;
   if (input) input.value = colorMixStudioState.note;
-  renderColorMixStudio();
+  syncColorMixSheenButtonsUI();
   showToast(`Applied finish sheen: ${sheen}`, 'ok');
 }
 
@@ -689,11 +1193,14 @@ function colorMixStudioHtml() {
   const s = colorMixStudioState;
   const prods = colorMixAvailableProducts();
 
-  // Ensure current components do not point to products at or below threshold
+  // Ensure current components do not point to products at or below threshold, without creating duplicates
+  const usedFallbackIds = new Set(s.components.map(comp => String(comp.productId)).filter(Boolean));
   s.components.forEach((c, idx) => {
     if (c.productId && !prods.some(p => p.id === c.productId)) {
-      const fallback = prods[idx % (prods.length || 1)] || null;
+      usedFallbackIds.delete(String(c.productId));
+      const fallback = prods.find(p => !usedFallbackIds.has(String(p.id))) || null;
       if (fallback) {
+        usedFallbackIds.add(String(fallback.id));
         c.productId = fallback.id;
         c.name = fallback.name;
         c.brand = fallback.brand;
@@ -715,22 +1222,16 @@ function colorMixStudioHtml() {
   const isPctBalanced = Math.abs(totalPct - 100) < 0.05;
   const activeIngCount = s.components.filter(c => c.productId && Number(c.pct) > 0).length;
   const hasMinTwoIngredients = activeIngCount >= 2;
-  const isReadyToDispense = isPctBalanced && hasMinTwoIngredients;
+  const compProductIds = s.components.map(c => c.productId).filter(Boolean);
+  const hasDuplicateProducts = new Set(compProductIds).size < compProductIds.length;
+  const duplicateSlots = getColorMixDuplicateSlots();
+  const isReadyToDispense = isPctBalanced && hasMinTwoIngredients && !hasDuplicateProducts;
   const grandTotal = (s.totalLiters || 1) * (s.pricePerLiter || 0);
 
   return `
   <!-- Single Clean Top Toolbar: Quick Presets + Balance Status -->
   <div class="cm-inspirations-bar" style="margin-bottom:12px; padding:10px 14px;">
-    <div class="row wrap" style="justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px;">
-      <div class="row wrap" style="gap:6px; align-items:center;">
-        <div class="row wrap" style="gap:4px; align-items:center;">
-          <span class="muted small" style="font-size:11px;">Type:</span>
-          ${['all', 'Latex', 'Acrylic', 'Enamel', 'Quick Dry'].map(tf => `
-            <button type="button" class="cm-preset-btn ${(s.typeFilter || 'all') === tf ? 'active' : ''}" style="font-size:10px; padding:2px 7px;" onclick="setColorMixTypeFilter('${tf}')">${tf === 'all' ? 'All' : tf}</button>
-          `).join('')}
-        </div>
-      </div>
-
+    <div class="row wrap" style="justify-content:flex-end; align-items:center; gap:8px; margin-bottom:8px;">
       <div class="row" style="gap:6px; align-items:center;">
         <span id="cm-balance-badge" class="badge ${isPctBalanced ? 'ok' : 'low'}" style="font-size:11px; padding:4px 10px;">
           ${isPctBalanced ? '✓ 100% Balanced' : `⚠️ ${totalPctRounded}% (${totalPctRounded > 100 ? (Math.round((totalPctRounded - 100) * 10) / 10) + '% Over' : (Math.round((100 - totalPctRounded) * 10) / 10) + '% Needed'})`}
@@ -746,6 +1247,7 @@ function colorMixStudioHtml() {
     <div id="cm-preset-chips-wrap" class="row wrap" style="gap:5px; align-items:center;">
       ${renderColorMixPresetChipsHtml()}
     </div>
+    <div id="cm-preset-shortage-alert" style="display:none; margin-top:8px;"></div>
   </div>
 
   <div class="cm-studio-layout">
@@ -777,8 +1279,9 @@ function colorMixStudioHtml() {
     const hasStock = prodObj ? productMixAvailableStock(prodObj) >= reqLiters : c.stock >= reqLiters;
     const fillPct = Math.max(0, Math.min(100, c.pct));
     const isPickerOpen = s.openPickerIdx === idx;
+    const isDup = duplicateSlots.has(idx + 1);
     return `
-        <div class="cm-ingredient-item" id="cm-ing-item-${idx}" style="padding:10px 12px; margin-bottom:9px;">
+        <div class="cm-ingredient-item" id="cm-ing-item-${idx}" style="padding:10px 12px; margin-bottom:9px; ${isDup ? 'border:1.5px solid #FCA5A5; background:#FFFBFB;' : ''}">
           <div class="cm-ing-grid">
             <!-- Product Color Swatch (Clickable to open Sliding Color Card Drawer) -->
             <div class="cm-swatch-display" id="cm-swatch-box-${idx}" onclick="openColorMixPigmentDrawer(${idx})" style="background-color:${c.hex || '#FFFFFF'}; cursor:pointer;" title="Click to change paint (${escapeHtml(c.name || 'Component')} · ${c.hex || '#FFFFFF'})">
@@ -793,6 +1296,7 @@ function colorMixStudioHtml() {
                     <span class="badge" style="background:var(--teal-dark); color:#fff; font-size:9.5px; padding:1px 5px;">#${idx + 1}</span>
                     <strong style="font-size:13px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(prodObj ? prodObj.name : (c.name || 'Select Paint Product'))}</strong>
                     <span class="badge" style="background:#EFECE6; color:var(--ink-soft); font-size:10px; padding:1px 6px;">${escapeHtml(prodObj && prodObj.type ? prodObj.type : 'Paint')}</span>
+                    ${isDup ? `<span class="badge already-selected-badge" style="font-size:9.5px; padding:1px 6px;">⚠️ Duplicate Selection</span>` : ''}
                   </div>
                   <div class="muted" style="font-size:11px; margin-top:2px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
                     <span>${escapeHtml(prodObj ? prodObj.brand : (c.brand || 'No Brand'))} · ${peso(c.price)}/L</span>
@@ -960,7 +1464,7 @@ function colorMixStudioHtml() {
         </div>
         <div class="row" style="margin-top:6px; gap:8px; align-items:center;">
           <span class="muted small" style="font-size:11.5px;">Custom Volume:</span>
-          <input id="cm-liters" type="number" min="0.1" step="0.5" style="width:80px; padding:4px 6px; font-weight:700;" value="${s.totalLiters}" onchange="onColorMixTotalLitersChange(this.value)" oninput="onColorMixTotalLitersChange(this.value)" required>
+          <input id="cm-liters" type="number" min="0.5" step="0.5" style="width:80px; padding:4px 6px; font-weight:700;" value="${s.totalLiters}" onchange="onColorMixTotalLitersChange(this.value, true)" onblur="onColorMixTotalLitersChange(this.value, true)" oninput="onColorMixTotalLitersChange(this.value, false)" onkeydown="if(event.key === '-' || event.key === 'e' || event.key === 'E') event.preventDefault();" required>
           <span class="muted small">Liters</span>
         </div>
       </div>
@@ -974,33 +1478,34 @@ function colorMixStudioHtml() {
       <div class="field">
         <label for="cm-base-type" style="font-size:12px; font-weight:700;">Base Paint Type</label>
         <select id="cm-base-type" onchange="colorMixStudioState.baseType=this.value;">
-          ${Array.from(new Set([
-            'Automotive Paint',
-            'House Paint',
-            'Specialty Paint',
-            'Latex',
-            'Acrylic',
-            'Enamel',
-            'Quick Dry',
-            'Polyurethane',
-            'Epoxy',
-            'Primer',
-            ...((typeof db !== 'undefined' && db && Array.isArray(db.products)) ? db.products.map(p => p.type).filter(t => t && t !== '-' && t.toLowerCase() !== 'accessory') : []),
-            ...(s.baseType ? [s.baseType] : [])
-          ])).map(bt => `<option value="${escapeHtml(bt)}" ${s.baseType === bt ? 'selected' : ''}>${escapeHtml(bt)}</option>`).join('')}
+          ${(() => {
+            const invTypes = getInventoryBasePaintTypes();
+            if (invTypes.length > 0 && !invTypes.includes(s.baseType)) {
+              s.baseType = invTypes[0];
+            }
+            return invTypes.map(bt => `<option value="${escapeHtml(bt)}" ${s.baseType === bt ? 'selected' : ''}>${escapeHtml(bt)}</option>`).join('');
+          })()}
         </select>
       </div>
 
       <div class="field full">
         <label style="font-size:12px; font-weight:700;">Desired Finish / Sheen Tag:</label>
-        <div class="row wrap" style="gap:4px; margin-bottom:4px;">
-          <button class="cm-preset-btn ${(s.note || '').includes('High Gloss') ? 'active' : ''}" type="button" onclick="applyFinishPreset('High Gloss')">✨ High Gloss</button>
-          <button class="cm-preset-btn ${(s.note || '').includes('Semi-Gloss') ? 'active' : ''}" type="button" onclick="applyFinishPreset('Semi-Gloss')">🌟 Semi-Gloss</button>
-          <button class="cm-preset-btn ${(s.note || '').includes('Satin') ? 'active' : ''}" type="button" onclick="applyFinishPreset('Satin')">🎨 Satin</button>
-          <button class="cm-preset-btn ${(s.note || '').includes('Matte') ? 'active' : ''}" type="button" onclick="applyFinishPreset('Matte')">🛡️ Matte</button>
-          <button class="cm-preset-btn ${(s.note || '').includes('Metallic') ? 'active' : ''}" type="button" onclick="applyFinishPreset('Metallic')">💎 Metallic</button>
+        <div class="row wrap" id="cm-sheen-btn-group" role="radiogroup" aria-label="Desired Finish / Sheen Tag" style="gap:4px; margin-bottom:4px;">
+          ${(() => {
+            const activeSheen = getActiveColorMixSheen(s);
+            const sheenButtons = [
+              { key: 'High Gloss', label: '✨ High Gloss' },
+              { key: 'Semi-Gloss', label: '🌟 Semi-Gloss' },
+              { key: 'Satin', label: '🎨 Satin' },
+              { key: 'Matte', label: '🛡️ Matte' },
+              { key: 'Metallic', label: '💎 Metallic' }
+            ];
+            return sheenButtons.map(b => `
+              <button class="cm-preset-btn cm-sheen-btn ${activeSheen === b.key ? 'active' : ''}" data-sheen="${b.key}" aria-pressed="${activeSheen === b.key ? 'true' : 'false'}" type="button" onclick="applyFinishPreset('${b.key}')">${b.label}</button>
+            `).join('');
+          })()}
         </div>
-        <input id="cm-note" type="text" value="${escapeHtml(s.note)}" oninput="colorMixStudioState.note=this.value;" placeholder="e.g. Matched to customer bumper, High Gloss finish">
+        <input id="cm-note" type="text" value="${escapeHtml(s.note)}" oninput="onColorMixNoteInput(this.value)" placeholder="e.g. Matched to customer bumper, High Gloss finish">
       </div>
     </div>
 
@@ -1010,12 +1515,12 @@ function colorMixStudioHtml() {
         <div id="cm-grand-volume-label" class="muted small" style="font-size:11.5px; font-weight:600;">Estimated Total (${s.totalLiters} Liter${s.totalLiters === 1 ? '' : 's'})</div>
         <div id="cm-grand-total" style="font-family:'Space Grotesk',sans-serif; font-size:22px; font-weight:700; color:var(--teal); letter-spacing:-0.02em;">${peso(grandTotal)}</div>
       </div>
-      <span id="cm-ready-badge" class="badge ${isReadyToDispense ? 'ok' : 'mid'}" style="font-size:11.5px; padding:5px 12px; font-weight:700;">${!hasMinTwoIngredients ? '⚠️ Need At Least 2 Ingredients' : (isPctBalanced ? '✓ Ready to Dispense' : '⚠️ Adjust to 100%')}</span>
+      <span id="cm-ready-badge" class="badge ${isReadyToDispense ? 'ok' : (hasDuplicateProducts ? 'low' : 'mid')}" style="font-size:11.5px; padding:5px 12px; font-weight:700;">${hasDuplicateProducts ? '⚠️ Duplicate Products Selected' : (!hasMinTwoIngredients ? '⚠️ Need At Least 2 Ingredients' : (isPctBalanced ? '✓ Ready to Dispense' : '⚠️ Adjust to 100%'))}</span>
     </div>
   </div>
 </div>
   </div>
-  ${renderColorMixOffcanvasDrawerHtml(prods)}`;
+  ${renderColorMixOffcanvasDrawerHtml(colorMixModalProducts())}`;
 }
 
 // -----------------------------------------------------------------------------------
@@ -1033,7 +1538,9 @@ function syncColorMixVisuals(activeIdx = -1) {
   const isPctBalanced = Math.abs(totalPct - 100) < 0.05;
   const activeIngCount = s.components.filter(c => c.productId && Number(c.pct) > 0).length;
   const hasMinTwoIngredients = activeIngCount >= 2;
-  const isReadyToDispense = isPctBalanced && hasMinTwoIngredients;
+  const compProductIds = s.components.map(c => c.productId).filter(Boolean);
+  const hasDuplicateProducts = new Set(compProductIds).size < compProductIds.length;
+  const isReadyToDispense = isPctBalanced && hasMinTwoIngredients && !hasDuplicateProducts;
   const grandTotal = (s.totalLiters || 1) * (s.pricePerLiter || 0);
 
   // 1. Swatch Hero & active agitation animation
@@ -1078,8 +1585,10 @@ function syncColorMixVisuals(activeIdx = -1) {
   if (grandTotalEl) grandTotalEl.textContent = peso(grandTotal);
   const readyBadge = document.getElementById('cm-ready-badge');
   if (readyBadge) {
-    readyBadge.className = `badge ${isReadyToDispense ? 'ok' : 'mid'}`;
-    readyBadge.textContent = !hasMinTwoIngredients ? '⚠️ Need At Least 2 Ingredients' : (isPctBalanced ? '✓ Ready to Dispense' : '⚠️ Adjust to 100%');
+    readyBadge.className = `badge ${isReadyToDispense ? 'ok' : (hasDuplicateProducts ? 'low' : 'mid')}`;
+    readyBadge.textContent = hasDuplicateProducts
+      ? '⚠️ Duplicate Products Selected'
+      : (!hasMinTwoIngredients ? '⚠️ Need At Least 2 Ingredients' : (isPctBalanced ? '✓ Ready to Dispense' : '⚠️ Adjust to 100%'));
   }
   const submitBtn = document.getElementById('cm-submit-btn');
   if (submitBtn) {
@@ -1186,9 +1695,13 @@ function syncColorMixVisuals(activeIdx = -1) {
   });
 
   // 8. Refresh preset chips dehighlight status when volume or filter changes
-  const presetWrap = document.getElementById('cm-preset-chips-wrap');
-  if (presetWrap && typeof renderColorMixPresetChipsHtml === 'function') {
-    presetWrap.innerHTML = renderColorMixPresetChipsHtml();
+  if (typeof refreshColorMixPresetAvailabilityUI === 'function') {
+    refreshColorMixPresetAvailabilityUI();
+  } else {
+    const presetWrap = document.getElementById('cm-preset-chips-wrap');
+    if (presetWrap && typeof renderColorMixPresetChipsHtml === 'function') {
+      presetWrap.innerHTML = renderColorMixPresetChipsHtml();
+    }
   }
 }
 
@@ -1286,7 +1799,8 @@ function formatColorMixSourcePreview(mixPlan) {
    CLICKABLE COLOR CARDS OFF-CANVAS DRAWER
    ============================================================ */
 
-function renderSmartAvatarSearchDropdownHtml(idx, prods, selectedProductId, searchQuery = '') {
+function renderSmartAvatarSearchDropdownHtml(idx, prods, selectedProductId, searchQuery = '', alreadySelectedSlotMap = null) {
+  const slotMap = alreadySelectedSlotMap || getColorMixSelectedProductSlotMap();
   const q = (searchQuery || '').trim().toLowerCase();
   const sorted = [...prods].sort((a, b) => {
     const aOpen = productOpenedStock(a) > 0 ? 1 : 0;
@@ -1309,11 +1823,19 @@ function renderSmartAvatarSearchDropdownHtml(idx, prods, selectedProductId, sear
 
   return filtered.map(p => {
     const hex = getProductDefaultColor(p);
-    const isSel = p.id === selectedProductId;
+    const isSel = String(p.id) === String(selectedProductId);
+    const slotNum = slotMap.get(String(p.id));
+    const isAlreadySelected = !!slotNum && (idx === 'add' || Number(slotNum) !== Number(idx) + 1);
     const openLiters = productOpenedStock(p);
     const openCanSz = productOpenedCanSize(p);
+
+    const mousedownAttr = isAlreadySelected
+      ? ''
+      : `onmousedown="onColorMixProductSelect(${typeof idx === 'string' ? `'${idx}'` : idx}, '${p.id}')"`;
+    const disabledAttr = isAlreadySelected ? 'disabled' : '';
+
     return `
-      <button type="button" class="cm-avatar-item ${isSel ? 'active' : ''}" onmousedown="onColorMixProductSelect(${typeof idx === 'string' ? `'${idx}'` : idx}, '${p.id}')">
+      <button type="button" class="cm-avatar-item ${isSel ? 'active' : ''} ${isAlreadySelected ? 'already-selected disabled' : ''}" ${disabledAttr} ${mousedownAttr} title="${isAlreadySelected ? `Already selected in Ingredient #${slotNum}` : ''}">
         <span class="cm-avatar-circle" style="background-color:${hex};"></span>
         <div style="min-width:0; flex:1;">
           <div class="row" style="gap:6px; align-items:center;">
@@ -1325,10 +1847,14 @@ function renderSmartAvatarSearchDropdownHtml(idx, prods, selectedProductId, sear
           </div>
         </div>
         <div class="row" style="gap:5px; align-items:center; flex-shrink:0;">
-          ${openLiters > 0
+          ${isAlreadySelected ? `
+            <span class="badge already-selected-badge" style="font-size:9.5px; padding:1px 6px;">🚫 Already Selected${slotNum ? ` (#${slotNum})` : ''}</span>
+          ` : `
+            ${openLiters > 0
         ? `<span class="badge" style="background:#FDF4E3; color:#9A6216; border:1px solid #F0D9B5; font-size:9.5px; padding:1px 6px;">🫙 ${productOpenedSizesLabel(p, false)}</span>`
         : `<span class="badge ok" style="font-size:9.5px; padding:1px 6px;">🥫 ${formatStock(p.stock)}L</span>`}
-          ${isSel ? `<span class="badge ok" style="font-size:9.5px; padding:1px 5px;">✓</span>` : ''}
+            ${isSel ? `<span class="badge ok" style="font-size:9.5px; padding:1px 5px;">✓</span>` : ''}
+          `}
         </div>
       </button>
     `;
@@ -1343,7 +1869,8 @@ function onColorMixInlineAvatarSearch(idx, val) {
   const dd = document.getElementById(`cm-avatar-dropdown-${idx}`);
   if (dd) {
     dd.style.display = 'block';
-    dd.innerHTML = renderSmartAvatarSearchDropdownHtml(idx, prods, comp ? comp.productId : '', colorMixStudioState.inlineSearchQuery);
+    const slotMap = getColorMixSelectedProductSlotMap();
+    dd.innerHTML = renderSmartAvatarSearchDropdownHtml(idx, prods, comp ? comp.productId : '', colorMixStudioState.inlineSearchQuery, slotMap);
   }
 }
 
@@ -1356,133 +1883,345 @@ function closeColorMixInlineSearch(idx) {
   if (dd) dd.style.display = 'none';
 }
 
-function renderColorMixCardHtml(idx, p, selectedProductId) {
-  const hex = getProductDefaultColor(p);
-  const isSel = p.id === selectedProductId;
-  const openLiters = productOpenedStock(p);
-  const openCanSz = productOpenedCanSize(p);
-  const usedLiters = productUsedFromOpenedCan(p);
-  const hasBd = productHasCanBreakdown(p);
-  const canSummary = hasBd
-    ? productSizes(p).filter(sz => productCanCount(p, sz) > 0).map(sz => `${productCanCount(p, sz)}×${fmtSize(sz)}`).join(' · ')
-    : `${formatStock(p.stock)}L sealed`;
-  const light = isLightColor(hex);
+function matchesColorMixSearch(p, q) {
+  if (!q) return true;
+  const hex = (getProductDefaultColor(p) || '').toLowerCase();
+  const hexClean = hex.replace('#', '');
+  const name = (p.name || '').toLowerCase();
+  const brand = (p.brand || '').toLowerCase();
+  const color = (p.color || '').toLowerCase();
+  const type = (p.type || '').toLowerCase();
+  const category = (p.category || '').toLowerCase();
+  const sku = (p.sku || p.id || '').toLowerCase();
+
+  return name.includes(q) ||
+    brand.includes(q) ||
+    color.includes(q) ||
+    type.includes(q) ||
+    category.includes(q) ||
+    sku.includes(q) ||
+    hex.includes(q) ||
+    hexClean.includes(q);
+}
+
+function getProductCategoryKey(p) {
+  const raw = (p.category || p.type || '').trim();
+  if (!raw || raw === '-') return 'Specialty Paint';
+  if (/house/i.test(raw)) return 'House Paint';
+  if (/auto/i.test(raw)) return 'Automotive Paint';
+  if (/special/i.test(raw)) return 'Specialty Paint';
+  return raw;
+}
+
+function getProductUsableOpenedContainers(p) {
+  if (!p) return [];
+  let entries = productOpenedEntries(p);
+  if (!entries.length && productOpenedStock(p) > 0) {
+    const size = productOpenedCanSize(p) || guessOpenedCanSize(productOpenedStock(p), p.openedCanSize, p) || 1;
+    entries = [{ size, left: productOpenedStock(p), used: productUsedFromOpenedCan(p, size) }];
+  }
+  return entries.filter(e => e && e.left > 0);
+}
+
+function renderColorMixOpenedContainersSectionHtml(idx, matchingProds, selectedProductId, selectedPrefCan = 0, alreadySelectedSlotMap = null) {
+  const slotMap = alreadySelectedSlotMap || getColorMixSelectedProductSlotMap();
+  const openedList = [];
+  matchingProds.forEach(p => {
+    const entries = getProductUsableOpenedContainers(p);
+    entries.forEach(entry => {
+      openedList.push({ product: p, entry });
+    });
+  });
+
+  if (!openedList.length) return '';
+
+  const isExpanded = colorMixStudioState.openedSectionExpanded !== false;
 
   return `
-    <button type="button" class="cm-color-card ${isSel ? 'selected' : ''}" onclick="onColorMixProductSelect(${typeof idx === 'string' ? `'${idx}'` : idx}, '${p.id}')">
-      <div class="cm-color-card-swatch" style="background-color:${hex};">
-        <code style="font-size:9.5px; font-weight:700; padding:1px 5px; border-radius:4px; background:${light ? 'rgba(0,0,0,0.14)' : 'rgba(255,255,255,0.22)'}; color:${light ? '#1C1917' : '#FFFFFF'};">${hex}</code>
-        ${isSel ? `<span class="badge ok" style="font-size:10px; padding:1px 6px; box-shadow:0 1px 4px rgba(0,0,0,0.15);">✓ Selected</span>` : ''}
+    <div class="cm-opened-section ${isExpanded ? 'open' : 'collapsed'}">
+      <button type="button" class="cm-opened-section-header" onclick="toggleColorMixOpenedSection()" title="${isExpanded ? 'Click to collapse opened containers' : 'Click to expand opened containers'}">
+        <div>
+          <div style="font-size:14px; font-weight:700; color:#92400E; display:flex; align-items:center; gap:6px;">
+            <span>🫙</span> Opened / Used Containers
+            <span class="badge" style="background:#FEF3C7; color:#92400E; border:1px solid #FDE68A; font-size:10px; padding:1px 6px;">
+              ${openedList.length} container${openedList.length === 1 ? '' : 's'}
+            </span>
+          </div>
+          <div style="font-size:11.5px; color:#A16207; margin-top:2px;">
+            Previously opened containers with remaining paint.
+          </div>
+        </div>
+        <div class="row" style="gap:8px; align-items:center;">
+          <span class="badge" style="background:#FEF3C7; color:#B45309; border:1px solid #FDE68A; font-size:10.5px; font-weight:700; padding:3px 9px;">
+            ⭐ Priority: Use Opened Containers First
+          </span>
+          <span style="font-size:13px; color:#B45309; font-weight:700;">${isExpanded ? '▴' : '▾'}</span>
+        </div>
+      </button>
+
+      ${isExpanded ? `
+      <div class="cm-opened-card-grid">
+        ${openedList.map(({ product: p, entry }) => {
+    const hex = getProductDefaultColor(p);
+    const isProdSel = String(p.id) === String(selectedProductId);
+    const isCanMatch = selectedPrefCan ? Number(selectedPrefCan) === Number(entry.size) : true;
+    const isSel = isProdSel && isCanMatch;
+    const slotNum = slotMap.get(String(p.id));
+    const isAlreadySelected = !!slotNum && (idx === 'add' || Number(slotNum) !== Number(idx) + 1);
+    const colorName = p.color && p.color !== '-' ? p.color : 'Standard';
+
+    const clickAttr = isAlreadySelected
+      ? ''
+      : `onclick="onColorMixProductSelect(${typeof idx === 'string' ? `'${idx}'` : idx}, '${p.id}', ${entry.size})"`;
+    const titleText = isAlreadySelected
+      ? `Already selected in Ingredient #${slotNum}`
+      : `Select opened ${entry.size}L container with ${formatStock(entry.left)}L remaining`;
+
+    return `
+            <div class="cm-opened-card ${isSel ? 'selected' : ''} ${isAlreadySelected ? 'already-selected disabled' : ''}" ${clickAttr} title="${titleText}">
+              <div class="cm-opened-card-top">
+                <span class="cm-opened-pill">🫙 Opened Container</span>
+                <span class="cm-opened-brand">${escapeHtml(p.brand || 'No Brand')}</span>
+              </div>
+              <div class="cm-opened-name">${escapeHtml(p.name)}</div>
+              <div class="cm-opened-color-row">
+                <span class="cm-opened-swatch" style="background-color:${hex};"></span>
+                <span style="font-weight:600;">Color: ${escapeHtml(colorName)}</span>
+                <code style="font-size:10px; color:var(--ink-soft);">${hex}</code>
+              </div>
+              <div class="cm-opened-metrics">
+                <div class="cm-opened-rem-row">
+                  <span class="cm-opened-rem-val">${formatStock(entry.left)} L</span>
+                  <span class="cm-opened-rem-lbl">remaining</span>
+                </div>
+                <div class="cm-opened-orig-row">
+                  <span style="font-weight:500;">Original container size:</span>
+                  <strong>${fmtSize(entry.size)} container</strong>
+                </div>
+              </div>
+              ${isSel ? `
+                <div style="margin-top:6px; text-align:right;">
+                  <span class="badge ok" style="font-size:10px; padding:2px 7px; font-weight:700;">✓ Selected</span>
+                </div>
+              ` : ''}
+              ${isAlreadySelected ? `
+                <div style="margin-top:6px; text-align:right;">
+                  <span class="badge already-selected-badge" style="font-size:10px; padding:2px 7px;">🚫 Already Selected${slotNum ? ` in #${slotNum}` : ''}</span>
+                </div>
+              ` : ''}
+            </div>
+          `;
+  }).join('')}
+      </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderProductStockSummaryHtml(p) {
+  const sizes = productSizes(p);
+  const hasBd = productHasCanBreakdown(p);
+
+  if (hasBd) {
+    const availableSizes = sizes
+      .map(sz => ({ size: sz, count: productCanCount(p, sz) }))
+      .filter(item => item.count > 0);
+
+    if (availableSizes.length > 0) {
+      return `
+        <div class="cm-card-stock-box">
+          <div class="cm-card-stock-title">Available Stock by Container Size</div>
+          ${availableSizes.map(item => `
+            <div class="cm-stock-item">
+              <span class="cm-stock-item-size">${fmtSize(item.size)}:</span>
+              <span class="cm-stock-item-count">${item.count} container${item.count === 1 ? '' : 's'}</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+  }
+
+  if (p.stock > 0) {
+    return `
+      <div class="cm-card-stock-box">
+        <div class="cm-card-stock-title">Available Stock</div>
+        <div class="cm-stock-item">
+          <span class="cm-stock-item-size">Sealed Stock:</span>
+          <span class="cm-stock-item-count">${formatStock(p.stock)} L available</span>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="cm-card-stock-box out-of-stock">
+      <div class="cm-card-stock-title">Available Stock</div>
+      <div class="cm-stock-item">
+        <span class="cm-stock-item-count">0 containers (Out of stock)</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderColorMixCardHtml(idx, p, selectedProductId, alreadySelectedSlotMap = null) {
+  const slotMap = alreadySelectedSlotMap || getColorMixSelectedProductSlotMap();
+  const hex = getProductDefaultColor(p);
+  const isSel = String(p.id) === String(selectedProductId);
+  const isOutOfStock = productMixAvailableStock(p) <= 0;
+  const slotNum = slotMap.get(String(p.id));
+  const isAlreadySelected = !!slotNum && (idx === 'add' || Number(slotNum) !== Number(idx) + 1);
+  const light = isLightColor(hex);
+  const colorName = p.color && p.color !== '-' ? p.color : 'Standard';
+  const openStock = productOpenedStock(p);
+  const usableOpened = getProductUsableOpenedContainers(p);
+
+  const disabledAttr = (isAlreadySelected || isOutOfStock) ? 'disabled' : '';
+  const clickAttr = (isAlreadySelected || isOutOfStock)
+    ? ''
+    : `onclick="onColorMixProductSelect(${typeof idx === 'string' ? `'${idx}'` : idx}, '${p.id}', 0)"`;
+  const titleText = isAlreadySelected
+    ? `Already selected in Ingredient #${slotNum}`
+    : (isOutOfStock ? 'Out of stock' : `Select ${escapeHtml(p.name)}`);
+
+  return `
+    <button type="button" class="cm-color-card ${isSel ? 'selected' : ''} ${isAlreadySelected ? 'already-selected disabled' : ''} ${isOutOfStock ? 'out-of-stock' : ''}" ${disabledAttr} ${clickAttr} title="${titleText}">
+      <div class="cm-color-card-swatch-bar" style="background-color:${hex};">
+        <code style="font-size:9.5px; font-weight:700; padding:1px 5px; border-radius:4px; background:${light ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.28)'}; color:${light ? '#1C1917' : '#FFFFFF'};">${hex}</code>
+        ${isSel ? `<span class="badge ok" style="font-size:10px; padding:1px 6px; box-shadow:0 1px 4px rgba(0,0,0,0.15); font-weight:700;">✓ Selected</span>` : ''}
+        ${isAlreadySelected ? `<span class="badge already-selected-badge" style="font-size:10px; padding:1px 6px; box-shadow:0 1px 4px rgba(0,0,0,0.1);">🚫 Already Selected${slotNum ? ` (#${slotNum})` : ''}</span>` : ''}
       </div>
       <div class="cm-color-card-body">
-        <div class="row" style="gap:6px; align-items:center;">
-          <span class="cm-avatar-circle" style="width:16px; height:16px; background-color:${hex};"></span>
-          <strong style="font-size:12.5px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(p.name)}</strong>
+        <div class="row" style="justify-content:space-between; align-items:center; gap:4px;">
+          <span style="font-size:11px; font-weight:600; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.02em;">${escapeHtml(p.brand || 'No Brand')}</span>
+          <strong style="color:var(--teal-dark); font-size:12px;">${peso(p.price)}/L</strong>
         </div>
-        <div class="muted" style="font-size:11px; display:flex; justify-content:space-between; align-items:center; gap:4px;">
-          <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(p.brand || 'Standard')}</span>
-          <strong style="color:var(--teal-dark); font-size:11px;">${peso(p.price)}/L</strong>
+        <div class="cm-color-card-name">${escapeHtml(p.name)}</div>
+        <div class="row" style="gap:6px; align-items:center; font-size:11.5px; color:var(--ink-soft);">
+          <span class="cm-opened-swatch" style="width:12px; height:12px; background-color:${hex};"></span>
+          <span>Color: <strong style="color:var(--ink);">${escapeHtml(colorName)}</strong></span>
         </div>
-        <div class="row wrap" style="gap:4px; margin-top:4px; align-items:center;">
-          ${openLiters > 0
-      ? `<span class="badge" style="background:#FDF4E3; color:#9A6216; border:1px solid #F0D9B5; font-size:9.5px; padding:2px 6px; width:100%; text-align:center;" title="Opened containers: ${productOpenedEntries(p).map(e => `${e.size}L container (${formatStock(e.used)}L used)`).join(', ')}">🫙 ${productOpenedSizesLabel(p)} left</span>`
-      : ''}
-          <span class="badge" style="background:#EEF6F5; color:#1F6F6B; border:1px solid #CDE4E1; font-size:9.5px; padding:2px 6px; width:100%; text-align:center;">
-            🥫 ${canSummary || `${formatStock(p.stock)}L in stock`}
-          </span>
-        </div>
+        ${isAlreadySelected ? `
+          <div class="cm-card-already-selected-banner">
+            <span>🚫</span> Already Selected in Ingredient #${slotNum}
+          </div>
+        ` : `
+          ${renderProductStockSummaryHtml(p)}
+          ${openStock > 0 ? `
+            <div class="cm-card-opened-hint">
+              🫙 ${formatStock(openStock)}L opened (${usableOpened.map(e => fmtSize(e.size)).join(', ')}) · See Opened section
+            </div>
+          ` : ''}
+        `}
       </div>
     </button>
   `;
 }
 
-function renderCategorizedAccordionMenusHtml(idx, prods, selectedProductId, searchQuery = '') {
+function renderCategorizedAccordionMenusHtml(idx, prods, selectedProductId, searchQuery = '', selectedPrefCan = 0) {
+  const slotMap = getColorMixSelectedProductSlotMap();
   const q = (searchQuery || '').trim().toLowerCase();
   const filtered = q
-    ? prods.filter(p => {
-      const hex = getProductDefaultColor(p);
-      const hay = `${p.name || ''} ${p.color || ''} ${p.brand || ''} ${p.type || ''} ${p.sku || ''} ${hex}`.toLowerCase();
-      return hay.includes(q);
-    })
+    ? prods.filter(p => matchesColorMixSearch(p, q))
     : prods;
 
   if (!filtered.length) {
-    return `<div class="muted small" style="text-align:center; padding:24px 12px; background:#fff; border-radius:10px; border:1px dashed var(--line);">No matching paints found above stock threshold.</div>`;
+    return `
+      <div class="cm-no-results">
+        <div style="font-size:24px; margin-bottom:6px;">🔍</div>
+        <strong style="font-size:14px; color:var(--ink);">No matching paint products found</strong>
+        <p class="muted" style="margin:4px 0 12px; font-size:12px;">No products match "${escapeHtml(q)}". Try searching by brand, color name (e.g., Red, White), category, or hex color code.</p>
+        <button type="button" class="btn secondary small" onclick="clearColorMixDrawerSearch()">Clear Search</button>
+      </div>
+    `;
   }
 
-  const groups = [];
-  const openedList = filtered.filter(p => productOpenedStock(p) > 0);
-  if (openedList.length) {
-    groups.push({
-      key: 'Opened / Used Stock',
-      icon: '🫙',
-      title: 'Opened / Used Containers (Prioritized)',
-      subtitle: 'Use leftover opened containers first before opening sealed stock',
-      items: openedList
-    });
-  }
+  // 1. Opened / Used Containers Section (Prioritized)
+  const openedSectionHtml = renderColorMixOpenedContainersSectionHtml(idx, filtered, selectedProductId, selectedPrefCan, slotMap);
+
+  // 2. Regular Categories: House Paint, Automotive Paint, Specialty Paint
+  const STANDARD_CATEGORIES = [
+    { key: 'House Paint', title: 'House Paint', icon: '🏠' },
+    { key: 'Automotive Paint', title: 'Automotive Paint', icon: '🚗' },
+    { key: 'Specialty Paint', title: 'Specialty Paint', icon: '✨' }
+  ];
 
   const categoryMap = new Map();
+  STANDARD_CATEGORIES.forEach(c => categoryMap.set(c.key, []));
+
   filtered.forEach(p => {
-    const cat = (p.type && p.type !== '-') ? p.type : 'General Paint';
-    if (!categoryMap.has(cat)) categoryMap.set(cat, []);
-    categoryMap.get(cat).push(p);
+    const catKey = getProductCategoryKey(p);
+    if (!categoryMap.has(catKey)) {
+      categoryMap.set(catKey, []);
+    }
+    categoryMap.get(catKey).push(p);
   });
 
-  const catIcons = {
-    'Latex': '🪣',
-    'Acrylic': '🎨',
-    'Enamel': '🛡️',
-    'Quick Dry': '⚡',
-    'Primer': '🧱',
-    'Epoxy': '💎'
-  };
-
-  categoryMap.forEach((items, cat) => {
-    groups.push({
-      key: cat,
-      icon: catIcons[cat] || '🥫',
-      title: `${cat} Paints`,
-      subtitle: `${items.length} paint product${items.length === 1 ? '' : 's'} available`,
+  const categoryGroups = [];
+  STANDARD_CATEGORIES.forEach(c => {
+    const items = categoryMap.get(c.key) || [];
+    categoryGroups.push({
+      key: c.key,
+      icon: c.icon,
+      title: c.title,
       items
     });
   });
 
+  // Any extra categories beyond the standard 3
+  categoryMap.forEach((items, key) => {
+    if (!STANDARD_CATEGORIES.some(c => c.key === key)) {
+      categoryGroups.push({
+        key,
+        icon: '🥫',
+        title: `${key} Paints`,
+        items
+      });
+    }
+  });
+
   const openState = colorMixStudioState.openCategories || {};
 
-  return groups.map((g, gIdx) => {
-    const isExpanded = q ? true : (openState[g.key] !== undefined ? openState[g.key] : gIdx < 2);
-    const previewDots = g.items.slice(0, 6).map(p => {
-      const hex = getProductDefaultColor(p);
-      return `<span class="cm-avatar-circle" style="width:14px; height:14px; background-color:${hex}; display:inline-block; margin-left:-3px;"></span>`;
-    }).join('');
-
+  const categoriesHtml = categoryGroups.map((g, gIdx) => {
+    const isExpanded = q ? true : (openState[g.key] !== undefined ? openState[g.key] : true);
     return `
       <div class="cm-accordion-group ${isExpanded ? 'open' : ''}">
         <button type="button" class="cm-accordion-header" onclick="toggleColorMixAccordionCategory('${escapeHtml(g.key)}')">
           <div class="row" style="gap:8px; align-items:center;">
             <span style="font-size:16px;">${g.icon}</span>
-            <div>
-              <div style="font-size:13px; font-weight:700; color:var(--ink);">${escapeHtml(g.title)}</div>
-              <div class="muted" style="font-size:10.5px;">${escapeHtml(g.subtitle)}</div>
-            </div>
+            <span style="font-size:13.5px; font-weight:700; color:var(--ink);">${escapeHtml(g.title)}</span>
           </div>
-          <div class="row" style="gap:10px; align-items:center;">
-            <div class="row" style="padding-left:4px;">${previewDots}</div>
-            <span class="badge" style="background:#EFECE6; color:var(--ink); font-size:10.5px; padding:2px 8px;">${g.items.length}</span>
+          <div class="row" style="gap:8px; align-items:center;">
+            <span class="badge" style="background:#EFECE6; color:var(--ink); font-size:11px; padding:2px 8px; font-weight:600;">
+              ${g.items.length} product${g.items.length === 1 ? '' : 's'} available
+            </span>
             <span style="font-size:12px; color:var(--teal-dark); font-weight:700;">${isExpanded ? '▴' : '▾'}</span>
           </div>
         </button>
         ${isExpanded ? `
           <div class="cm-accordion-body">
-            <div class="cm-color-card-grid">
-              ${g.items.map(p => renderColorMixCardHtml(idx, p, selectedProductId)).join('')}
-            </div>
+            ${g.items.length ? `
+              <div class="cm-color-card-grid">
+                ${g.items.map(p => renderColorMixCardHtml(idx, p, selectedProductId, slotMap)).join('')}
+              </div>
+            ` : `
+              <div class="muted small" style="padding:14px; text-align:center;">
+                No products available in this category${q ? ' matching search' : ''}.
+              </div>
+            `}
           </div>
         ` : ''}
       </div>
     `;
   }).join('');
+
+  return `
+    ${openedSectionHtml}
+    <div style="font-size:12px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.04em; margin: 4px 0 2px;">
+      Unopened Paint Inventory by Category
+    </div>
+    ${categoriesHtml}
+  `;
 }
 
 function renderColorMixOffcanvasDrawerHtml(prods) {
@@ -1493,25 +2232,27 @@ function renderColorMixOffcanvasDrawerHtml(prods) {
   const isAddMode = idx === 'add';
   const comp = !isAddMode && s.components[idx] ? s.components[idx] : null;
   const selectedProductId = comp ? comp.productId : '';
+  const selectedPrefCan = comp ? (Number(comp.preferredCanSize) || 0) : 0;
   const q = s.pickerSearch || '';
+  const modalProds = prods || colorMixModalProducts();
 
   return `
     <div class="cm-offcanvas-backdrop" onclick="if(event.target === this) closeColorMixPigmentDrawer()">
       <div class="cm-offcanvas-drawer" onclick="event.stopPropagation()">
         <div class="cm-offcanvas-header">
-          <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <div class="row" style="justify-content:space-between; align-items:flex-start; margin-bottom:10px; gap:10px;">
             <div>
-              <div style="font-size:15px; font-weight:700; color:var(--ink);">
+              <div style="font-size:16px; font-weight:700; color:var(--ink);">
                 ${isAddMode ? '🎨 Add New Pigment to Formula' : `🎨 Select Paint for Ingredient #${Number(idx) + 1}`}
               </div>
-              <div class="muted" style="font-size:11.5px;">
-                Browse categorized accordion menus or use smart search with color avatars
+              <div class="muted" style="font-size:12px; margin-top:2px;">
+                ${comp && comp.name ? `Currently selected: <strong style="color:var(--ink);">${escapeHtml(comp.name)}</strong> · ${escapeHtml(comp.brand || '')} · <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background-color:${comp.hex || '#fff'}; vertical-align:middle; border:1px solid #ccc;"></span> ${escapeHtml(comp.hex || '')}` : 'Choose an opened container or unopened paint product'}
               </div>
             </div>
             <button type="button" class="btn secondary small" onclick="closeColorMixPigmentDrawer()">✕ Close</button>
           </div>
 
-          <!-- Smart Search with Visual Avatars inside Drawer -->
+          <!-- Smart Search Bar inside Drawer -->
           <div class="cm-smart-search-bar" style="margin-top:0;">
             <span class="cm-smart-search-icon">🔍</span>
             <input
@@ -1519,21 +2260,22 @@ function renderColorMixOffcanvasDrawerHtml(prods) {
               type="text"
               class="cm-smart-search-input"
               style="height:38px; font-size:13px;"
-              placeholder="Search paint name, color, brand, category, or hex..."
+              placeholder="Search by product name, brand, color, category, or hex..."
               value="${escapeHtml(q)}"
               oninput="onColorMixDrawerSearch(this.value)"
             >
+            ${q ? `<button type="button" onclick="clearColorMixDrawerSearch()" style="background:none; border:none; color:var(--ink-soft); font-size:14px; cursor:pointer; padding:0 8px;" title="Clear search">✕</button>` : ''}
           </div>
         </div>
 
         <div id="cm-offcanvas-body" class="cm-offcanvas-body">
           ${q.trim() ? `
-            <div style="background:#FFFFFF; border:1.5px solid var(--line); border-radius:11px; padding:8px;">
-              <div class="muted small" style="font-weight:700; padding:4px 8px 6px; font-size:11px;">⚡ Quick Avatar Matches</div>
-              ${renderSmartAvatarSearchDropdownHtml(idx, prods, selectedProductId, q)}
+            <div class="cm-search-status-bar">
+              <span>🔍 Showing results for "<strong>${escapeHtml(q)}</strong>"</span>
+              <button type="button" class="btn text small" style="color:#1E40AF; font-weight:700; padding:1px 6px;" onclick="clearColorMixDrawerSearch()">✕ Clear</button>
             </div>
           ` : ''}
-          ${renderCategorizedAccordionMenusHtml(idx, prods, selectedProductId, q)}
+          ${renderCategorizedAccordionMenusHtml(idx, modalProds, selectedProductId, q, selectedPrefCan)}
         </div>
       </div>
     </div>
@@ -1555,23 +2297,34 @@ function closeColorMixPigmentDrawer() {
   renderColorMixStudio();
 }
 
+function clearColorMixDrawerSearch() {
+  colorMixStudioState.pickerSearch = '';
+  const input = document.getElementById('cm-drawer-search-input');
+  if (input) {
+    input.value = '';
+    input.focus();
+  }
+  onColorMixDrawerSearch('');
+}
+
 function onColorMixDrawerSearch(val) {
   colorMixStudioState.pickerSearch = val || '';
   const body = document.getElementById('cm-offcanvas-body');
   if (body) {
-    const prods = colorMixAvailableProducts();
+    const prods = colorMixModalProducts();
     const idx = colorMixStudioState.openPickerIdx;
     const comp = idx !== 'add' && colorMixStudioState.components[idx] ? colorMixStudioState.components[idx] : null;
     const selectedProductId = comp ? comp.productId : '';
+    const selectedPrefCan = comp ? (Number(comp.preferredCanSize) || 0) : 0;
     const q = colorMixStudioState.pickerSearch;
     body.innerHTML = `
       ${q.trim() ? `
-        <div style="background:#FFFFFF; border:1.5px solid var(--line); border-radius:11px; padding:8px;">
-          <div class="muted small" style="font-weight:700; padding:4px 8px 6px; font-size:11px;">⚡ Quick Avatar Matches</div>
-          ${renderSmartAvatarSearchDropdownHtml(idx, prods, selectedProductId, q)}
+        <div class="cm-search-status-bar">
+          <span>🔍 Showing results for "<strong>${escapeHtml(q)}</strong>"</span>
+          <button type="button" class="btn text small" style="color:#1E40AF; font-weight:700; padding:1px 6px;" onclick="clearColorMixDrawerSearch()">✕ Clear</button>
         </div>
       ` : ''}
-      ${renderCategorizedAccordionMenusHtml(idx, prods, selectedProductId, q)}
+      ${renderCategorizedAccordionMenusHtml(idx, prods, selectedProductId, q, selectedPrefCan)}
     `;
   }
 }
@@ -1588,6 +2341,20 @@ function toggleColorMixAccordionCategory(categoryKey) {
   }
 }
 
+function toggleColorMixOpenedSection() {
+  if (colorMixStudioState.openedSectionExpanded === undefined) {
+    colorMixStudioState.openedSectionExpanded = false;
+  } else {
+    colorMixStudioState.openedSectionExpanded = !colorMixStudioState.openedSectionExpanded;
+  }
+  const body = document.getElementById('cm-offcanvas-body');
+  if (body) {
+    onColorMixDrawerSearch(colorMixStudioState.pickerSearch || '');
+  } else {
+    renderColorMixStudio();
+  }
+}
+
 function setColorMixTypeFilter(typeFilter) {
   colorMixStudioState.typeFilter = typeFilter || 'all';
   if (typeFilter && typeFilter !== 'all') {
@@ -1596,9 +2363,18 @@ function setColorMixTypeFilter(typeFilter) {
   renderColorMixStudio();
 }
 
-function onColorMixProductSelect(idx, productId) {
+function onColorMixProductSelect(idx, productId, preferredCanSize = 0) {
   const p = productById(productId);
   if (!p) return;
+
+  // Prevent duplicate product selection across ingredient slots
+  const slotMap = getColorMixSelectedProductSlotMap();
+  const existingSlot = slotMap.get(String(p.id));
+  if (existingSlot && (idx === 'add' || Number(existingSlot) !== Number(idx) + 1)) {
+    showToast(`"${p.name}" is already selected in Ingredient #${existingSlot}. Each ingredient slot must contain a unique paint product.`, 'error');
+    return;
+  }
+
   if (productMixAvailableStock(p) <= 0) {
     showToast(`Product "${p.name}" has no available stock and cannot be selected for mixing.`, 'error');
     renderColorMixStudio();
@@ -1608,6 +2384,8 @@ function onColorMixProductSelect(idx, productId) {
     showToast(`Product "${p.name}" is low on stock (${formatStock(productMixAvailableStock(p))}L available).`, 'info');
   }
 
+  const prefCan = Number(preferredCanSize) || 0;
+
   if (idx === 'add') {
     const currentTotal = colorMixStudioState.components.reduce((s, c) => s + (Number(c.pct) || 0), 0);
     const remainingPct = Math.max(10, Math.round((100 - currentTotal) * 10) / 10);
@@ -1615,22 +2393,27 @@ function onColorMixProductSelect(idx, productId) {
       id: uid('cmc'),
       productId: p.id,
       name: p.name,
-      brand: p.brand,
+      brand: p.brand || '',
+      colorName: getProductColorName(p),
+      color: getProductColorName(p),
       stock: p.stock,
       price: p.price,
       hex: getProductDefaultColor(p),
       pct: remainingPct,
-      preferredCanSize: 0
+      preferredCanSize: prefCan
     });
   } else {
     const comp = colorMixStudioState.components[idx];
     if (comp) {
       comp.productId = p.id;
       comp.name = p.name;
-      comp.brand = p.brand;
+      comp.brand = p.brand || '';
+      comp.colorName = getProductColorName(p);
+      comp.color = getProductColorName(p);
       comp.price = p.price;
       comp.stock = p.stock;
       comp.hex = getProductDefaultColor(p);
+      comp.preferredCanSize = prefCan;
     }
     if (idx === 0 && p.type) {
       colorMixStudioState.baseType = p.type;
@@ -1660,20 +2443,23 @@ function onColorMixColorLive(idx, hex) {
   syncColorMixVisuals(idx);
 }
 
-function onColorMixTotalLitersChange(val) {
-  val = Math.max(0.1, Number(val) || 1);
+function onColorMixTotalLitersChange(val, clampInput = true) {
+  const parsed = Number(val);
+  val = isNaN(parsed) || parsed < 0.5 ? 0.5 : parsed;
   colorMixStudioState.totalLiters = val;
   // Update can button active states without full page re-render
   document.querySelectorAll('.cm-can-btn').forEach(btn => {
     const text = (btn.textContent || '').trim();
-    if (text.includes(`${val} L`)) {
+    if (text.includes(`${val} L`) || (val === 1 && text.includes('1.0 L')) || (val === 4 && text.includes('4.0 L'))) {
       btn.classList.add('active');
     } else {
       btn.classList.remove('active');
     }
   });
   const customInput = document.getElementById('cm-liters');
-  if (customInput && document.activeElement !== customInput) customInput.value = val;
+  if (customInput && (clampInput || document.activeElement !== customInput)) {
+    customInput.value = val;
+  }
   const volLabel = document.getElementById('cm-grand-volume-label');
   if (volLabel) volLabel.textContent = `Estimated Total (${val} Liter${val === 1 ? '' : 's'})`;
   const beakerVol = document.getElementById('cm-beaker-volume');
@@ -1691,18 +2477,26 @@ function addColorMixIngredient() {
   const remainingPct = Math.max(10, Math.round((100 - currentTotal) * 10) / 10);
 
   // Pick next unused product
-  const usedIds = new Set(colorMixStudioState.components.map(c => c.productId));
-  const candidate = prods.find(p => !usedIds.has(p.id)) || prods[0];
+  const usedIds = new Set(colorMixStudioState.components.map(c => String(c.productId)));
+  const candidate = prods.find(p => !usedIds.has(String(p.id)));
+
+  if (!candidate) {
+    showToast('All available paint products are already selected across ingredient slots.', 'info');
+    return;
+  }
 
   colorMixStudioState.components.push({
     id: uid('cmc'),
-    productId: candidate ? candidate.id : '',
-    name: candidate ? candidate.name : 'Component Color',
-    brand: candidate ? candidate.brand : '',
-    stock: candidate ? candidate.stock : 0,
-    price: candidate ? candidate.price : 350,
-    hex: candidate ? getProductDefaultColor(candidate) : '#FDD835',
-    pct: remainingPct
+    productId: candidate.id,
+    name: candidate.name,
+    brand: candidate.brand || '',
+    colorName: getProductColorName(candidate),
+    color: getProductColorName(candidate),
+    stock: candidate.stock,
+    price: candidate.price,
+    hex: getProductDefaultColor(candidate),
+    pct: remainingPct,
+    preferredCanSize: 0
   });
 
   updateColorMixCalculation();
@@ -1756,6 +2550,18 @@ function applyDetectedColorName() {
 
 async function submitColorMix() {
   const s = colorMixStudioState;
+  const customInput = document.getElementById('cm-liters');
+  if (customInput) {
+    const rawLiters = Number(customInput.value);
+    if (isNaN(rawLiters) || rawLiters < 0.5) {
+      onColorMixTotalLitersChange(0.5, true);
+      showToast('Minimum mixing volume is 0.5 L.', 'error');
+      return false;
+    }
+    s.totalLiters = rawLiters;
+  } else if ((Number(s.totalLiters) || 0) < 0.5) {
+    s.totalLiters = 0.5;
+  }
   const colorNameInput = document.getElementById('cm-color-name');
   const colorName = colorNameInput ? colorNameInput.value.trim() : s.colorName;
   if (!colorName) {
@@ -1775,16 +2581,49 @@ async function submitColorMix() {
     return false;
   }
 
+  // Validate product uniqueness before saving or adding to sale
+  const seenProductIds = new Set();
+  const duplicateErrors = [];
+  for (let i = 0; i < validComponents.length; i++) {
+    const comp = validComponents[i];
+    const pid = String(comp.productId);
+    if (seenProductIds.has(pid)) {
+      const p = productById(pid);
+      const pName = p ? p.name : (comp.name || `Product #${pid}`);
+      duplicateErrors.push(`"${pName}" (Ingredient #${i + 1})`);
+    } else {
+      seenProductIds.add(pid);
+    }
+  }
+
+  if (duplicateErrors.length > 0) {
+    showToast(`Duplicate product detected: ${duplicateErrors.join(', ')}. Each ingredient slot must contain a unique paint product.`, 'error');
+    const readyBadge = document.getElementById('cm-ready-badge');
+    if (readyBadge) {
+      readyBadge.className = 'badge low';
+      readyBadge.textContent = '⚠️ Duplicate Products Selected';
+    }
+    return false;
+  }
+
+  const reqLitersByProd = {};
   for (const c of validComponents) {
-    const p = productById(c.productId);
+    const pid = String(c.productId);
+    const compLiters = Number(((s.totalLiters || 1) * (Number(c.pct) / 100)).toFixed(2));
+    reqLitersByProd[pid] = Number(((reqLitersByProd[pid] || 0) + compLiters).toFixed(2));
+  }
+
+  for (const pid of Object.keys(reqLitersByProd)) {
+    const p = productById(pid);
     if (!p) {
-      showToast(`Selected product "${c.name}" was not found.`, 'error');
+      showToast(`Selected product #${pid} was not found in inventory.`, 'error');
       return false;
     }
-    const compLiters = Number(((s.totalLiters || 1) * (Number(c.pct) / 100)).toFixed(2));
+    const totalReq = reqLitersByProd[pid];
     const mixAvail = productMixAvailableStock(p);
-    if (mixAvail < compLiters) {
-      showToast(`Not enough stock for "${p.name}". Required: ${formatStock(compLiters)}L, Available: ${formatStock(mixAvail)}L (${formatStock(p.stock)}L sealed + ${formatStock(productOpenedStock(p))}L opened).`, 'error');
+    if (mixAvail < totalReq) {
+      const shortage = Number((totalReq - mixAvail).toFixed(2));
+      showToast(`Not enough stock for "${p.name}". Required: ${formatStock(totalReq)} L, Available: ${formatStock(mixAvail)} L (${formatStock(p.stock)} L sealed + ${formatStock(productOpenedStock(p))} L opened). Shortage: ${formatStock(shortage)} L.`, 'error');
       return false;
     }
   }
@@ -1798,15 +2637,23 @@ async function submitColorMix() {
 
   const componentsData = validComponents.map(c => {
     const compLiters = Number((liters * (Number(c.pct) / 100)).toFixed(2));
+    const p = productById(c.productId);
+    const colorName = c.colorName || (p ? getProductColorName(p) : 'Original Color');
+    const hex = c.hex || (p ? getProductDefaultColor(p) : '');
     return {
       productId: c.productId,
-      name: c.name,
-      brand: c.brand,
+      name: c.name || (p ? p.name : 'Ingredient'),
+      brand: c.brand || (p ? p.brand : ''),
+      colorName: colorName,
+      color: colorName,
       price: c.price,
-      hex: c.hex,
+      hex: hex,
+      colorHex: hex,
       percentage: Number(c.pct),
+      pctNum: Number(c.pct),
       liters: compLiters,
-      preferredCanSize: Number(c.preferredCanSize) || 0
+      preferredCanSize: Number(c.preferredCanSize) || 0,
+      containerSource: ''
     };
   });
 
@@ -1852,6 +2699,7 @@ async function submitColorMix() {
     closeModal();
     refreshCartUI();
     showToast(`Added ${liters}L "${colorName}" (${detected.name}) mix to sale.`, 'ok');
+    return true;
   } else {
     // Direct movement logging from Stock Movements page
     const date = nowISO();
@@ -1862,6 +2710,7 @@ async function submitColorMix() {
         const beforeStock = Number(p.stock) || 0;
         const plan = consumeProductForColorMix(p, comp.liters, comp.preferredCanSize || 0);
         const mixNoteExtra = formatMixConsumptionNote(plan);
+        comp.containerSource = mixNoteExtra ? mixNoteExtra.replace(/^[ ·\[]+|[ ·\]]+$/g, '').trim() : (comp.preferredCanSize ? `${comp.preferredCanSize}L container` : '');
         ingredientChanges.push({
           field: `${p.name} (${comp.percentage}%)`,
           oldValue: `${formatStock(beforeStock)}L`,
@@ -1889,6 +2738,11 @@ async function submitColorMix() {
       productId: null,
       productName: `Color Mix — ${colorName} [${detected.name}]`,
       colorName,
+      hexColor: mixed.hex,
+      colorHex: mixed.hex,
+      detectedColorName: detected.name,
+      components: componentsData,
+      formulaJson: JSON.stringify(componentsData),
       qtyChange: liters,
       note: `${note ? note + ' · ' : ''}Formula: ${shortFormulaSummary}`,
       staffName: (currentUser && currentUser.name) || 'Staff'
@@ -1912,6 +2766,6 @@ async function submitColorMix() {
     closeModal();
     showToast(`Successfully logged ${liters}L "${colorName}" (${detected.name}) mixing service and deducted ingredients.`, 'ok');
     renderPage();
+    return true;
   }
-  return false;
 }

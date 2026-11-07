@@ -190,6 +190,12 @@ async function submitUser(e, id) {
     showToast('User added.');
   }
   await saveDB();
+  // Clear any in-memory password fields after persisting
+  if (db && Array.isArray(db.users)) {
+    db.users.forEach(userObj => {
+      delete userObj.password;
+    });
+  }
   closeModal();
   renderApp();
   return false;

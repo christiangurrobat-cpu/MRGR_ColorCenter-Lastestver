@@ -7,6 +7,7 @@ let db = null;          // the whole "database" object
 let currentUser = null; // who is logged in right now
 let currentPage = null; // which screen we are on, e.g. 'dashboard', 'pos'
 let cart = [];          // items being built up in the current POS sale
+let currentSaleCustomerName = ''; // customer name for the current POS sale
 let posConfirmPromiseResolve = null; // POS cashier order confirmation resolver
 
 // Storage helper: supports both window.storage and localStorage
@@ -40,11 +41,9 @@ const storage = {
       localStorage.setItem(key, value);
       saved = true;
     } catch (e) {
-      console.warn('localStorage.setItem failed', e);
+      console.warn('localStorage.setItem failed (possibly quota exceeded):', e);
     }
-    if (!saved) {
-      throw new Error('Failed to save to storage');
-    }
+    return saved;
   }
 };
 
@@ -354,9 +353,9 @@ function renderAppMonthDayPicker() {
         <button type="button" class="app-cal-nav-btn po-cal-nav-btn" onclick="appCalPrevMonth(event)" ${canPrev ? '' : 'disabled'} title="Previous month">‹</button>
         <select class="app-cal-month-dropdown po-cal-month-dropdown" onchange="appCalChangeMonth(this.value, event)" title="Select month">
           ${APP_MONTH_NAMES.map((name, idx) => {
-            const isMonthDisabled = (numYear === curY && idx > curMonthIdx);
-            return `<option value="${idx}" ${idx === m ? 'selected' : ''} ${isMonthDisabled ? 'disabled' : ''}>${name}</option>`;
-          }).join('')}
+    const isMonthDisabled = (numYear === curY && idx > curMonthIdx);
+    return `<option value="${idx}" ${idx === m ? 'selected' : ''} ${isMonthDisabled ? 'disabled' : ''}>${name}</option>`;
+  }).join('')}
         </select>
         <button type="button" class="app-cal-nav-btn po-cal-nav-btn" onclick="appCalNextMonth(event)" ${canNext ? '' : 'disabled'} title="Next month">›</button>
       </div>
@@ -458,7 +457,7 @@ if (!window._appCalListenersAttached) {
   window._appCalListenersAttached = true;
   document.addEventListener('click', e => {
     if (!e.target.closest('#app-calendar-popover') && !e.target.closest('#po-calendar-popover') &&
-        !e.target.closest('.app-monthday-picker-field') && !e.target.closest('.po-monthday-picker-field')) {
+      !e.target.closest('.app-monthday-picker-field') && !e.target.closest('.po-monthday-picker-field')) {
       closeAppMonthDayPicker();
     }
   });
@@ -598,7 +597,8 @@ function buildSeedData() {
     sales: [],
     movements: [],
     purchaseOrders: [],
-    adjustmentRequests: []
+    adjustmentRequests: [],
+    voidRequests: []
   };
 }
 
@@ -653,89 +653,203 @@ function dedupeProducts() {
   return true;
 }
 
+function normalizeDbPayload(rawDb) {
+  if (!rawDb) return null;
+  const processed = { ...rawDb };
+  let migratedDecimals = false;
+
+  if (Array.isArray(processed.products)) {
+    processed.products = processed.products
+      .filter(p => (p.type || '').toLowerCase() !== 'accessory')
+      .map(p => {
+        const prodId = p.productId || p.product_id || p.id;
+        const prodName = p.productName || p.product_name || p.name;
+        const category = p.category || p.type;
+        const supplierId = p.supplierId || p.supplier_id || null;
+        const prod = {
+          ...p,
+          id: prodId,
+          productId: prodId,
+          product_id: prodId,
+          name: prodName,
+          productName: prodName,
+          product_name: prodName,
+          type: p.type || category,
+          category: category,
+          supplierId: supplierId,
+          supplier_id: supplierId,
+          status: p.status || 'active',
+          stock: Number(p.stock) || 0,
+          canStock: (p.canStock && !Array.isArray(p.canStock) && typeof p.canStock === 'object') ? p.canStock : {},
+          openedStock: Number(p.openedStock) || 0,
+          openedCanSize: Number(p.openedCanSize) || 0,
+          sizes: Array.isArray(p.sizes) ? p.sizes : [],
+          sizesData: Array.isArray(p.sizesData) ? p.sizesData : [],
+          pendingSizes: Array.isArray(p.pendingSizes) ? p.pendingSizes : [],
+          openedBySize: (p.openedBySize && !Array.isArray(p.openedBySize) && typeof p.openedBySize === 'object') ? p.openedBySize : null,
+          threshold: Number(p.threshold) || 0,
+          thresholdBySize: (p.thresholdBySize && typeof p.thresholdBySize === 'object' && !Array.isArray(p.thresholdBySize)) ? p.thresholdBySize : {},
+          price: Number(p.price) || 0,
+          recentPrice: (p.recentPrice !== undefined && p.recentPrice !== null && p.recentPrice !== '') ? Number(p.recentPrice) : ((p.recent_price !== undefined && p.recent_price !== null && p.recent_price !== '') ? Number(p.recent_price) : null),
+          pendingPrice: (p.pendingPrice !== undefined && p.pendingPrice !== null && p.pendingPrice !== '') ? Number(p.pendingPrice) : null,
+          pendingEdit: p.pendingEdit || null
+        };
+        if (typeof syncProductVariants === 'function') {
+          syncProductVariants(prod);
+        }
+        if (typeof normalizeProductOpenedStock === 'function' && normalizeProductOpenedStock(prod)) {
+          migratedDecimals = true;
+        }
+        if (typeof normalizeProductThresholds === 'function' && normalizeProductThresholds(prod)) {
+          migratedDecimals = true;
+        }
+        return prod;
+      });
+  }
+
+  if (Array.isArray(processed.movements)) {
+    processed.movements = processed.movements.map(movement => {
+      const storedName = String(movement.productName || '').trim();
+      if (storedName && storedName !== '0') return movement;
+      const product = (processed.products || []).find(p => (p.productId || p.id) === movement.productId);
+      return { ...movement, productName: product ? product.name : (movement.type === 'colormix' ? 'Color Mix' : 'Unknown product') };
+    });
+  }
+
+  if (!processed.purchaseOrders) processed.purchaseOrders = [];
+  processed.purchaseOrders = processed.purchaseOrders.map(po => {
+    let items = [];
+    if (Array.isArray(po.items) && po.items.length > 0) {
+      items = po.items;
+    } else if (po.itemsJson) {
+      try {
+        items = typeof po.itemsJson === 'string' ? JSON.parse(po.itemsJson) : po.itemsJson;
+        if (!Array.isArray(items)) items = [];
+      } catch (e) {
+        items = [];
+      }
+    }
+    return {
+      ...po,
+      items,
+      itemsJson: JSON.stringify(items)
+    };
+  });
+
+  if (!Array.isArray(processed.adjustmentRequests)) processed.adjustmentRequests = [];
+  if (!Array.isArray(processed.voidRequests)) processed.voidRequests = [];
+  return { db: processed, migratedDecimals };
+}
+
+// Multi-Tab Concurrency Synchronization
+const TAB_INSTANCE_ID = uid('tab');
+const DB_SYNC_CHANNEL_NAME = 'mrgr_db_sync_channel';
+let mrgrSyncChannel = null;
+
+if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+  try {
+    mrgrSyncChannel = new BroadcastChannel(DB_SYNC_CHANNEL_NAME);
+    mrgrSyncChannel.onmessage = (event) => {
+      const data = event.data;
+      if (data && data.type === 'DB_UPDATED' && data.sender !== TAB_INSTANCE_ID) {
+        silentRefreshFromDB();
+      }
+    };
+  } catch (e) {
+    console.warn('BroadcastChannel initialization error', e);
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === 'mrgr_sync_timestamp' && event.newValue) {
+      try {
+        const payload = JSON.parse(event.newValue);
+        if (payload && payload.sender !== TAB_INSTANCE_ID) {
+          silentRefreshFromDB();
+        }
+      } catch (e) { }
+    }
+  });
+}
+
+function broadcastDbUpdate() {
+  const payload = {
+    type: 'DB_UPDATED',
+    sender: TAB_INSTANCE_ID,
+    timestamp: Date.now()
+  };
+  if (mrgrSyncChannel) {
+    try {
+      mrgrSyncChannel.postMessage(payload);
+    } catch (e) { }
+  }
+  try {
+    localStorage.setItem('mrgr_sync_timestamp', JSON.stringify(payload));
+  } catch (e) { }
+}
+
+async function silentRefreshFromDB() {
+  try {
+    const res = await fetch('api/db.php?_=' + Date.now());
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data || !data.success || !data.db) return;
+    const normalized = normalizeDbPayload(data.db);
+    if (!normalized || !normalized.db) return;
+
+    db = normalized.db;
+
+    // Cache locally
+    try {
+      storage.set(DB_KEY, JSON.stringify(db));
+    } catch (e) { }
+
+    // If modal is active or user is typing, avoid disrupting active typing or open dialogs
+    const activeModal = document.querySelector('.modal-overlay:not(.hidden), .modal:not(.hidden), [id$="-modal"]:not([style*="display: none"])');
+    const isTyping = document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'SELECT');
+
+    if (currentPage === 'pos') {
+      // For POS, re-render product grid/list so updated stock quantities show up immediately,
+      // while keeping the cashier's active cart completely untouched!
+      if (typeof renderPosProductList === 'function') {
+        renderPosProductList();
+      }
+      if (typeof refreshCartUI === 'function') {
+        refreshCartUI();
+      }
+    } else if (!activeModal && !isTyping) {
+      // Re-render currently viewed module so tables/dashboards reflect the other tab's updates
+      if (typeof renderPage === 'function') {
+        renderPage();
+      }
+    }
+
+    if (typeof updateNavBadges === 'function') {
+      updateNavBadges();
+    }
+
+    if (typeof refreshColorMixPresetAvailabilityUI === 'function') {
+      try { refreshColorMixPresetAvailabilityUI(); } catch (e) { }
+    }
+  } catch (err) {
+    console.warn('silentRefreshFromDB failed:', err);
+  }
+}
+
 async function loadDB() {
   try {
     const res = await fetch('api/db.php');
     if (res.ok) {
       const data = await res.json();
       if (data && data.success && data.db && ((Array.isArray(data.db.products) && data.db.products.length > 0) || (Array.isArray(data.db.users) && data.db.users.length > 0))) {
-        db = data.db;
-        let migratedDecimals = false;
-        db.products = db.products
-          .filter(p => (p.type || '').toLowerCase() !== 'accessory')
-          .map(p => {
-            const prodId = p.productId || p.product_id || p.id;
-            const prodName = p.productName || p.product_name || p.name;
-            const category = p.category || p.type;
-            const supplierId = p.supplierId || p.supplier_id || null;
-            const prod = {
-              ...p,
-              id: prodId,
-              productId: prodId,
-              product_id: prodId,
-              name: prodName,
-              productName: prodName,
-              product_name: prodName,
-              type: p.type || category,
-              category: category,
-              supplierId: supplierId,
-              supplier_id: supplierId,
-              status: p.status || 'active',
-              stock: Number(p.stock) || 0,
-              canStock: (p.canStock && !Array.isArray(p.canStock) && typeof p.canStock === 'object') ? p.canStock : {},
-              openedStock: Number(p.openedStock) || 0,
-              openedCanSize: Number(p.openedCanSize) || 0,
-              sizes: Array.isArray(p.sizes) ? p.sizes : [],
-              sizesData: Array.isArray(p.sizesData) ? p.sizesData : [],
-              pendingSizes: Array.isArray(p.pendingSizes) ? p.pendingSizes : [],
-              openedBySize: (p.openedBySize && !Array.isArray(p.openedBySize) && typeof p.openedBySize === 'object') ? p.openedBySize : null,
-              threshold: Number(p.threshold) || 0,
-              thresholdBySize: (p.thresholdBySize && typeof p.thresholdBySize === 'object' && !Array.isArray(p.thresholdBySize)) ? p.thresholdBySize : {},
-              price: Number(p.price) || 0,
-              recentPrice: (p.recentPrice !== undefined && p.recentPrice !== null && p.recentPrice !== '') ? Number(p.recentPrice) : ((p.recent_price !== undefined && p.recent_price !== null && p.recent_price !== '') ? Number(p.recent_price) : null),
-              pendingPrice: (p.pendingPrice !== undefined && p.pendingPrice !== null && p.pendingPrice !== '') ? Number(p.pendingPrice) : null,
-              pendingEdit: p.pendingEdit || null
-            };
-            if (typeof syncProductVariants === 'function') {
-              syncProductVariants(prod);
-            }
-            if (typeof normalizeProductOpenedStock === 'function' && normalizeProductOpenedStock(prod)) {
-              migratedDecimals = true;
-            }
-            if (typeof normalizeProductThresholds === 'function' && normalizeProductThresholds(prod)) {
-              migratedDecimals = true;
-            }
-            return prod;
-          });
-        db.movements = (db.movements || []).map(movement => {
-          const storedName = String(movement.productName || '').trim();
-          if (storedName && storedName !== '0') return movement;
-          const product = productById(movement.productId);
-          return { ...movement, productName: product ? product.name : (movement.type === 'colormix' ? 'Color Mix' : 'Unknown product') };
-        });
-        if (!db.purchaseOrders) db.purchaseOrders = [];
-        db.purchaseOrders = db.purchaseOrders.map(po => {
-          let items = [];
-          if (Array.isArray(po.items) && po.items.length > 0) {
-            items = po.items;
-          } else if (po.itemsJson) {
-            try {
-              items = typeof po.itemsJson === 'string' ? JSON.parse(po.itemsJson) : po.itemsJson;
-              if (!Array.isArray(items)) items = [];
-            } catch (e) {
-              items = [];
-            }
-          }
-          return {
-            ...po,
-            items,
-            itemsJson: JSON.stringify(items)
-          };
-        });
-        if (!Array.isArray(db.adjustmentRequests)) db.adjustmentRequests = [];
-        storage.set(DB_KEY, JSON.stringify(db)); // cache locally
-        if (dedupeProducts() || migratedDecimals) await saveDB();
-        return;
+        const normalized = normalizeDbPayload(data.db);
+        if (normalized && normalized.db) {
+          db = normalized.db;
+          storage.set(DB_KEY, JSON.stringify(db)); // cache locally
+          if (dedupeProducts() || normalized.migratedDecimals) await saveDB();
+          return;
+        }
       }
     }
   } catch (e) {
@@ -746,60 +860,13 @@ async function loadDB() {
   try {
     const val = await storage.get(DB_KEY);
     if (val) {
-      db = JSON.parse(val);
-      let migratedFallbackDecimals = false;
-      if (Array.isArray(db.products)) {
-        db.products = db.products
-          .filter(p => (p.type || '').toLowerCase() !== 'accessory')
-          .map(p => {
-            const prod = {
-              ...p,
-              status: p.status || 'active',
-              stock: Number(p.stock) || 0,
-              canStock: (p.canStock && !Array.isArray(p.canStock) && typeof p.canStock === 'object') ? p.canStock : {},
-              openedStock: Number(p.openedStock) || 0,
-              openedCanSize: Number(p.openedCanSize) || 0,
-              sizes: Array.isArray(p.sizes) ? p.sizes : [],
-              pendingSizes: Array.isArray(p.pendingSizes) ? p.pendingSizes : [],
-              openedBySize: (p.openedBySize && !Array.isArray(p.openedBySize) && typeof p.openedBySize === 'object') ? p.openedBySize : null,
-              recentPrice: (p.recentPrice !== undefined && p.recentPrice !== null && p.recentPrice !== '') ? Number(p.recentPrice) : null,
-              pendingPrice: (p.pendingPrice !== undefined && p.pendingPrice !== null && p.pendingPrice !== '') ? Number(p.pendingPrice) : null,
-              pendingEdit: p.pendingEdit || null
-            };
-            if (typeof normalizeProductOpenedStock === 'function' && normalizeProductOpenedStock(prod)) {
-              migratedFallbackDecimals = true;
-            }
-            return prod;
-          });
+      const parsed = JSON.parse(val);
+      const normalized = normalizeDbPayload(parsed);
+      if (normalized && normalized.db) {
+        db = normalized.db;
+        if (dedupeProducts() || normalized.migratedDecimals) await saveDB();
+        return;
       }
-      db.movements = (db.movements || []).map(movement => {
-        const storedName = String(movement.productName || '').trim();
-        if (storedName && storedName !== '0') return movement;
-        const product = productById(movement.productId);
-        return { ...movement, productName: product ? product.name : (movement.type === 'colormix' ? 'Color Mix' : 'Unknown product') };
-      });
-      if (!db.purchaseOrders) db.purchaseOrders = [];
-      db.purchaseOrders = db.purchaseOrders.map(po => {
-        let items = [];
-        if (Array.isArray(po.items) && po.items.length > 0) {
-          items = po.items;
-        } else if (po.itemsJson) {
-          try {
-            items = typeof po.itemsJson === 'string' ? JSON.parse(po.itemsJson) : po.itemsJson;
-            if (!Array.isArray(items)) items = [];
-          } catch (e) {
-            items = [];
-          }
-        }
-        return {
-          ...po,
-          items,
-          itemsJson: JSON.stringify(items)
-        };
-      });
-      if (!Array.isArray(db.adjustmentRequests)) db.adjustmentRequests = [];
-      if (dedupeProducts() || migratedFallbackDecimals) await saveDB();
-      return;
     }
   } catch (e) { /* nothing saved yet */ }
   db = buildSeedData();
@@ -816,10 +883,12 @@ async function saveDB() {
     });
   }
 
-  // 1. Local storage cache
+  // 1. Local storage cache (safely guarded against QuotaExceededError)
   try {
     await storage.set(DB_KEY, JSON.stringify(db));
-  } catch (e) { }
+  } catch (e) {
+    console.warn('Local storage cache write failed:', e);
+  }
 
   // 2. Persist to MySQL database MRGR_ColorCenter
   try {
@@ -836,6 +905,9 @@ async function saveDB() {
       throw new Error(errData.error || ('HTTP ' + res.status));
     }
     if (db.deletedProductIds && db.deletedProductIds.length) db.deletedProductIds = [];
+
+    // Broadcast update to all other open tabs on this machine
+    broadcastDbUpdate();
   } catch (e) {
     console.error('Save to MySQL failed', e);
     showToast('Could not save to database — check connection.', 'error');
@@ -844,6 +916,11 @@ async function saveDB() {
   // 3. Keep module navigation notification badges fresh in real-time
   if (typeof updateNavBadges === 'function') {
     try { updateNavBadges(); } catch (e) { }
+  }
+
+  // 4. Dynamically update Color Mixing Studio preset availability on stock changes
+  if (typeof refreshColorMixPresetAvailabilityUI === 'function') {
+    try { refreshColorMixPresetAvailabilityUI(); } catch (e) { }
   }
 }
 
@@ -982,7 +1059,9 @@ function renderPaginationControls(key, options = {}) {
   const totalItems = state.totalItems;
   const pageSize = state.pageSize;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-  if (state.page > totalPages) state.page = totalPages;
+  if (!state.loading || totalItems > 0) {
+    if (state.page > totalPages) state.page = totalPages;
+  }
   if (state.page < 1) state.page = 1;
   state.totalPages = totalPages;
 
@@ -1111,6 +1190,9 @@ function changeTablePage(key, newPage) {
   const targetPage = Math.max(1, Math.min(Number(newPage) || 1, state.totalPages || 1));
   if (targetPage === state.page) return;
   state.page = targetPage;
+  if (typeof syncRouteState === 'function') {
+    syncRouteState({ push: false });
+  }
   triggerPaginationUpdate(key);
 }
 
@@ -1122,6 +1204,9 @@ function changeTablePageSize(key, newSize) {
   if (validSize === state.pageSize) return;
   state.pageSize = validSize;
   state.page = 1;
+  if (typeof syncRouteState === 'function') {
+    syncRouteState({ push: false });
+  }
   triggerPaginationUpdate(key);
 }
 

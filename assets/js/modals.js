@@ -2,6 +2,8 @@
    19. MODAL SYSTEM
    ============================================================ */
 function openModal(title, bodyHtml, footHtml, size) {
+  const bar = document.getElementById('alerts-floating-bar');
+  if (bar) bar.style.display = 'none';
   document.getElementById('modal-root').innerHTML = `
 <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
   <div class="modal-box ${size || ''}">
@@ -19,6 +21,9 @@ function closeModal() {
     fn(false);
   }
   document.getElementById('modal-root').innerHTML = '';
+  if (typeof LowStockService !== 'undefined' && typeof LowStockService.syncUI === 'function') {
+    LowStockService.syncUI();
+  }
 }
 
 /**

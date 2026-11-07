@@ -1,6 +1,11 @@
 <?php
 date_default_timezone_set('Asia/Manila');
 header('Content-Type: application/json; charset=utf-8');
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
 require_once __DIR__ . '/../config/database.php';
 
 try {
@@ -61,14 +66,123 @@ function ensureDBSchemaMigrated($conn, $force = false) {
         if ($chkThresholdBySize && $chkThresholdBySize->num_rows === 0) {
             $conn->query("ALTER TABLE products ADD COLUMN threshold_by_size TEXT NULL AFTER threshold");
         }
-        // Ensure obsolete sales columns (customer, discount, payment) are removed
-        $obsoleteSalesCols = ['customer_name', 'discount_pct', 'discount', 'cash_tendered', 'change_amount', 'payment_method'];
-        foreach ($obsoleteSalesCols as $col) {
-            $chkCol = $conn->query("SHOW COLUMNS FROM sales LIKE '$col'");
-            if ($chkCol && $chkCol->num_rows > 0) {
-                $conn->query("ALTER TABLE sales DROP COLUMN `$col`");
-            }
+        // Auto-migrate: nullable customer_name column on sales table
+        $chkCustomerName = $conn->query("SHOW COLUMNS FROM sales LIKE 'customer_name'");
+        if ($chkCustomerName && $chkCustomerName->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN customer_name VARCHAR(150) NULL DEFAULT NULL AFTER receipt_no");
         }
+
+        // Auto-migrate: discount_pct and discount_amount on sales table (Automatic 10% discount promotion)
+        $chkDiscountPct = $conn->query("SHOW COLUMNS FROM sales LIKE 'discount_pct'");
+        if ($chkDiscountPct && $chkDiscountPct->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN discount_pct DECIMAL(5,2) NOT NULL DEFAULT 0.00 AFTER subtotal");
+        }
+        $chkDiscountAmt = $conn->query("SHOW COLUMNS FROM sales LIKE 'discount_amount'");
+        if ($chkDiscountAmt && $chkDiscountAmt->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN discount_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER discount_pct");
+        }
+
+        // Auto-migrate: payment_method, cash_tendered, change_amount on sales table (Cash only store policy)
+        $chkPayMethod = $conn->query("SHOW COLUMNS FROM sales LIKE 'payment_method'");
+        if ($chkPayMethod && $chkPayMethod->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN payment_method VARCHAR(50) NOT NULL DEFAULT 'Cash' AFTER status");
+        }
+        $chkCashTendered = $conn->query("SHOW COLUMNS FROM sales LIKE 'cash_tendered'");
+        if ($chkCashTendered && $chkCashTendered->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN cash_tendered DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER payment_method");
+        }
+        $chkChangeAmt = $conn->query("SHOW COLUMNS FROM sales LIKE 'change_amount'");
+        if ($chkChangeAmt && $chkChangeAmt->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN change_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER cash_tendered");
+        }
+
+        // Auto-migrate: cashier_id column on sales table and backfill
+        $chkCashierId = $conn->query("SHOW COLUMNS FROM sales LIKE 'cashier_id'");
+        if ($chkCashierId && $chkCashierId->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN cashier_id VARCHAR(50) NULL AFTER date");
+            $conn->query("ALTER TABLE sales ADD INDEX idx_sales_cashier_id (cashier_id)");
+        }
+        // Backfill existing sales transactions matching cashier_name to users
+        $conn->query("UPDATE sales s JOIN users u ON (s.cashier_name = u.name OR s.cashier_name = u.username) SET s.cashier_id = u.id WHERE s.cashier_id IS NULL OR s.cashier_id = ''");
+        // Fallback: any sales matching 'Mike Revadulla' or 'admin' ensure u1
+        $conn->query("UPDATE sales SET cashier_id = 'u1' WHERE (cashier_name LIKE '%Mike%' OR cashier_name LIKE '%Admin%') AND (cashier_id IS NULL OR cashier_id = '')");
+        // Fallback: any sales matching 'Ana Cruz' or 'cashier' ensure u2
+        $conn->query("UPDATE sales SET cashier_id = 'u2' WHERE (cashier_name LIKE '%Ana%' OR cashier_name LIKE '%Cruz%') AND (cashier_id IS NULL OR cashier_id = '')");
+
+        // Ensure second cashier exists for multi-cashier testing/RBAC
+        $chkC2 = $conn->query("SELECT id FROM users WHERE username = 'cashier2' OR id = 'u4' LIMIT 1");
+        if ($chkC2 && $chkC2->num_rows === 0) {
+            $c2Hash = password_hash('cashier123', PASSWORD_BCRYPT);
+            $conn->query("INSERT INTO users (id, username, password, name, role, status, created_at) VALUES ('u4', 'cashier2', '$c2Hash', 'Maria Santos', 'cashier', 'active', NOW())");
+        }
+
+        // Auto-migrate: void_reason, voided_at, voided_by on sales table
+        $chkVoidReason = $conn->query("SHOW COLUMNS FROM sales LIKE 'void_reason'");
+        if ($chkVoidReason && $chkVoidReason->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN void_reason TEXT NULL AFTER change_amount");
+        }
+        $chkVoidedAt = $conn->query("SHOW COLUMNS FROM sales LIKE 'voided_at'");
+        if ($chkVoidedAt && $chkVoidedAt->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN voided_at DATETIME NULL AFTER void_reason");
+        }
+        $chkVoidedBy = $conn->query("SHOW COLUMNS FROM sales LIKE 'voided_by'");
+        if ($chkVoidedBy && $chkVoidedBy->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN voided_by VARCHAR(150) NULL AFTER voided_at");
+        }
+        $chkVRId = $conn->query("SHOW COLUMNS FROM sales LIKE 'void_request_id'");
+        if ($chkVRId && $chkVRId->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN void_request_id VARCHAR(50) NULL AFTER voided_by");
+        }
+        $chkVoidExpl = $conn->query("SHOW COLUMNS FROM sales LIKE 'void_explanation'");
+        if ($chkVoidExpl && $chkVoidExpl->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN void_explanation TEXT NULL AFTER void_request_id");
+        }
+        $chkVoidReqAt = $conn->query("SHOW COLUMNS FROM sales LIKE 'void_requested_at'");
+        if ($chkVoidReqAt && $chkVoidReqAt->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN void_requested_at DATETIME NULL AFTER void_explanation");
+        }
+        $chkVoidReqBy = $conn->query("SHOW COLUMNS FROM sales LIKE 'void_requested_by'");
+        if ($chkVoidReqBy && $chkVoidReqBy->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN void_requested_by VARCHAR(150) NULL AFTER void_requested_at");
+        }
+        $chkVoidAdminRem = $conn->query("SHOW COLUMNS FROM sales LIKE 'void_admin_remarks'");
+        if ($chkVoidAdminRem && $chkVoidAdminRem->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN void_admin_remarks TEXT NULL AFTER void_requested_by");
+        }
+        $chkVoidRejAt = $conn->query("SHOW COLUMNS FROM sales LIKE 'void_rejected_at'");
+        if ($chkVoidRejAt && $chkVoidRejAt->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN void_rejected_at DATETIME NULL AFTER void_admin_remarks");
+        }
+        $chkVoidRejBy = $conn->query("SHOW COLUMNS FROM sales LIKE 'void_rejected_by'");
+        if ($chkVoidRejBy && $chkVoidRejBy->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN void_rejected_by VARCHAR(150) NULL AFTER void_rejected_at");
+        }
+        $chkVoidInvRest = $conn->query("SHOW COLUMNS FROM sales LIKE 'void_inventory_restored'");
+        if ($chkVoidInvRest && $chkVoidInvRest->num_rows === 0) {
+            $conn->query("ALTER TABLE sales ADD COLUMN void_inventory_restored TINYINT(1) NOT NULL DEFAULT 0 AFTER void_rejected_by");
+        }
+
+        // Auto-migrate: void_requests table
+        $conn->query("CREATE TABLE IF NOT EXISTS void_requests (
+            id VARCHAR(50) PRIMARY KEY,
+            sale_id VARCHAR(50) NOT NULL,
+            receipt_no VARCHAR(50) NOT NULL,
+            date DATETIME NOT NULL,
+            cashier_id VARCHAR(50) NOT NULL,
+            cashier_name VARCHAR(150) NOT NULL,
+            reason VARCHAR(255) NOT NULL,
+            explanation TEXT NULL,
+            total DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            items_json LONGTEXT NULL,
+            status VARCHAR(50) NOT NULL DEFAULT 'pending',
+            reviewed_by VARCHAR(150) NULL,
+            reviewed_at DATETIME NULL,
+            admin_remarks TEXT NULL,
+            inventory_restored TINYINT(1) NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_vr_sale_id (sale_id),
+            INDEX idx_vr_status (status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
         // Auto-migrate: Product ID, product_name, category, supplier_id on products table
         $chkPid = $conn->query("SHOW COLUMNS FROM products LIKE 'product_id'");
@@ -159,6 +273,15 @@ function ensureDBSchemaMigrated($conn, $force = false) {
         if ($chkMvCsize && $chkMvCsize->num_rows === 0) {
             $conn->query("ALTER TABLE movements ADD COLUMN container_size DECIMAL(10,2) NULL AFTER size_id");
         }
+        // Auto-migrate: color_hex and formula_json on movements table for Color Mixing Service
+        $chkMvHex = $conn->query("SHOW COLUMNS FROM movements LIKE 'color_hex'");
+        if ($chkMvHex && $chkMvHex->num_rows === 0) {
+            $conn->query("ALTER TABLE movements ADD COLUMN color_hex VARCHAR(20) NULL AFTER product_name");
+        }
+        $chkMvFormula = $conn->query("SHOW COLUMNS FROM movements LIKE 'formula_json'");
+        if ($chkMvFormula && $chkMvFormula->num_rows === 0) {
+            $conn->query("ALTER TABLE movements ADD COLUMN formula_json LONGTEXT NULL AFTER note");
+        }
 
         // Auto-migrate: adjustment_requests table
         $conn->query("CREATE TABLE IF NOT EXISTS adjustment_requests (
@@ -179,6 +302,25 @@ function ensureDBSchemaMigrated($conn, $force = false) {
         // Referential integrity healing: reconcile movements with product_sizes and products
         $conn->query("UPDATE movements m JOIN product_sizes ps ON m.size_id = ps.size_id SET m.product_id = ps.product_id WHERE m.product_id != ps.product_id OR m.product_id IS NULL OR m.product_id = ''");
         $conn->query("UPDATE movements m JOIN products p ON (m.product_id = p.id OR m.product_id = p.product_id) SET m.product_name = p.name WHERE (m.product_name = 'Unknown product' OR m.product_name = '' OR m.product_name = '0') AND m.type != 'colormix'");
+
+        // Auto-migrate: convert any plaintext passwords in users table to bcrypt hashes
+        try {
+            $uRes = $conn->query("SELECT id, password FROM users");
+            if ($uRes) {
+                while ($uRow = $uRes->fetch_assoc()) {
+                    $p = (string)$uRow['password'];
+                    if ($p !== '' && !preg_match('/^\$2[ayb]\$\d{2}\$/', $p)) {
+                        $h = password_hash($p, PASSWORD_BCRYPT);
+                        $up = $conn->prepare("UPDATE users SET password = ? WHERE id = ?");
+                        if ($up) {
+                            $up->bind_param("ss", $h, $uRow['id']);
+                            $up->execute();
+                            $up->close();
+                        }
+                    }
+                }
+            }
+        } catch (Throwable $e) {}
 
         @file_put_contents($flagFile, date('Y-m-d H:i:s'));
     } catch (Throwable $e) { /* ignore */ }
@@ -323,8 +465,192 @@ if ($action === 'check_product_dependencies') {
     exit;
 }
 
+// RBAC: Identify authenticated acting user from session (or secure auth header)
+$sessionUserId = $_SESSION['user_id'] ?? null;
+if (empty($sessionUserId) && !empty($_SERVER['HTTP_X_USER_ID'])) {
+    $sessionUserId = trim((string)$_SERVER['HTTP_X_USER_ID']);
+}
+
+$actingUser = null;
+$actingUserId = null;
+$actingRole = null;
+
+if (!empty($sessionUserId)) {
+    $uStmt = $conn->prepare("SELECT id, username, name, role, status FROM users WHERE id = ? LIMIT 1");
+    if ($uStmt) {
+        $uStmt->bind_param("s", $sessionUserId);
+        $uStmt->execute();
+        $uRes = $uStmt->get_result();
+        if ($uRow = $uRes->fetch_assoc()) {
+            if ($uRow['status'] === 'active') {
+                $actingUser = $uRow;
+                $actingUserId = (string)$uRow['id'];
+                $actingRole = (string)$uRow['role'];
+            }
+        }
+        $uStmt->close();
+    }
+}
+
+// Sales History Summary endpoint (Admin Only)
+if ($action === 'sales_history_summary') {
+    if ($actingRole === 'cashier') {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Access denied: Cashiers are not authorized to access business-wide sales analytics.']);
+        exit;
+    }
+    if ($actingRole !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Access denied: Administrator authorization required.']);
+        exit;
+    }
+
+    $from = trim((string)($_GET['from'] ?? ''));
+    $to = trim((string)($_GET['to'] ?? ''));
+    $status = trim((string)($_GET['status'] ?? 'all'));
+
+    $where = [];
+    $params = [];
+    $types = '';
+    if ($from !== '') {
+        $where[] = "DATE(date) >= ?";
+        $params[] = $from;
+        $types .= 's';
+    }
+    if ($to !== '') {
+        $where[] = "DATE(date) <= ?";
+        $params[] = $to;
+        $types .= 's';
+    }
+    if ($status !== 'all' && $status !== '') {
+        $where[] = "status = ?";
+        $params[] = $status;
+        $types .= 's';
+    }
+    $whereSql = !empty($where) ? ('WHERE ' . implode(' AND ', $where)) : '';
+    $sql = "SELECT COUNT(*) as cnt, COALESCE(SUM(total), 0) as total_sum FROM sales $whereSql";
+    $stmt = $conn->prepare($sql);
+    if (!empty($params)) {
+        $stmt->bind_param($types, ...$params);
+    }
+    $stmt->execute();
+    $sRes = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    echo json_encode([
+        'success' => true,
+        'summary' => $sRes
+    ]);
+    exit;
+}
+
+// Single Sale / Receipt retrieval endpoint (RBAC Protected)
+if ($action === 'get_sale' || $action === 'receipt') {
+    $saleId = trim((string)($_GET['id'] ?? $_GET['receipt_no'] ?? ''));
+    if ($saleId === '') {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Sale ID or receipt number is required.']);
+        exit;
+    }
+    $sStmt = $conn->prepare("SELECT * FROM sales WHERE id = ? OR receipt_no = ? LIMIT 1");
+    if (!$sStmt) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => 'Database query error.']);
+        exit;
+    }
+    $sStmt->bind_param("ss", $saleId, $saleId);
+    $sStmt->execute();
+    $sRes = $sStmt->get_result();
+    $r = $sRes->fetch_assoc();
+    $sStmt->close();
+
+    if (!$r) {
+        http_response_code(404);
+        echo json_encode(['success' => false, 'error' => 'Transaction not found.']);
+        exit;
+    }
+
+    if ($actingRole === 'cashier') {
+        $ownerId = (string)($r['cashier_id'] ?? '');
+        $ownerName = (string)($r['cashier_name'] ?? '');
+        $isOwner = ($ownerId === $actingUserId) || ($ownerId === '' && strcasecmp($ownerName, $actingUser['name'] ?? '') === 0);
+        if (!$isOwner) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'error' => 'Access denied: You are restricted from viewing other cashiers\' transactions.']);
+            exit;
+        }
+    } elseif ($actingRole !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Access denied: You are not authorized to view sales transactions.']);
+        exit;
+    }
+
+    $items = !empty($r['items_json']) ? (json_decode($r['items_json'], true) ?: []) : [];
+    $returns = !empty($r['returns_json']) ? (json_decode($r['returns_json'], true) ?: []) : [];
+    $saleDate = DateTime::createFromFormat('Y-m-d H:i:s', $r['date'], new DateTimeZone('Asia/Manila'));
+    $discountPct = isset($r['discount_pct']) ? (float)$r['discount_pct'] : 0.0;
+    $discountAmount = isset($r['discount_amount']) ? (float)$r['discount_amount'] : 0.0;
+
+    echo json_encode([
+        'success' => true,
+        'sale' => [
+            'id' => $r['id'],
+            'receiptNo' => $r['receipt_no'] ?? null,
+            'customerName' => $r['customer_name'] ?? null,
+            'customer_name' => $r['customer_name'] ?? null,
+            'date' => $saleDate ? $saleDate->format(DateTime::ATOM) : $r['date'],
+            'cashierId' => $r['cashier_id'] ?? null,
+            'cashier_id' => $r['cashier_id'] ?? null,
+            'cashierName' => $r['cashier_name'],
+            'paymentMethod' => $r['payment_method'] ?? 'Cash',
+            'cashTendered' => isset($r['cash_tendered']) && (float)$r['cash_tendered'] > 0 ? (float)$r['cash_tendered'] : (float)($r['total'] ?: $r['subtotal']),
+            'changeAmount' => isset($r['change_amount']) ? (float)$r['change_amount'] : 0.0,
+            'subtotal' => (float)$r['subtotal'],
+            'discountPct' => $discountPct,
+            'discountPercentage' => $discountPct,
+            'discountAmount' => $discountAmount,
+            'discount' => $discountAmount,
+            'total' => (float)($r['total'] ?: ($r['subtotal'] - $discountAmount)),
+            'status' => $r['status'] ?? 'completed',
+            'voidReason' => $r['void_reason'] ?? null,
+            'voidedAt' => !empty($r['voided_at']) ? (DateTime::createFromFormat('Y-m-d H:i:s', $r['voided_at'], new DateTimeZone('Asia/Manila')) ? DateTime::createFromFormat('Y-m-d H:i:s', $r['voided_at'], new DateTimeZone('Asia/Manila'))->format(DateTime::ATOM) : $r['voided_at']) : null,
+            'voidedBy' => $r['voided_by'] ?? null,
+            'voidRequestId' => $r['void_request_id'] ?? null,
+            'voidExplanation' => $r['void_explanation'] ?? null,
+            'voidRequestedAt' => !empty($r['void_requested_at']) ? (DateTime::createFromFormat('Y-m-d H:i:s', $r['void_requested_at'], new DateTimeZone('Asia/Manila')) ? DateTime::createFromFormat('Y-m-d H:i:s', $r['void_requested_at'], new DateTimeZone('Asia/Manila'))->format(DateTime::ATOM) : $r['void_requested_at']) : null,
+            'voidRequestedBy' => $r['void_requested_by'] ?? null,
+            'voidAdminRemarks' => $r['void_admin_remarks'] ?? null,
+            'voidRejectedAt' => !empty($r['void_rejected_at']) ? (DateTime::createFromFormat('Y-m-d H:i:s', $r['void_rejected_at'], new DateTimeZone('Asia/Manila')) ? DateTime::createFromFormat('Y-m-d H:i:s', $r['void_rejected_at'], new DateTimeZone('Asia/Manila'))->format(DateTime::ATOM) : $r['void_rejected_at']) : null,
+            'voidRejectedBy' => $r['void_rejected_by'] ?? null,
+            'voidInventoryRestored' => (bool)($r['void_inventory_restored'] ?? false),
+            'refundTotal' => (float)($r['refund_total'] ?? 0),
+            'returns' => $returns,
+            'items' => $items
+        ]
+    ]);
+    exit;
+}
+
 // GET: Fetch all data from MySQL
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
+    // RBAC Security Check: Cashier parameter tampering protection
+    if ($actingRole === 'cashier') {
+        if (isset($_GET['cashier_id']) && (string)$_GET['cashier_id'] !== $actingUserId) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'error' => 'Access denied: You cannot view sales transactions of other cashiers.']);
+            exit;
+        }
+        if (isset($_GET['user_id']) && (string)$_GET['user_id'] !== $actingUserId) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'error' => 'Access denied: You cannot view sales transactions of other cashiers.']);
+            exit;
+        }
+        if (isset($_GET['cashier']) && (string)$_GET['cashier'] !== ($actingUser['name'] ?? '') && (string)$_GET['cashier'] !== ($actingUser['username'] ?? '') && (string)$_GET['cashier'] !== '') {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'error' => 'Access denied: You cannot view sales transactions of other cashiers.']);
+            exit;
+        }
+    }
     try {
         // Load product sizes joined with inventory
         $sizesByProd = [];
@@ -461,45 +787,92 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
             ];
         }
 
-        // Users
+        // Users (passwords and hashes are strictly excluded from API response)
         $users = [];
         $res = $conn->query("SELECT * FROM users ORDER BY name ASC");
         while ($r = $res->fetch_assoc()) {
             $users[] = [
                 'id' => $r['id'],
                 'username' => $r['username'],
-                'password' => $r['password'],
                 'name' => $r['name'],
                 'role' => $r['role'],
                 'status' => $r['status']
             ];
         }
 
-        // Sales
+        // Sales (Role-Based Access Controlled)
         $sales = [];
-        $res = $conn->query("SELECT * FROM sales ORDER BY date DESC");
-        while ($r = $res->fetch_assoc()) {
-            $items = [];
-            if (!empty($r['items_json'])) {
-                $items = json_decode($r['items_json'], true) ?: [];
+        $cStmt = null;
+        if ($actingRole === 'admin') {
+            // Admin retains full access to all transactions across all cashiers
+            $res = $conn->query("SELECT * FROM sales ORDER BY date DESC");
+        } elseif ($actingRole === 'cashier') {
+            // Cashiers are strictly restricted to their own sales transactions
+            $cName = $actingUser['name'] ?? '';
+            $cStmt = $conn->prepare("SELECT * FROM sales WHERE cashier_id = ? OR (cashier_id IS NULL AND cashier_name = ?) ORDER BY date DESC");
+            if ($cStmt) {
+                $cStmt->bind_param("ss", $actingUserId, $cName);
+                $cStmt->execute();
+                $res = $cStmt->get_result();
+            } else {
+                $res = false;
             }
-            $returns = [];
-            if (!empty($r['returns_json'])) {
-                $returns = json_decode($r['returns_json'], true) ?: [];
+        } else {
+            // Unauthenticated or roles without sales module access
+            $res = false;
+        }
+
+        if ($res) {
+            while ($r = $res->fetch_assoc()) {
+                $items = [];
+                if (!empty($r['items_json'])) {
+                    $items = json_decode($r['items_json'], true) ?: [];
+                }
+                $returns = [];
+                if (!empty($r['returns_json'])) {
+                    $returns = json_decode($r['returns_json'], true) ?: [];
+                }
+                $saleDate = DateTime::createFromFormat('Y-m-d H:i:s', $r['date'], new DateTimeZone('Asia/Manila'));
+                $discountPct = isset($r['discount_pct']) ? (float)$r['discount_pct'] : 0.0;
+                $discountAmount = isset($r['discount_amount']) ? (float)$r['discount_amount'] : 0.0;
+                $sales[] = [
+                    'id' => $r['id'],
+                    'receiptNo' => $r['receipt_no'] ?? null,
+                    'customerName' => $r['customer_name'] ?? null,
+                    'customer_name' => $r['customer_name'] ?? null,
+                    'date' => $saleDate ? $saleDate->format(DateTime::ATOM) : $r['date'],
+                    'cashierId' => $r['cashier_id'] ?? null,
+                    'cashier_id' => $r['cashier_id'] ?? null,
+                    'cashierName' => $r['cashier_name'],
+                    'paymentMethod' => $r['payment_method'] ?? 'Cash',
+                    'cashTendered' => isset($r['cash_tendered']) && (float)$r['cash_tendered'] > 0 ? (float)$r['cash_tendered'] : (float)($r['total'] ?: $r['subtotal']),
+                    'changeAmount' => isset($r['change_amount']) ? (float)$r['change_amount'] : 0.0,
+                    'subtotal' => (float)$r['subtotal'],
+                    'discountPct' => $discountPct,
+                    'discountPercentage' => $discountPct,
+                    'discountAmount' => $discountAmount,
+                    'discount' => $discountAmount,
+                    'total' => (float)($r['total'] ?: ($r['subtotal'] - $discountAmount)),
+                    'status' => $r['status'] ?? 'completed',
+                    'voidReason' => $r['void_reason'] ?? null,
+                    'voidedAt' => !empty($r['voided_at']) ? (DateTime::createFromFormat('Y-m-d H:i:s', $r['voided_at'], new DateTimeZone('Asia/Manila')) ? DateTime::createFromFormat('Y-m-d H:i:s', $r['voided_at'], new DateTimeZone('Asia/Manila'))->format(DateTime::ATOM) : $r['voided_at']) : null,
+                    'voidedBy' => $r['voided_by'] ?? null,
+                    'voidRequestId' => $r['void_request_id'] ?? null,
+                    'voidExplanation' => $r['void_explanation'] ?? null,
+                    'voidRequestedAt' => !empty($r['void_requested_at']) ? (DateTime::createFromFormat('Y-m-d H:i:s', $r['void_requested_at'], new DateTimeZone('Asia/Manila')) ? DateTime::createFromFormat('Y-m-d H:i:s', $r['void_requested_at'], new DateTimeZone('Asia/Manila'))->format(DateTime::ATOM) : $r['void_requested_at']) : null,
+                    'voidRequestedBy' => $r['void_requested_by'] ?? null,
+                    'voidAdminRemarks' => $r['void_admin_remarks'] ?? null,
+                    'voidRejectedAt' => !empty($r['void_rejected_at']) ? (DateTime::createFromFormat('Y-m-d H:i:s', $r['void_rejected_at'], new DateTimeZone('Asia/Manila')) ? DateTime::createFromFormat('Y-m-d H:i:s', $r['void_rejected_at'], new DateTimeZone('Asia/Manila'))->format(DateTime::ATOM) : $r['void_rejected_at']) : null,
+                    'voidRejectedBy' => $r['void_rejected_by'] ?? null,
+                    'voidInventoryRestored' => (bool)($r['void_inventory_restored'] ?? false),
+                    'refundTotal' => (float)($r['refund_total'] ?? 0),
+                    'returns' => $returns,
+                    'items' => $items
+                ];
             }
-            $saleDate = DateTime::createFromFormat('Y-m-d H:i:s', $r['date'], new DateTimeZone('Asia/Manila'));
-            $sales[] = [
-                'id' => $r['id'],
-                'receiptNo' => $r['receipt_no'] ?? null,
-                'date' => $saleDate ? $saleDate->format(DateTime::ATOM) : $r['date'],
-                'cashierName' => $r['cashier_name'],
-                'subtotal' => (float)$r['subtotal'],
-                'total' => (float)($r['total'] ?: $r['subtotal']),
-                'status' => $r['status'] ?? 'completed',
-                'refundTotal' => (float)($r['refund_total'] ?? 0),
-                'returns' => $returns,
-                'items' => $items
-            ];
+            if ($cStmt) {
+                $cStmt->close();
+            }
         }
 
         // Movements
@@ -517,6 +890,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
             if ($productName === '') {
                 $productName = $r['type'] === 'colormix' ? 'Color Mix' : 'Unknown product';
             }
+            $formulaJson = $r['formula_json'] ?? null;
+            $components = null;
+            if (!empty($formulaJson)) {
+                $components = json_decode($formulaJson, true) ?: null;
+            }
             $movements[] = [
                 'id' => $r['id'],
                 'date' => $movementDate ? $movementDate->format(DateTime::ATOM) : $r['date'],
@@ -525,6 +903,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
                 'sizeId' => $r['size_id'] ?? null,
                 'containerSize' => isset($r['container_size']) && $r['container_size'] !== null ? (float)$r['container_size'] : null,
                 'productName' => $productName,
+                'colorHex' => $r['color_hex'] ?? null,
+                'hexColor' => $r['color_hex'] ?? null,
+                'formulaJson' => $formulaJson,
+                'components' => $components,
                 'qtyChange' => (float)$r['qty_change'],
                 'staffName' => $r['staff_name'],
                 'note' => $r['note'] ?? ''
@@ -589,6 +971,38 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
             }
         }
 
+        // Void Requests
+        $voidRequests = [];
+        $vres = $conn->query("SELECT * FROM void_requests ORDER BY date DESC");
+        if ($vres) {
+            while ($vr = $vres->fetch_assoc()) {
+                $vitems = [];
+                if (!empty($vr['items_json'])) {
+                    $vitems = json_decode($vr['items_json'], true) ?: [];
+                }
+                $vReqDate = DateTime::createFromFormat('Y-m-d H:i:s', $vr['date'], new DateTimeZone('Asia/Manila'));
+                $vRevDate = !empty($vr['reviewed_at']) ? DateTime::createFromFormat('Y-m-d H:i:s', $vr['reviewed_at'], new DateTimeZone('Asia/Manila')) : null;
+                $voidRequests[] = [
+                    'id' => $vr['id'],
+                    'saleId' => $vr['sale_id'],
+                    'receiptNo' => $vr['receipt_no'],
+                    'date' => $vReqDate ? $vReqDate->format(DateTime::ATOM) : $vr['date'],
+                    'requestDate' => $vReqDate ? $vReqDate->format(DateTime::ATOM) : $vr['date'],
+                    'cashierId' => $vr['cashier_id'],
+                    'cashierName' => $vr['cashier_name'],
+                    'reason' => $vr['reason'],
+                    'explanation' => $vr['explanation'] ?? '',
+                    'total' => (float)$vr['total'],
+                    'items' => $vitems,
+                    'status' => $vr['status'],
+                    'reviewedBy' => $vr['reviewed_by'] ?? null,
+                    'reviewedAt' => $vRevDate ? $vRevDate->format(DateTime::ATOM) : ($vr['reviewed_at'] ?? null),
+                    'adminRemarks' => $vr['admin_remarks'] ?? null,
+                    'inventoryRestored' => (bool)($vr['inventory_restored'] ?? false)
+                ];
+            }
+        }
+
         echo json_encode([
             'success' => true,
             'db' => [
@@ -600,7 +1014,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
                 'sales' => $sales,
                 'movements' => $movements,
                 'purchaseOrders' => $purchaseOrders,
-                'adjustmentRequests' => $adjustmentRequests
+                'adjustmentRequests' => $adjustmentRequests,
+                'voidRequests' => $voidRequests
             ]
         ]);
     } catch (Throwable $e) {
@@ -623,13 +1038,14 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 
     $dbData = $payload['db'];
     
-    // RBAC: Verify acting user and role from database
+    // RBAC: Verify acting user and role from authenticated session or database
+    $sessionUserId = $_SESSION['user_id'] ?? null;
     $actingUser = $payload['currentUser'] ?? null;
-    $actingUserId = (string)($actingUser['id'] ?? '');
+    $actingUserId = (string)($sessionUserId ?: ($actingUser['id'] ?? ''));
     $actingRole = (string)($actingUser['role'] ?? '');
 
     if ($actingUserId !== '') {
-        $uStmt = $conn->prepare("SELECT id, role, status FROM users WHERE id = ? LIMIT 1");
+        $uStmt = $conn->prepare("SELECT id, username, name, role, status FROM users WHERE id = ? LIMIT 1");
         if ($uStmt) {
             $uStmt->bind_param("s", $actingUserId);
             $uStmt->execute();
@@ -641,6 +1057,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     exit;
                 }
                 $actingRole = (string)$uRow['role'];
+                $actingUser = $uRow;
             }
             $uStmt->close();
         }
@@ -736,8 +1153,62 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 if ($iNum > $maxInvNum) $maxInvNum = $iNum;
             }
 
+            // Pre-fetch all existing products to detect and skip unchanged products
+            $existingProdMap = [];
+            $epRes = $conn->query("SELECT id, product_id, name, brand, type, category, color, color_hex, supplier_id, price, recent_price, pending_price, stock, can_stock, opened_stock, opened_can_size, opened_by_size, sizes, pending_sizes, pending_edit, threshold, threshold_by_size, status, deactivation_reason, updated_at FROM products");
+            if ($epRes) {
+                while ($epRow = $epRes->fetch_assoc()) {
+                    $pidKey = (string)$epRow['id'];
+                    $existingProdMap[$pidKey] = $epRow;
+                }
+            }
+
             foreach ($dbData['products'] as $p) {
                 $id = (string)$p['id'];
+                $existingP = $existingProdMap[$id] ?? null;
+
+                // Concurrency and dirty check: skip updating if product has not changed
+                if ($existingP !== null) {
+                    $pPrice = (float)($p['price'] ?? 0);
+                    $pStock = (float)($p['stock'] ?? 0);
+                    $pStatus = (string)($p['status'] ?? 'active');
+                    $pThresh = (float)($p['threshold'] ?? 5);
+                    $pName = (string)($p['productName'] ?? ($p['product_name'] ?? ($p['name'] ?? '')));
+                    $pBrand = (string)($p['brand'] ?? '');
+                    $pColor = (string)($p['color'] ?? '-');
+                    $pRecent = (isset($p['recentPrice']) && $p['recentPrice'] !== null && $p['recentPrice'] !== '') ? (float)$p['recentPrice'] : null;
+                    $pPending = (isset($p['pendingPrice']) && $p['pendingPrice'] !== null && $p['pendingPrice'] !== '') ? (float)$p['pendingPrice'] : null;
+                    $exRecent = ($existingP['recent_price'] !== null && $existingP['recent_price'] !== '') ? (float)$existingP['recent_price'] : null;
+                    $exPending = ($existingP['pending_price'] !== null && $existingP['pending_price'] !== '') ? (float)$existingP['pending_price'] : null;
+
+                    $pCanStock = isset($p['canStock']) && (is_array($p['canStock']) || is_object($p['canStock'])) ? (array)$p['canStock'] : [];
+                    $exCanStock = (!empty($existingP['can_stock']) && is_array(json_decode($existingP['can_stock'], true))) ? json_decode($existingP['can_stock'], true) : [];
+
+                    $pOpenedBySize = isset($p['openedBySize']) && (is_array($p['openedBySize']) || is_object($p['openedBySize'])) ? (array)$p['openedBySize'] : [];
+                    $exOpenedBySize = (!empty($existingP['opened_by_size']) && is_array(json_decode($existingP['opened_by_size'], true))) ? json_decode($existingP['opened_by_size'], true) : [];
+
+                    $hasPendingEdits = !empty($p['pendingEdit']) || !empty($p['pendingSizes']) || !empty($existingP['pending_edit']) || !empty($existingP['pending_sizes']);
+
+                    if (
+                        !$hasPendingEdits &&
+                        (float)$existingP['price'] === $pPrice &&
+                        (float)$existingP['stock'] === $pStock &&
+                        (string)$existingP['status'] === $pStatus &&
+                        (float)$existingP['threshold'] === $pThresh &&
+                        (string)$existingP['name'] === $pName &&
+                        (string)$existingP['brand'] === $pBrand &&
+                        (string)$existingP['color'] === $pColor &&
+                        $pRecent === $exRecent &&
+                        $pPending === $exPending &&
+                        (float)($existingP['opened_stock'] ?? 0) === (float)($p['openedStock'] ?? 0) &&
+                        (int)($existingP['opened_can_size'] ?? 0) === (int)($p['openedCanSize'] ?? 0) &&
+                        $pCanStock == $exCanStock &&
+                        $pOpenedBySize == $exOpenedBySize
+                    ) {
+                        continue; // UNCHANGED PRODUCT: Skip SQL updates
+                    }
+                }
+
                 $productId = (string)($p['productId'] ?? ($p['product_id'] ?? $id));
                 $name = (string)$p['name'];
                 $productName = (string)($p['productName'] ?? ($p['product_name'] ?? $name));
@@ -877,8 +1348,16 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             }
         }
 
-        // 2. Sync Suppliers (Admin Only RBAC)
+        // 2. Sync Suppliers (Admin Only RBAC - skips unchanged suppliers)
         if ($actingRole === 'admin' && !empty($dbData['suppliers']) && is_array($dbData['suppliers'])) {
+            $existingSupMap = [];
+            $esupRes = $conn->query("SELECT id, name, contact, phone, email, address, product_ids, status FROM suppliers");
+            if ($esupRes) {
+                while ($esupRow = $esupRes->fetch_assoc()) {
+                    $existingSupMap[$esupRow['id']] = $esupRow['name'] . '_' . (string)$esupRow['contact'] . '_' . (string)$esupRow['phone'] . '_' . (string)$esupRow['email'] . '_' . (string)$esupRow['address'] . '_' . (string)$esupRow['product_ids'] . '_' . (string)$esupRow['status'];
+                }
+            }
+
             $stmt = $conn->prepare("INSERT INTO suppliers (id, name, contact, phone, email, address, product_ids, status)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
@@ -900,6 +1379,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 $productIds = json_encode($s['productIds'] ?? []);
                 $status = (string)($s['status'] ?? 'active');
 
+                $supSig = $name . '_' . $contact . '_' . $phone . '_' . $email . '_' . $address . '_' . $productIds . '_' . $status;
+                if (isset($existingSupMap[$id]) && $existingSupMap[$id] === $supSig) {
+                    continue; // Skip unchanged supplier
+                }
+
                 $stmt->bind_param("ssssssss", $id, $name, $contact, $phone, $email, $address, $productIds, $status);
                 $stmt->execute();
             }
@@ -908,6 +1392,14 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 
         // 3. Sync Users (Admin Only RBAC)
         if ($actingRole === 'admin' && !empty($dbData['users']) && is_array($dbData['users'])) {
+            $existingUserPass = [];
+            $eupRes = $conn->query("SELECT id, password FROM users");
+            if ($eupRes) {
+                while ($eupRow = $eupRes->fetch_assoc()) {
+                    $existingUserPass[$eupRow['id']] = $eupRow['password'];
+                }
+            }
+
             $stmt = $conn->prepare("INSERT INTO users (id, username, password, name, role, status)
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
@@ -920,54 +1412,190 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             foreach ($dbData['users'] as $u) {
                 $id = (string)$u['id'];
                 $username = (string)$u['username'];
-                $password = (string)$u['password'];
                 $name = (string)$u['name'];
                 $role = (string)($u['role'] ?? 'cashier');
                 $status = (string)($u['status'] ?? 'active');
 
-                $stmt->bind_param("ssssss", $id, $username, $password, $name, $role, $status);
+                // Secure password handling: hash new plaintext passwords, keep existing bcrypt hashes
+                $passInput = (string)($u['password'] ?? ($u['newPassword'] ?? ''));
+                $finalHash = '';
+                if ($passInput !== '') {
+                    if (preg_match('/^\$2[ayb]\$\d{2}\$/', $passInput)) {
+                        $finalHash = $passInput;
+                    } else {
+                        $finalHash = password_hash($passInput, PASSWORD_BCRYPT);
+                    }
+                } elseif (isset($existingUserPass[$id]) && $existingUserPass[$id] !== '') {
+                    $finalHash = $existingUserPass[$id];
+                } else {
+                    $finalHash = password_hash('password123', PASSWORD_BCRYPT);
+                }
+
+                $stmt->bind_param("ssssss", $id, $username, $finalHash, $name, $role, $status);
                 $stmt->execute();
             }
             $stmt->close();
         }
 
-        // 4. Sync Sales
+        // 4. Sync Sales (Optimized: skips unchanged historical sales)
         if (!empty($dbData['sales']) && is_array($dbData['sales'])) {
-            $stmt = $conn->prepare("INSERT INTO sales (id, receipt_no, date, cashier_name, subtotal, total, status, refund_total, returns_json, items_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            $existingSalesMap = [];
+            $existingSalesOwner = [];
+            $esRes = $conn->query("SELECT id, status, total, refund_total, discount_amount, customer_name, cashier_id, cashier_name, void_request_id, voided_at, void_rejected_at FROM sales");
+            if ($esRes) {
+                while ($esRow = $esRes->fetch_assoc()) {
+                    $existingSalesMap[$esRow['id']] = $esRow['status'] . '_' . (float)$esRow['total'] . '_' . (float)$esRow['refund_total'] . '_' . (float)($esRow['discount_amount'] ?? 0) . '_' . ($esRow['customer_name'] ?? '') . '_' . ($esRow['void_request_id'] ?? '') . '_' . ($esRow['voided_at'] ?? '') . '_' . ($esRow['void_rejected_at'] ?? '');
+                    $existingSalesOwner[$esRow['id']] = [
+                        'cashier_id' => (string)($esRow['cashier_id'] ?? ''),
+                        'cashier_name' => (string)($esRow['cashier_name'] ?? ''),
+                        'status' => (string)($esRow['status'] ?? 'completed')
+                    ];
+                }
+            }
+
+            $stmt = $conn->prepare("INSERT INTO sales (id, receipt_no, customer_name, date, cashier_id, cashier_name, payment_method, cash_tendered, change_amount, void_reason, voided_at, voided_by, subtotal, discount_pct, discount_amount, total, status, refund_total, returns_json, items_json, void_request_id, void_explanation, void_requested_at, void_requested_by, void_admin_remarks, void_rejected_at, void_rejected_by, void_inventory_restored)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
                     receipt_no = VALUES(receipt_no),
+                    customer_name = VALUES(customer_name),
                     date = VALUES(date),
+                    cashier_id = VALUES(cashier_id),
                     cashier_name = VALUES(cashier_name),
+                    payment_method = VALUES(payment_method),
+                    cash_tendered = VALUES(cash_tendered),
+                    change_amount = VALUES(change_amount),
+                    void_reason = VALUES(void_reason),
+                    voided_at = VALUES(voided_at),
+                    voided_by = VALUES(voided_by),
                     subtotal = VALUES(subtotal),
+                    discount_pct = VALUES(discount_pct),
+                    discount_amount = VALUES(discount_amount),
                     total = VALUES(total),
                     status = VALUES(status),
                     refund_total = VALUES(refund_total),
                     returns_json = VALUES(returns_json),
-                    items_json = VALUES(items_json)");
+                    items_json = VALUES(items_json),
+                    void_request_id = VALUES(void_request_id),
+                    void_explanation = VALUES(void_explanation),
+                    void_requested_at = VALUES(void_requested_at),
+                    void_requested_by = VALUES(void_requested_by),
+                    void_admin_remarks = VALUES(void_admin_remarks),
+                    void_rejected_at = VALUES(void_rejected_at),
+                    void_rejected_by = VALUES(void_rejected_by),
+                    void_inventory_restored = VALUES(void_inventory_restored)");
 
             foreach ($dbData['sales'] as $sale) {
                 $id = (string)$sale['id'];
+
+                // RBAC Security for Cashiers:
+                if ($actingRole === 'cashier') {
+                    if (isset($existingSalesOwner[$id])) {
+                        $ownerId = $existingSalesOwner[$id]['cashier_id'];
+                        $ownerName = $existingSalesOwner[$id]['cashier_name'];
+                        $isOwner = ($ownerId === $actingUserId) || ($ownerId === '' && strcasecmp($ownerName, $actingUser['name'] ?? '') === 0);
+                        if (!$isOwner) {
+                            continue; // Skip unauthorized modification of another cashier's sale
+                        }
+                    }
+                    // Immutable cashier identity enforcement
+                    $cashierId = $actingUserId;
+                    $cashierName = !empty($actingUser['name']) ? (string)$actingUser['name'] : (!empty($sale['cashierName']) ? (string)$sale['cashierName'] : 'Cashier');
+                } else {
+                    $cashierId = !empty($sale['cashierId']) ? (string)$sale['cashierId'] : (!empty($sale['cashier_id']) ? (string)$sale['cashier_id'] : ($actingUserId ?: null));
+                    $cashierName = (string)($sale['cashierName'] ?? ($actingUser['name'] ?? 'Admin'));
+                }
+
+                $status = (string)($sale['status'] ?? 'completed');
+                $subtotal = (float)($sale['subtotal'] ?? 0);
+                $discountPct = (float)($sale['discountPct'] ?? $sale['discountPercentage'] ?? 0);
+                $discountAmount = (float)($sale['discountAmount'] ?? $sale['discount'] ?? 0);
+                $total = (float)($sale['total'] ?? ($subtotal - $discountAmount));
+                $refundTotal = (float)($sale['refundTotal'] ?? 0);
+
+                $rawCustName = isset($sale['customerName']) ? (string)$sale['customerName'] : (isset($sale['customer_name']) ? (string)$sale['customer_name'] : '');
+                $cleanCustName = trim($rawCustName);
+                if ($cleanCustName !== '') {
+                    if (mb_strlen($cleanCustName) > 150) {
+                        $cleanCustName = mb_substr($cleanCustName, 0, 150);
+                    }
+                    $customerName = $cleanCustName;
+                } else {
+                    $customerName = null;
+                }
+
+                $voidRequestId = !empty($sale['voidRequestId']) ? (string)$sale['voidRequestId'] : null;
+                $voidReason = !empty($sale['voidReason']) ? (string)$sale['voidReason'] : null;
+                $voidExplanation = !empty($sale['voidExplanation']) ? (string)$sale['voidExplanation'] : null;
+                $voidedAt = !empty($sale['voidedAt']) ? date('Y-m-d H:i:s', strtotime($sale['voidedAt'])) : null;
+                $voidedBy = !empty($sale['voidedBy']) ? (string)$sale['voidedBy'] : null;
+                $voidRequestedAt = !empty($sale['voidRequestedAt']) ? date('Y-m-d H:i:s', strtotime($sale['voidRequestedAt'])) : null;
+                $voidRequestedBy = !empty($sale['voidRequestedBy']) ? (string)$sale['voidRequestedBy'] : null;
+                $voidAdminRemarks = !empty($sale['voidAdminRemarks']) ? (string)$sale['voidAdminRemarks'] : null;
+                $voidRejectedAt = !empty($sale['voidRejectedAt']) ? date('Y-m-d H:i:s', strtotime($sale['voidRejectedAt'])) : null;
+                $voidRejectedBy = !empty($sale['voidRejectedBy']) ? (string)$sale['voidRejectedBy'] : null;
+                $voidInventoryRestored = !empty($sale['voidInventoryRestored']) ? 1 : 0;
+
+                // RBAC Security for Sales Status:
+                // If a sale is already finalized as Voided or Void Rejected in the database, preserve that finalized status!
+                $exStatus = (string)($existingSalesOwner[$id]['status'] ?? '');
+                $normExStatus = strtolower(trim($exStatus));
+                if ($normExStatus === 'voided' || $normExStatus === 'void') {
+                    $status = 'Voided';
+                    $voidInventoryRestored = 1;
+                } elseif ($normExStatus === 'void rejected' || $normExStatus === 'void_rejected') {
+                    $status = 'Void Rejected';
+                } elseif ($actingRole !== 'admin') {
+                    // Non-admins can only submit 'Pending Void Approval' (or keep completed).
+                    $normStatus = strtolower(trim($status));
+                    if ($normStatus === 'voided' || $normStatus === 'void' || $normStatus === 'void rejected' || $normStatus === 'void_rejected') {
+                        $status = 'Pending Void Approval';
+                        $voidedAt = null;
+                        $voidedBy = null;
+                        $voidRejectedAt = null;
+                        $voidRejectedBy = null;
+                        $voidInventoryRestored = 0;
+                    }
+                }
+
+                $saleSig = $status . '_' . $total . '_' . $refundTotal . '_' . $discountAmount . '_' . ($customerName ?? '') . '_' . ($voidRequestId ?? '') . '_' . ($voidedAt ?? '') . '_' . ($voidRejectedAt ?? '');
+                if (isset($existingSalesMap[$id]) && $existingSalesMap[$id] === $saleSig) {
+                    continue; // Skip unchanged sale record
+                }
+
                 $receiptNo = (string)($sale['receiptNo'] ?? '');
                 $date = date('Y-m-d H:i:s', strtotime($sale['date']));
-                $cashierName = (string)$sale['cashierName'];
-                $subtotal = (float)($sale['subtotal'] ?? 0);
-                $total = (float)($sale['total'] ?? $subtotal);
-                $status = (string)($sale['status'] ?? 'completed');
-                $refundTotal = (float)($sale['refundTotal'] ?? 0);
+                $paymentMethod = !empty($sale['paymentMethod']) ? (string)$sale['paymentMethod'] : 'Cash';
+                $cashTendered = isset($sale['cashTendered']) ? (float)$sale['cashTendered'] : (float)$total;
+                $changeAmount = isset($sale['changeAmount']) ? (float)$sale['changeAmount'] : 0.0;
                 $returnsJson = json_encode($sale['returns'] ?? []);
                 $itemsJson = json_encode($sale['items'] ?? []);
 
-                $stmt->bind_param("ssssddsdss", $id, $receiptNo, $date, $cashierName, $subtotal, $total, $status, $refundTotal, $returnsJson, $itemsJson);
+                $stmt->bind_param(
+                    "sssssssddsssddddsdsssssssssi",
+                    $id, $receiptNo, $customerName, $date, $cashierId, $cashierName,
+                    $paymentMethod, $cashTendered, $changeAmount, $voidReason, $voidedAt, $voidedBy,
+                    $subtotal, $discountPct, $discountAmount, $total, $status, $refundTotal,
+                    $returnsJson, $itemsJson,
+                    $voidRequestId, $voidExplanation, $voidRequestedAt, $voidRequestedBy,
+                    $voidAdminRemarks, $voidRejectedAt, $voidRejectedBy, $voidInventoryRestored
+                );
                 $stmt->execute();
             }
             $stmt->close();
         }
 
-        // 5. Sync Movements
+        // 5. Sync Movements (Optimized: movements are immutable ledger entries, skip existing)
         if (!empty($dbData['movements']) && is_array($dbData['movements'])) {
-            $stmt = $conn->prepare("INSERT INTO movements (id, date, type, product_id, size_id, container_size, product_name, qty_change, staff_name, note)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            $existingMovementsMap = [];
+            $emRes = $conn->query("SELECT id FROM movements");
+            if ($emRes) {
+                while ($emRow = $emRes->fetch_assoc()) {
+                    $existingMovementsMap[$emRow['id']] = true;
+                }
+            }
+
+            $stmt = $conn->prepare("INSERT INTO movements (id, date, type, product_id, size_id, container_size, product_name, color_hex, qty_change, staff_name, note, formula_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
                     date = VALUES(date),
                     type = VALUES(type),
@@ -975,21 +1603,29 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     size_id = VALUES(size_id),
                     container_size = VALUES(container_size),
                     product_name = VALUES(product_name),
+                    color_hex = VALUES(color_hex),
                     qty_change = VALUES(qty_change),
                     staff_name = VALUES(staff_name),
-                    note = VALUES(note)");
+                    note = VALUES(note),
+                    formula_json = VALUES(formula_json)");
 
             foreach ($dbData['movements'] as $m) {
                 $id = (string)$m['id'];
+                if (isset($existingMovementsMap[$id])) {
+                    continue; // Skip already recorded ledger movement
+                }
+
                 $date = date('Y-m-d H:i:s', strtotime($m['date']));
                 $type = (string)$m['type'];
                 $productId = !empty($m['productId']) ? (string)$m['productId'] : (!empty($m['product_id']) ? (string)$m['product_id'] : null);
                 $sizeId = !empty($m['sizeId']) ? (string)$m['sizeId'] : (!empty($m['size_id']) ? (string)$m['size_id'] : null);
                 $containerSize = isset($m['containerSize']) && $m['containerSize'] !== null ? (float)$m['containerSize'] : (isset($m['container_size']) && $m['container_size'] !== null ? (float)$m['container_size'] : null);
                 $productName = (string)$m['productName'];
+                $colorHex = !empty($m['colorHex']) ? (string)$m['colorHex'] : (!empty($m['hexColor']) ? (string)$m['hexColor'] : null);
                 $qtyChange = (float)($m['qtyChange'] ?? 0);
                 $staffName = (string)($m['staffName'] ?? '');
                 $note = (string)($m['note'] ?? '');
+                $formulaJson = !empty($m['formulaJson']) ? (string)$m['formulaJson'] : (!empty($m['components']) ? json_encode($m['components']) : null);
 
                 if (!$sizeId && !empty($note) && preg_match('/\b(SZ-\d+)\b/', $note, $szm)) {
                     $sizeId = $szm[1];
@@ -998,14 +1634,22 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     $containerSize = (float)$csm[1];
                 }
 
-                $stmt->bind_param("sssssdsdss", $id, $date, $type, $productId, $sizeId, $containerSize, $productName, $qtyChange, $staffName, $note);
+                $stmt->bind_param("sssssdssdsss", $id, $date, $type, $productId, $sizeId, $containerSize, $productName, $colorHex, $qtyChange, $staffName, $note, $formulaJson);
                 $stmt->execute();
             }
             $stmt->close();
         }
 
-        // 6. Sync Purchase Orders
+        // 6. Sync Purchase Orders (Optimized: skips unchanged POs)
         if (!empty($dbData['purchaseOrders']) && is_array($dbData['purchaseOrders'])) {
+            $existingPOMap = [];
+            $epoRes = $conn->query("SELECT id, status, total_amount, received_at FROM purchase_orders");
+            if ($epoRes) {
+                while ($epoRow = $epoRes->fetch_assoc()) {
+                    $existingPOMap[$epoRow['id']] = $epoRow['status'] . '_' . (float)$epoRow['total_amount'] . '_' . (string)$epoRow['received_at'];
+                }
+            }
+
             $stmt = $conn->prepare("INSERT INTO purchase_orders (id, po_number, supplier_id, supplier_name, order_date, expected_date, status, total_amount, items_json, notes, created_by, received_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
@@ -1023,17 +1667,23 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 
             foreach ($dbData['purchaseOrders'] as $po) {
                 $id = (string)$po['id'];
+                $status = (string)($po['status'] ?? 'ordered');
+                $totalAmount = (float)($po['totalAmount'] ?? 0);
+                $receivedAt = !empty($po['receivedAt']) ? date('Y-m-d H:i:s', strtotime($po['receivedAt'])) : null;
+
+                $poSig = $status . '_' . $totalAmount . '_' . (string)$receivedAt;
+                if (isset($existingPOMap[$id]) && $existingPOMap[$id] === $poSig) {
+                    continue; // Skip unchanged PO
+                }
+
                 $poNumber = (string)($po['poNumber'] ?? '');
                 $supplierId = (string)($po['supplierId'] ?? '');
                 $supplierName = (string)($po['supplierName'] ?? '');
                 $orderDate = date('Y-m-d H:i:s', strtotime($po['orderDate'] ?? 'now'));
                 $expectedDate = !empty($po['expectedDate']) ? date('Y-m-d', strtotime($po['expectedDate'])) : null;
-                $status = (string)($po['status'] ?? 'ordered');
-                $totalAmount = (float)($po['totalAmount'] ?? 0);
                 $itemsJson = json_encode($po['items'] ?? []);
                 $notes = (string)($po['notes'] ?? '');
                 $createdBy = (string)($po['createdBy'] ?? '');
-                $receivedAt = !empty($po['receivedAt']) ? date('Y-m-d H:i:s', strtotime($po['receivedAt'])) : null;
 
                 $stmt->bind_param("sssssssdssss", $id, $poNumber, $supplierId, $supplierName, $orderDate, $expectedDate, $status, $totalAmount, $itemsJson, $notes, $createdBy, $receivedAt);
                 $stmt->execute();
@@ -1041,8 +1691,16 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             $stmt->close();
         }
 
-        // 7. Sync Adjustment Requests
+        // 7. Sync Adjustment Requests (Optimized: skips unchanged adjustment requests)
         if (!empty($dbData['adjustmentRequests']) && is_array($dbData['adjustmentRequests'])) {
+            $existingARMap = [];
+            $earRes = $conn->query("SELECT id, status, reviewed_at FROM adjustment_requests");
+            if ($earRes) {
+                while ($earRow = $earRes->fetch_assoc()) {
+                    $existingARMap[$earRow['id']] = $earRow['status'] . '_' . (string)$earRow['reviewed_at'];
+                }
+            }
+
             $stmt = $conn->prepare("INSERT INTO adjustment_requests (id, req_number, date, requested_by, role, status, rows_json, batch_note, reviewed_by, reviewed_at, reject_reason)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
@@ -1059,15 +1717,21 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 
             foreach ($dbData['adjustmentRequests'] as $ar) {
                 $id = (string)$ar['id'];
+                $status = (string)($ar['status'] ?? 'pending');
+                $reviewedAt = !empty($ar['reviewedAt']) ? date('Y-m-d H:i:s', strtotime($ar['reviewedAt'])) : null;
+
+                $arSig = $status . '_' . (string)$reviewedAt;
+                if (isset($existingARMap[$id]) && $existingARMap[$id] === $arSig) {
+                    continue; // Skip unchanged adjustment request
+                }
+
                 $reqNumber = (string)($ar['reqNumber'] ?? '');
                 $date = date('Y-m-d H:i:s', strtotime($ar['date'] ?? 'now'));
                 $requestedBy = (string)($ar['requestedBy'] ?? 'staff');
                 $role = (string)($ar['role'] ?? 'staff');
-                $status = (string)($ar['status'] ?? 'pending');
                 $rowsJson = json_encode($ar['rows'] ?? []);
                 $batchNote = (string)($ar['batchNote'] ?? '');
                 $reviewedBy = !empty($ar['reviewedBy']) ? (string)$ar['reviewedBy'] : null;
-                $reviewedAt = !empty($ar['reviewedAt']) ? date('Y-m-d H:i:s', strtotime($ar['reviewedAt'])) : null;
                 $rejectReason = !empty($ar['rejectReason']) ? (string)$ar['rejectReason'] : null;
 
                 // RBAC: Only admin can approve or reject adjustment requests; all other roles can only submit 'pending'
@@ -1086,6 +1750,85 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 }
 
                 $stmt->bind_param("sssssssssss", $id, $reqNumber, $date, $requestedBy, $role, $status, $rowsJson, $batchNote, $reviewedBy, $reviewedAt, $rejectReason);
+                $stmt->execute();
+            }
+            $stmt->close();
+        }
+
+        // 8. Sync Void Requests
+        if (!empty($dbData['voidRequests']) && is_array($dbData['voidRequests'])) {
+            $existingVRMap = [];
+            $evrRes = $conn->query("SELECT id, status, reviewed_at FROM void_requests");
+            if ($evrRes) {
+                while ($evrRow = $evrRes->fetch_assoc()) {
+                    $existingVRMap[$evrRow['id']] = $evrRow['status'] . '_' . (string)$evrRow['reviewed_at'];
+                }
+            }
+
+            $stmt = $conn->prepare("INSERT INTO void_requests (id, sale_id, receipt_no, date, cashier_id, cashier_name, reason, explanation, total, items_json, status, reviewed_by, reviewed_at, admin_remarks, inventory_restored)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    sale_id = VALUES(sale_id),
+                    receipt_no = VALUES(receipt_no),
+                    date = VALUES(date),
+                    cashier_id = VALUES(cashier_id),
+                    cashier_name = VALUES(cashier_name),
+                    reason = VALUES(reason),
+                    explanation = VALUES(explanation),
+                    total = VALUES(total),
+                    items_json = VALUES(items_json),
+                    status = VALUES(status),
+                    reviewed_by = VALUES(reviewed_by),
+                    reviewed_at = VALUES(reviewed_at),
+                    admin_remarks = VALUES(admin_remarks),
+                    inventory_restored = VALUES(inventory_restored)");
+
+            foreach ($dbData['voidRequests'] as $vr) {
+                $id = (string)$vr['id'];
+                $status = (string)($vr['status'] ?? 'pending');
+                $reviewedAt = !empty($vr['reviewedAt']) ? date('Y-m-d H:i:s', strtotime($vr['reviewedAt'])) : null;
+
+                $vrSig = $status . '_' . (string)$reviewedAt;
+                if (isset($existingVRMap[$id]) && $existingVRMap[$id] === $vrSig) {
+                    continue; // Skip unchanged void request
+                }
+
+                $saleId = (string)($vr['saleId'] ?? '');
+                $receiptNo = (string)($vr['receiptNo'] ?? '');
+                $date = date('Y-m-d H:i:s', strtotime($vr['date'] ?? $vr['requestDate'] ?? 'now'));
+                $cashierId = (string)($vr['cashierId'] ?? ($actingUserId ?: 'cashier'));
+                $cashierName = (string)($vr['cashierName'] ?? ($actingUser['name'] ?? 'Cashier'));
+                $reason = (string)($vr['reason'] ?? '');
+                $explanation = (string)($vr['explanation'] ?? '');
+                $total = (float)($vr['total'] ?? 0);
+                $itemsJson = json_encode($vr['items'] ?? []);
+                $reviewedBy = !empty($vr['reviewedBy']) ? (string)$vr['reviewedBy'] : null;
+                $adminRemarks = !empty($vr['adminRemarks']) ? (string)$vr['adminRemarks'] : null;
+                $inventoryRestored = !empty($vr['inventoryRestored']) ? 1 : 0;
+
+                // RBAC: Only Admin can approve or reject void requests; all other roles can only submit pending
+                if ($actingRole !== 'admin') {
+                    if (isset($existingVRMap[$id])) {
+                        $prevSt = explode('_', $existingVRMap[$id])[0];
+                        if ($prevSt === 'approved' || $prevSt === 'rejected') {
+                            $status = $prevSt;
+                        } elseif ($prevSt === 'pending' && ($status === 'approved' || $status === 'rejected')) {
+                            $status = 'pending';
+                            $reviewedBy = null;
+                            $reviewedAt = null;
+                            $adminRemarks = null;
+                            $inventoryRestored = 0;
+                        }
+                    } else {
+                        $status = 'pending';
+                        $reviewedBy = null;
+                        $reviewedAt = null;
+                        $adminRemarks = null;
+                        $inventoryRestored = 0;
+                    }
+                }
+
+                $stmt->bind_param("ssssssssdsssssi", $id, $saleId, $receiptNo, $date, $cashierId, $cashierName, $reason, $explanation, $total, $itemsJson, $status, $reviewedBy, $reviewedAt, $adminRemarks, $inventoryRestored);
                 $stmt->execute();
             }
             $stmt->close();

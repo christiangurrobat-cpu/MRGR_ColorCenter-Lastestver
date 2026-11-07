@@ -210,6 +210,7 @@ function refreshApprovalsTabContent() {
   if (contentEl) {
     contentEl.innerHTML = renderApprovalsTabContent();
     updateApprovalsTabUI();
+    if (typeof syncRouteState === 'function') syncRouteState({ push: false });
   } else {
     renderPage();
   }
@@ -218,12 +219,15 @@ function refreshApprovalsTabContent() {
 /* Quick tab navigation helper */
 function switchApprovalsTab(tab) {
   currentApprovalsTab = tab;
+  window._approvalsTabExplicitlySet = true;
   resetPaginationByPrefix('approvals_');
+  if (typeof syncRouteState === 'function') syncRouteState({ push: true });
   refreshApprovalsTabContent();
 }
 
 function goToApprovalsTab(tab) {
   currentApprovalsTab = tab;
+  window._approvalsTabExplicitlySet = true;
   resetPaginationByPrefix('approvals_');
   goTo('approvals');
 }
@@ -232,9 +236,11 @@ function focusFirstPendingApprovalsTab() {
   const adjCount = getPendingAdjustmentRequests().length;
   const prodCount = getPendingProductsList().length;
   const poCount = getPendingPurchaseOrders().length;
+  const voidCount = typeof getPendingVoidRequests === 'function' ? getPendingVoidRequests().length : 0;
   if (adjCount > 0) switchApprovalsTab('adjustments');
   else if (prodCount > 0) switchApprovalsTab('products');
   else if (poCount > 0) switchApprovalsTab('purchaseOrders');
+  else if (voidCount > 0) switchApprovalsTab('voidRequests');
   else switchApprovalsTab('history');
 }
 
@@ -245,6 +251,7 @@ function setApprovalsSearch(query) {
   if (contentEl) {
     contentEl.innerHTML = renderApprovalsTabContent();
   }
+  if (typeof syncRouteState === 'function') syncRouteState({ push: false });
 }
 
 function clearApprovalsSearch() {
@@ -441,11 +448,89 @@ function getPendingPurchaseOrders() {
   return (db.purchaseOrders || []).filter(o => o.status === 'pending');
 }
 
+function getPendingVoidRequests() {
+  if (!db) return [];
+  const list = [];
+  const seenSaleIds = new Set();
+  const seenReceiptNos = new Set();
+  const resolvedSaleIds = new Set();
+
+  // 1. Identify sales whose void requests have already been approved or rejected
+  (db.voidRequests || []).forEach(vr => {
+    if (vr.status === 'approved' || vr.status === 'rejected') {
+      if (vr.saleId) resolvedSaleIds.add(vr.saleId);
+      if (vr.receiptNo) resolvedSaleIds.add(vr.receiptNo);
+    }
+  });
+
+  // 2. Collect unique pending void requests from db.voidRequests
+  (db.voidRequests || []).forEach(vr => {
+    if (vr.status === 'pending') {
+      const sale = (db.sales || []).find(s => s.id === vr.saleId || getReceiptNo(s) === vr.receiptNo);
+      const sId = vr.saleId || (sale ? sale.id : '');
+      const rNo = vr.receiptNo || (sale ? getReceiptNo(sale) : '');
+
+      // Guard against already resolved transactions or duplicates
+      if (sId && resolvedSaleIds.has(sId)) return;
+      if (rNo && resolvedSaleIds.has(rNo)) return;
+      if (sId && seenSaleIds.has(sId)) return;
+      if (rNo && seenReceiptNos.has(rNo)) return;
+
+      list.push({
+        id: vr.id,
+        saleId: sId,
+        receiptNo: rNo || 'N/A',
+        date: vr.date || vr.requestDate || (sale ? sale.date : nowISO()),
+        requestDate: vr.requestDate || vr.date || (sale ? sale.voidRequestedAt : nowISO()),
+        cashierId: vr.cashierId || (sale ? sale.cashierId : ''),
+        cashierName: vr.cashierName || (sale ? (sale.voidRequestedBy || sale.cashierName) : 'Cashier'),
+        reason: vr.reason || (sale ? sale.voidReason : 'Void requested'),
+        explanation: vr.explanation || (sale ? sale.voidExplanation : ''),
+        total: vr.total !== undefined ? Number(vr.total) : (sale ? Number(sale.total) : 0),
+        items: (vr.items && vr.items.length) ? vr.items : (sale && sale.items ? sale.items : []),
+        status: 'pending',
+        sale: sale || null
+      });
+      if (sId) seenSaleIds.add(sId);
+      if (rNo) seenReceiptNos.add(rNo);
+    }
+  });
+
+  // 3. Check for any sales pending void not yet captured in db.voidRequests
+  (db.sales || []).forEach(s => {
+    const rNo = getReceiptNo(s);
+    if (resolvedSaleIds.has(s.id) || (rNo && resolvedSaleIds.has(rNo))) return;
+    const norm = typeof normalizeSaleStatus === 'function' ? normalizeSaleStatus(s.status) : String(s.status || '').toLowerCase();
+    if ((norm === 'pending_void' || norm === 'pending void approval') && !seenSaleIds.has(s.id) && (!rNo || !seenReceiptNos.has(rNo))) {
+      list.push({
+        id: s.voidRequestId || ('vr_' + s.id),
+        saleId: s.id,
+        receiptNo: rNo,
+        date: s.date,
+        requestDate: s.voidRequestedAt || s.date,
+        cashierId: s.cashierId,
+        cashierName: s.voidRequestedBy || s.cashierName || 'Cashier',
+        reason: s.voidReason || 'Cashier void request',
+        explanation: s.voidExplanation || '',
+        total: Number(s.total || 0),
+        items: s.items || [],
+        status: 'pending',
+        sale: s
+      });
+      seenSaleIds.add(s.id);
+      if (rNo) seenReceiptNos.add(rNo);
+    }
+  });
+
+  return list;
+}
+
 function getTotalPendingApprovalsCount() {
   const adjCount = getPendingAdjustmentRequests().length;
   const prodCount = getPendingProductsList().length;
   const poCount = getPendingPurchaseOrders().length;
-  return adjCount + prodCount + poCount;
+  const voidCount = getPendingVoidRequests().length;
+  return adjCount + prodCount + poCount + voidCount;
 }
 
 /* ------------------------------------------------------------
@@ -465,18 +550,26 @@ function approvalsPage() {
   const adjList = getPendingAdjustmentRequests();
   const prodList = getPendingProductsList();
   const poList = getPendingPurchaseOrders();
-  const totalPending = adjList.length + prodList.length + poList.length;
+  const voidList = getPendingVoidRequests();
+  const totalPending = adjList.length + prodList.length + poList.length + voidList.length;
 
-  // Auto-switch to a tab that has items if current is empty and total > 0
-  if (totalPending > 0) {
+  // Auto-switch to a tab that has items if current is empty and total > 0 (unless user/route explicitly chose a tab)
+  if (totalPending > 0 && !window._approvalsTabExplicitlySet) {
     if (currentApprovalsTab === 'adjustments' && adjList.length === 0) {
-      if (prodList.length > 0) currentApprovalsTab = 'products';
+      if (voidList.length > 0) currentApprovalsTab = 'voidRequests';
+      else if (prodList.length > 0) currentApprovalsTab = 'products';
+      else if (poList.length > 0) currentApprovalsTab = 'purchaseOrders';
+    } else if (currentApprovalsTab === 'voidRequests' && voidList.length === 0) {
+      if (adjList.length > 0) currentApprovalsTab = 'adjustments';
+      else if (prodList.length > 0) currentApprovalsTab = 'products';
       else if (poList.length > 0) currentApprovalsTab = 'purchaseOrders';
     } else if (currentApprovalsTab === 'products' && prodList.length === 0) {
-      if (adjList.length > 0) currentApprovalsTab = 'adjustments';
+      if (voidList.length > 0) currentApprovalsTab = 'voidRequests';
+      else if (adjList.length > 0) currentApprovalsTab = 'adjustments';
       else if (poList.length > 0) currentApprovalsTab = 'purchaseOrders';
     } else if (currentApprovalsTab === 'purchaseOrders' && poList.length === 0) {
-      if (adjList.length > 0) currentApprovalsTab = 'adjustments';
+      if (voidList.length > 0) currentApprovalsTab = 'voidRequests';
+      else if (adjList.length > 0) currentApprovalsTab = 'adjustments';
       else if (prodList.length > 0) currentApprovalsTab = 'products';
     }
   }
@@ -486,7 +579,7 @@ function approvalsPage() {
       <div class="approvals-title-group">
         <h2>⏳ Pending Approvals Hub</h2>
         <div class="approvals-subtitle">
-          Centralized governance hub for Administrator decisions on Stock Adjustments, Product Catalog updates, and Purchase Orders.
+          Centralized governance hub for Administrator decisions on Stock Adjustments, Product Catalog updates, Purchase Orders, and Cashier Void Requests.
         </div>
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
@@ -527,6 +620,16 @@ function approvalsPage() {
         <div class="card-sub">Restock orders awaiting authorization</div>
       </div>
 
+      <div class="approvals-metric-card ${currentApprovalsTab === 'voidRequests' ? 'active' : ''} ${voidList.length ? 'has-pending' : 'all-clear'}"
+           onclick="switchApprovalsTab('voidRequests')" title="Click to view Cashier Void Sale requests">
+        <div class="card-top">
+          <span class="card-label">🚫 Void Requests</span>
+          ${voidList.length ? `<span class="badge danger">${voidList.length} pending</span>` : '<span class="badge ok">✓ All clear</span>'}
+        </div>
+        <div class="card-value">${voidList.length}</div>
+        <div class="card-sub">Cashier sale void requests awaiting review</div>
+      </div>
+
       <div class="approvals-metric-card ${totalPending ? 'has-pending' : 'all-clear'}"
            onclick="focusFirstPendingApprovalsTab()" style="background:#FAF8F5;" title="Click to focus active pending requests">
         <div class="card-top">
@@ -541,7 +644,7 @@ function approvalsPage() {
     <!-- Tabs and Filter Bar -->
     <div class="approvals-tabs-bar">
       <div class="approvals-tabs" id="approvals-tabs-container">
-        ${renderApprovalsTabButtons(adjList.length, prodList.length, poList.length)}
+        ${renderApprovalsTabButtons(adjList.length, prodList.length, poList.length, voidList.length)}
       </div>
 
       <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
@@ -561,7 +664,7 @@ function approvalsPage() {
                  style="padding:6px 28px 6px 12px; border:1px solid var(--line); border-radius:6px; font-size:13px; width:220px;" />
           ${approvalsSearchQuery ? `
             <button type="button" onclick="clearApprovalsSearch()"
-                    style="position:absolute; right:6px; background:none; border:none; color:var(--ink-soft); cursor:pointer; font-size:13px; padding:2px 6px;" title="Clear search">✕</button>
+                     style="position:absolute; right:6px; background:none; border:none; color:var(--ink-soft); cursor:pointer; font-size:13px; padding:2px 6px;" title="Clear search">✕</button>
           ` : ''}
         </div>
       </div>
@@ -574,7 +677,7 @@ function approvalsPage() {
   `;
 }
 
-function renderApprovalsTabButtons(adjCount, prodCount, poCount) {
+function renderApprovalsTabButtons(adjCount, prodCount, poCount, voidCount = 0) {
   return `
     <button type="button" class="approvals-tab-btn ${currentApprovalsTab === 'adjustments' ? 'active' : ''}"
             onclick="switchApprovalsTab('adjustments')" title="Stock Adjustment Requests">
@@ -591,6 +694,11 @@ function renderApprovalsTabButtons(adjCount, prodCount, poCount) {
       <span>📋 Purchase Orders</span>
       <span class="approvals-tab-badge ${poCount === 0 ? 'zero' : ''}">${poCount}</span>
     </button>
+    <button type="button" class="approvals-tab-btn ${currentApprovalsTab === 'voidRequests' ? 'active' : ''}"
+            onclick="switchApprovalsTab('voidRequests')" title="Cashier Void Sale Requests">
+      <span>🚫 Void Requests</span>
+      <span class="approvals-tab-badge ${voidCount === 0 ? 'zero' : ''}">${voidCount}</span>
+    </button>
     <button type="button" class="approvals-tab-btn ${currentApprovalsTab === 'history' ? 'active' : ''}"
             onclick="switchApprovalsTab('history')" title="Audit Log of Past Approval Decisions">
       <span>📜 Decision History</span>
@@ -604,7 +712,8 @@ function updateApprovalsTabUI() {
     const adjCount = getPendingAdjustmentRequests().length;
     const prodCount = getPendingProductsList().length;
     const poCount = getPendingPurchaseOrders().length;
-    container.innerHTML = renderApprovalsTabButtons(adjCount, prodCount, poCount);
+    const voidCount = getPendingVoidRequests().length;
+    container.innerHTML = renderApprovalsTabButtons(adjCount, prodCount, poCount, voidCount);
   }
 }
 
@@ -612,6 +721,7 @@ function renderApprovalsTabContent() {
   if (currentApprovalsTab === 'adjustments') return renderAdjustmentsTab();
   if (currentApprovalsTab === 'products') return renderProductsTab();
   if (currentApprovalsTab === 'purchaseOrders') return renderPurchaseOrdersTab();
+  if (currentApprovalsTab === 'voidRequests') return renderVoidRequestsTab();
   if (currentApprovalsTab === 'history') return renderHistoryTab();
   return renderAdjustmentsTab();
 }
@@ -1302,7 +1412,330 @@ async function authorizeAllPendingPOsBatch() {
 }
 
 /* ------------------------------------------------------------
-   Tab 4: Decision History
+   Tab 4: Void Requests (Cashier Sale Cancellation Requests)
+   ------------------------------------------------------------ */
+function renderVoidRequestsTab() {
+  let list = getPendingVoidRequests();
+
+  if (approvalsSearchQuery) {
+    const q = approvalsSearchQuery.toLowerCase();
+    list = list.filter(r =>
+      (r.receiptNo || '').toLowerCase().includes(q) ||
+      (r.cashierName || '').toLowerCase().includes(q) ||
+      (r.reason || '').toLowerCase().includes(q) ||
+      (r.explanation || '').toLowerCase().includes(q) ||
+      (r.items || []).some(it => (it.name || '').toLowerCase().includes(q))
+    );
+  }
+
+  if (list.length === 0) {
+    const totalPending = getTotalPendingApprovalsCount();
+    return `
+      <div class="approvals-empty-state">
+        <div class="approvals-empty-icon">🎉</div>
+        <div class="approvals-empty-title">
+          ${approvalsSearchQuery ? 'No void requests match your search' : 'No pending Void Sale requests!'}
+        </div>
+        <div class="approvals-empty-desc">
+          ${approvalsSearchQuery ? `No requests matching "${escapeHtml(approvalsSearchQuery)}" were found.` : 'All cashier void sale authorization requests have been reviewed and resolved.'}
+        </div>
+        <div style="display:flex; justify-content:center; gap:10px; margin-top:16px; flex-wrap:wrap;">
+          ${approvalsSearchQuery ? '<button type="button" class="btn secondary small" onclick="clearApprovalsSearch()">Clear Search</button>' : ''}
+          <button type="button" class="btn secondary small" onclick="switchApprovalsTab('history')">📜 View Decision History</button>
+          ${totalPending > 0 ? `<button type="button" class="btn small" onclick="focusFirstPendingApprovalsTab()">⚡ Check Other Pending Items (${totalPending}) &rarr;</button>` : ''}
+          <button type="button" class="btn ghost small" onclick="goTo('dashboard')">📊 Back to Dashboard</button>
+        </div>
+      </div>
+    `;
+  }
+
+  const vrPag = paginateArray(list, 'approvals_void_requests', {
+    onUpdate: refreshApprovalsTabContent,
+    scrollTarget: '#approvals-tab-content',
+    recordLabel: 'void requests'
+  });
+
+  const pagedList = vrPag.pagedItems || vrPag.pageItems || [];
+
+  return `
+    <div class="panel">
+      <div class="panel-head row wrap" style="background:#FAF8F5; gap:10px;">
+        <div style="font-weight:700; font-size:13.5px; color:var(--ink);">
+          Cashier Void Sale Requests Awaiting Administrator Approval (${list.length} request${list.length === 1 ? '' : 's'})
+        </div>
+        <div class="spacer"></div>
+        <span class="muted small">Inventory is not restored and sales are not reversed until you approve.</span>
+      </div>
+      <div class="panel-body tight table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Receipt #</th>
+              <th>Transaction Date</th>
+              <th>Request Submitted</th>
+              <th>Cashier</th>
+              <th class="right">Total Amount</th>
+              <th>Purchased Products &amp; Qty</th>
+              <th>Void Reason &amp; Explanation</th>
+              <th class="right" style="min-width:180px;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${pagedList.map(r => {
+    const items = Array.isArray(r.items) ? r.items : [];
+    const hasMix = items.some(it => it.type === 'colormix');
+    const itemsSummary = items.map(it => {
+      const isMix = it.type === 'colormix';
+      const size = Number(it.size) || 1;
+      const qty = Number(it.qty) || 1;
+      const sizeStr = !isMix ? `${size}L` : `${formatStock(it.liters || qty)}L`;
+      return `<div style="font-size:12px; line-height:1.4;">• <b>${escapeHtml(it.name)}</b> (${qty} × ${sizeStr})${isMix ? ' <span class="badge low" style="font-size:9.5px; padding:0 4px;">Mix</span>' : ''}</div>`;
+    }).join('');
+
+    return `
+                <tr>
+                  <td>
+                    <div style="font-weight:700; color:var(--teal); font-family:monospace; font-size:13px;">${escapeHtml(r.receiptNo)}</div>
+                    <button type="button" class="btn ghost small" onclick="viewSale('${r.saleId}')" style="font-size:11px; padding:1px 6px; margin-top:2px;" title="View original receipt">🧾 View Receipt</button>
+                  </td>
+                  <td>
+                    <div style="font-size:12px; font-weight:600;">${formatDateTime(r.date)}</div>
+                  </td>
+                  <td>
+                    <div style="font-size:12px; font-weight:600; color:var(--ink);">${formatDateTime(r.requestDate)}</div>
+                    <div class="muted small" style="font-size:10.5px;">Pending Admin Review</div>
+                  </td>
+                  <td>
+                    <div style="font-weight:600; font-size:12.5px;">${escapeHtml(r.cashierName)}</div>
+                    <div class="muted small" style="font-size:11px;">Cashier</div>
+                  </td>
+                  <td class="right">
+                    <div style="font-family:'Space Grotesk',monospace; font-weight:700; font-size:14px; color:var(--ink);">${peso(r.total)}</div>
+                  </td>
+                  <td>
+                    <div style="max-height:85px; overflow-y:auto; padding-right:4px;">
+                      ${itemsSummary || '<span class="muted small">No items listed</span>'}
+                    </div>
+                  </td>
+                  <td>
+                    <div style="font-weight:700; font-size:12.5px; color:#C1443D;">${escapeHtml(r.reason)}</div>
+                    ${r.explanation ? `<div class="muted small" style="font-size:11.5px; margin-top:3px; font-style:italic;">"${escapeHtml(r.explanation)}"</div>` : ''}
+                    ${hasMix ? `<div style="margin-top:4px; font-size:10.5px; color:#856404; background:#FFF3CD; padding:2px 6px; border-radius:4px; display:inline-block;">⚠️ Contains Custom Mix (Quarantine policy applies)</div>` : ''}
+                  </td>
+                  <td class="right" style="white-space:nowrap;">
+                    <div class="row wrap" style="justify-content:flex-end; gap:6px;">
+                      <button type="button" class="btn small" onclick="openApproveVoidConfirmModal('${r.id}')"
+                              style="background:#0F766E; color:#fff; font-weight:700; font-size:12px; padding:5px 10px;"
+                              title="Approve void request: reverses sale and restores eligible inventory">
+                        ✓ Approve Void
+                      </button>
+                      <button type="button" class="btn ghost small" onclick="openRejectVoidConfirmModal('${r.id}')"
+                              style="color:var(--danger); border-color:#FCA5A5; background:#FFF8F7; font-weight:600; font-size:12px; padding:5px 10px;"
+                              title="Reject void request: keeps original transaction completed">
+                        ✕ Reject Void
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              `;
+  }).join('')}
+          </tbody>
+        </table>
+      </div>
+      ${vrPag.html}
+    </div>
+  `;
+}
+
+function openApproveVoidConfirmModal(vrId) {
+  const vr = (Array.isArray(db.voidRequests) ? db.voidRequests : []).find(v => v.id === vrId);
+  const sale = (db.sales || []).find(s => (vr && s.id === vr.saleId) || s.id === vrId || getReceiptNo(s) === vrId);
+  if (!sale) {
+    showToast('Sale transaction record not found.', 'error');
+    return;
+  }
+
+  const receiptNo = getReceiptNo(sale);
+  const items = Array.isArray(sale.items) ? sale.items : [];
+
+  const itemsPlanHtml = items.map(it => {
+    const isMix = it.type === 'colormix';
+    const size = Number(it.size) || 1;
+    const qty = Number(it.qty) || 1;
+    if (isMix) {
+      return `
+        <li style="margin-bottom:4px; color:#B45309;">
+          <b>${escapeHtml(it.name)}</b> (${formatStock(it.liters || qty)}L Mix):
+          <span class="badge low" style="font-size:10px;">Quarantined Miscast Stock</span>
+          — <i>Will NOT be returned to regular sealed inventory per policy.</i>
+        </li>
+      `;
+    }
+    return `
+      <li style="margin-bottom:4px; color:#14532D;">
+        <b>${escapeHtml(it.name)}</b> (${qty} × ${size}L):
+        <span class="badge ok" style="font-size:10px;">Restocking Eligible</span>
+        — <i>Restores ${qty} can${qty === 1 ? '' : 's'} (+${formatStock(qty * size)}L) to active inventory.</i>
+      </li>
+    `;
+  }).join('');
+
+  const bodyHtml = `
+    <div style="display:flex; flex-direction:column; gap:14px; max-width:540px;">
+      <div style="background:#F0FDF4; border:1.5px solid #BBF7D0; border-radius:8px; padding:12px 14px; display:flex; gap:10px; align-items:flex-start;">
+        <span style="font-size:24px; line-height:1;">✅</span>
+        <div>
+          <div style="font-weight:700; color:#166534; font-size:13.5px;">Approve Void Sale — Receipt ${escapeHtml(receiptNo)}</div>
+          <div style="font-size:12px; color:#14532D; margin-top:2px;">
+            Approving this request will mark the transaction as <b>Voided</b>, reverse the original sale of <b>${peso(sale.total)}</b>, and restore eligible store inventory exactly once.
+          </div>
+        </div>
+      </div>
+
+      <div style="background:#FAF8F5; border:1px solid var(--line); border-radius:6px; padding:10px 14px; font-size:12px; display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+        <div><b>Requesting Cashier:</b> ${escapeHtml((vr && vr.cashierName) || sale.cashierName || 'Cashier')}</div>
+        <div><b>Transaction Amount:</b> ${peso(sale.total)}</div>
+        <div style="grid-column:1 / -1;"><b>Void Reason:</b> <span style="color:#C1443D; font-weight:700;">${escapeHtml((vr && vr.reason) || sale.voidReason || 'Cashier request')}</span></div>
+        ${(vr && vr.explanation) || sale.voidExplanation ? `<div style="grid-column:1 / -1; font-style:italic;">"${escapeHtml((vr && vr.explanation) || sale.voidExplanation)}"</div>` : ''}
+      </div>
+
+      <div>
+        <label style="font-size:11.5px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.04em;">Inventory Restoration Actions</label>
+        <div style="background:#fff; border:1px solid var(--line); border-radius:6px; padding:10px 14px; max-height:140px; overflow-y:auto; margin-top:4px;">
+          <ul style="margin:0; padding-left:18px; font-size:12px;">
+            ${itemsPlanHtml}
+          </ul>
+        </div>
+      </div>
+
+      <div>
+        <label for="approve-void-remarks-input" style="font-weight:700; font-size:12px; display:block; margin-bottom:4px;">
+          Administrator Remarks (Optional)
+        </label>
+        <textarea id="approve-void-remarks-input" rows="2" placeholder="Optional approval remarks or verification notes…"
+          style="width:100%; box-sizing:border-box; padding:8px 10px; font-size:12.5px; border:1px solid var(--line); border-radius:6px; font-family:inherit; resize:vertical;"></textarea>
+      </div>
+    </div>
+  `;
+
+  const footHtml = `
+    <button type="button" class="btn secondary" onclick="closeModal()">Cancel</button>
+    <button type="button" class="btn" id="btn-confirm-approve-void" onclick="confirmAndExecuteApproveVoid('${vr ? vr.id : sale.id}')"
+      style="background:#0F766E; color:#fff; font-weight:700;">
+      ✓ Confirm &amp; Approve Void
+    </button>
+  `;
+
+  openModal('✅ Confirm Void Approval', bodyHtml, footHtml, 'approve-void-modal');
+}
+
+async function confirmAndExecuteApproveVoid(vrId) {
+  const remarksEl = document.getElementById('approve-void-remarks-input');
+  const remarks = remarksEl ? remarksEl.value.trim() : '';
+
+  const btn = document.getElementById('btn-confirm-approve-void');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Processing Void &amp; Restoring Stock…';
+  }
+
+  const ok = typeof executeApproveVoid === 'function' ? await executeApproveVoid(vrId, remarks) : false;
+  if (ok) {
+    closeModal();
+    updateApprovalsTabUI();
+    const contentEl = document.getElementById('approvals-tab-content');
+    if (contentEl) contentEl.innerHTML = renderVoidRequestsTab();
+    else renderPage();
+  } else if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = '✓ Confirm &amp; Approve Void';
+  }
+}
+
+function openRejectVoidConfirmModal(vrId) {
+  const vr = (Array.isArray(db.voidRequests) ? db.voidRequests : []).find(v => v.id === vrId);
+  const sale = (db.sales || []).find(s => (vr && s.id === vr.saleId) || s.id === vrId || getReceiptNo(s) === vrId);
+  if (!sale) {
+    showToast('Sale transaction record not found.', 'error');
+    return;
+  }
+
+  const receiptNo = getReceiptNo(sale);
+
+  const bodyHtml = `
+    <div style="display:flex; flex-direction:column; gap:14px; max-width:540px;">
+      <div style="background:#FEF2F2; border:1.5px solid #FECACA; border-radius:8px; padding:12px 14px; display:flex; gap:10px; align-items:flex-start;">
+        <span style="font-size:24px; line-height:1;">✕</span>
+        <div>
+          <div style="font-weight:700; color:#991B1B; font-size:13.5px;">Reject Void Request — Receipt ${escapeHtml(receiptNo)}</div>
+          <div style="font-size:12px; color:#7F1D1D; margin-top:2px;">
+            Rejecting this request will keep the original transaction as <b>Completed</b>. No inventory will be restored. The requesting Cashier will be notified of your decision and rejection note.
+          </div>
+        </div>
+      </div>
+
+      <div style="background:#FAF8F5; border:1px solid var(--line); border-radius:6px; padding:10px 14px; font-size:12px;">
+        <div><b>Requesting Cashier:</b> ${escapeHtml((vr && vr.cashierName) || sale.cashierName || 'Cashier')}</div>
+        <div><b>Transaction Total:</b> ${peso(sale.total)}</div>
+        <div style="margin-top:2px;"><b>Void Reason:</b> ${escapeHtml((vr && vr.reason) || sale.voidReason || 'Cashier request')}</div>
+      </div>
+
+      <div>
+        <label for="reject-void-reason-input" style="font-weight:700; font-size:12.5px; display:block; margin-bottom:4px;">
+          Administrator Rejection Reason / Note <span style="color:var(--danger);">*</span>
+        </label>
+        <textarea id="reject-void-reason-input" rows="3" placeholder="Specify why this void request is being rejected (e.g. products departed store, invalid claim, register mismatch)…"
+          style="width:100%; box-sizing:border-box; padding:8px 10px; font-size:12.5px; border:1.5px solid var(--line); border-radius:6px; font-family:inherit; resize:vertical;"></textarea>
+      </div>
+    </div>
+  `;
+
+  const footHtml = `
+    <button type="button" class="btn secondary" onclick="closeModal()">Cancel</button>
+    <button type="button" class="btn" id="btn-confirm-reject-void" onclick="confirmAndExecuteRejectVoid('${vr ? vr.id : sale.id}')"
+      style="background:var(--danger, #C1443D); color:#fff; font-weight:700;">
+      ✕ Confirm Rejection
+    </button>
+  `;
+
+  openModal('✕ Reject Void Sale Request', bodyHtml, footHtml, 'reject-void-modal');
+  setTimeout(() => {
+    const el = document.getElementById('reject-void-reason-input');
+    if (el) el.focus();
+  }, 60);
+}
+
+async function confirmAndExecuteRejectVoid(vrId) {
+  const reasonEl = document.getElementById('reject-void-reason-input');
+  const reason = reasonEl ? reasonEl.value.trim() : '';
+
+  if (!reason) {
+    showToast('Please provide an Administrator rejection reason or note.', 'error');
+    if (reasonEl) reasonEl.focus();
+    return;
+  }
+
+  const btn = document.getElementById('btn-confirm-reject-void');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Recording Rejection…';
+  }
+
+  const ok = typeof executeRejectVoid === 'function' ? await executeRejectVoid(vrId, reason) : false;
+  if (ok) {
+    closeModal();
+    updateApprovalsTabUI();
+    const contentEl = document.getElementById('approvals-tab-content');
+    if (contentEl) contentEl.innerHTML = renderVoidRequestsTab();
+    else renderPage();
+  } else if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = '✕ Confirm Rejection';
+  }
+}
+
+/* ------------------------------------------------------------
+   Tab 5: Decision History
    ------------------------------------------------------------ */
 function renderHistoryTab() {
   const events = [];
@@ -1355,6 +1788,58 @@ function renderHistoryTab() {
         reviewedBy: a.userName || 'Administrator',
         decision: act.includes('REJECT') ? 'rejected' : 'approved',
         remarks: a.details || ''
+      });
+    }
+  });
+
+  // 4. Past Void Requests
+  (db.voidRequests || []).forEach(vr => {
+    if (vr.status === 'approved' || vr.status === 'rejected') {
+      events.push({
+        id: vr.id,
+        saleId: vr.saleId,
+        date: vr.reviewedAt || vr.date,
+        type: 'Void Sale Request',
+        category: 'voidRequest',
+        ref: vr.receiptNo,
+        requester: vr.cashierName || 'Cashier',
+        reviewedBy: vr.reviewedBy || 'Administrator',
+        decision: vr.status,
+        remarks: vr.status === 'rejected'
+          ? (vr.adminRemarks || 'Rejected by Admin')
+          : (vr.adminRemarks ? `Approved & voided · ${vr.adminRemarks}` : `Approved & voided (${vr.reason})`)
+      });
+    }
+  });
+
+  // Cross-reference sales marked Voided or Void Rejected without voidRequests entry
+  (db.sales || []).forEach(s => {
+    const norm = typeof normalizeSaleStatus === 'function' ? normalizeSaleStatus(s.status) : String(s.status || '').toLowerCase();
+    if (norm === 'voided' && !events.some(e => e.category === 'voidRequest' && e.ref === getReceiptNo(s))) {
+      events.push({
+        id: s.voidRequestId || s.id,
+        saleId: s.id,
+        date: s.voidedAt || s.date,
+        type: 'Void Sale Request',
+        category: 'voidRequest',
+        ref: getReceiptNo(s),
+        requester: s.cashierName || 'Cashier',
+        reviewedBy: s.voidedBy || 'Administrator',
+        decision: 'approved',
+        remarks: s.voidAdminRemarks ? `Approved & voided · ${s.voidAdminRemarks}` : `Approved & voided (${s.voidReason || 'Admin Void'})`
+      });
+    } else if (norm === 'void_rejected' && !events.some(e => e.category === 'voidRequest' && e.ref === getReceiptNo(s))) {
+      events.push({
+        id: s.voidRequestId || s.id,
+        saleId: s.id,
+        date: s.voidRejectedAt || s.date,
+        type: 'Void Sale Request',
+        category: 'voidRequest',
+        ref: getReceiptNo(s),
+        requester: s.cashierName || 'Cashier',
+        reviewedBy: s.voidRejectedBy || 'Administrator',
+        decision: 'rejected',
+        remarks: s.voidAdminRemarks || s.voidRejectReason || 'Rejected by Admin'
       });
     }
   });
@@ -1538,6 +2023,12 @@ function renderHistoryTab() {
 }
 
 function renderHistoryRefCell(e) {
+  if (e.category === 'voidRequest' && (e.saleId || e.id)) {
+    const sid = e.saleId || e.id;
+    return `<a href="#" onclick="openVoidDetailsModal('${sid}'); return false;"
+               class="approvals-clickable-ref" style="font-weight:600; color:var(--teal);"
+               title="Click to view full void sale transaction details">${escapeHtml(e.ref)}</a>`;
+  }
   if (e.category === 'adjustment' && e.id) {
     return `<a href="#" onclick="viewAdjRequestDetails('${e.id}'); return false;"
                class="approvals-clickable-ref" style="font-weight:600; color:var(--teal);"
@@ -1552,6 +2043,10 @@ function renderHistoryRefCell(e) {
 }
 
 function renderHistoryActionBtn(e) {
+  if (e.category === 'voidRequest' && (e.saleId || e.id)) {
+    const sid = e.saleId || e.id;
+    return `<button type="button" class="btn ghost small" onclick="openVoidDetailsModal('${sid}')" title="View details of this void transaction">🔍 Details</button>`;
+  }
   if (e.category === 'adjustment' && e.id) {
     return `<button type="button" class="btn ghost small" onclick="viewAdjRequestDetails('${e.id}')" title="View details of this adjustment">🔍 Details</button>`;
   }
@@ -1705,6 +2200,14 @@ function openPOPreviewModal(poId) {
 
   const rowsHtml = items.map((it, idx) => {
     const itemQty = Number(it.qty !== undefined ? it.qty : (it.orderedQty !== undefined ? it.orderedQty : 1));
+    const costInfo = typeof getPOItemCostDetails === 'function'
+      ? getPOItemCostDetails(it)
+      : {
+        size: Number(it.size) || 1,
+        purchaseCostPerLiter: Number(it.purchaseCostPerLiter || (Number(it.unitCost || 0) / (Number(it.size) || 1))),
+        purchaseCostPerUnit: Number(it.purchaseCostPerUnit || it.unitCost || 0),
+        lineTotal: Number(it.lineTotal || it.subtotal || (itemQty * Number(it.unitCost || 0)))
+      };
     return `
     <tr>
       <td>${idx + 1}</td>
@@ -1714,8 +2217,9 @@ function openPOPreviewModal(poId) {
       </td>
       <td><span class="badge ghost">${it.size ? `${it.size}L` : 'Standard'}</span></td>
       <td class="right">${itemQty} units</td>
-      <td class="right">${peso(it.unitCost || 0)}</td>
-      <td class="right" style="font-weight:600;">${peso(it.subtotal || (itemQty * (it.unitCost || 0)))}</td>
+      <td class="right">${peso(costInfo.purchaseCostPerLiter)}</td>
+      <td class="right">${peso(costInfo.purchaseCostPerUnit)}</td>
+      <td class="right" style="font-weight:600;">${peso(costInfo.lineTotal)}</td>
     </tr>
   `;
   }).join('');
@@ -1744,8 +2248,9 @@ function openPOPreviewModal(poId) {
               <th>Product</th>
               <th>Size</th>
               <th class="right">Quantity</th>
-              <th class="right">Unit Cost</th>
-              <th class="right">Subtotal</th>
+              <th class="right">Purchase Cost Per Liter</th>
+              <th class="right">Purchase Cost Per Unit</th>
+              <th class="right">Line Total</th>
             </tr>
           </thead>
           <tbody>
@@ -1753,7 +2258,7 @@ function openPOPreviewModal(poId) {
           </tbody>
           <tfoot>
             <tr class="po-preview-total-row">
-              <td colspan="5" style="text-align:right; font-weight:700;">Grand Total:</td>
+              <td colspan="6" style="text-align:right; font-weight:700;">Grand Total:</td>
               <td class="right" style="font-size:15px; font-weight:700; color:var(--ink); font-family:'Space Grotesk',sans-serif;">${peso(po.totalAmount)}</td>
             </tr>
           </tfoot>

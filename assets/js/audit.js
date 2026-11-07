@@ -173,6 +173,9 @@ const AUDIT_ACTION_LABELS = {
   SALE_COMPLETE: 'Sale Completed',
   RECEIPT_GENERATED: 'Receipt Generated',
   SALE_VOID: 'Sale Voided',
+  SALE_VOID_REQUEST: 'Void Sale Requested',
+  SALE_VOID_APPROVE: 'Void Sale Approved',
+  SALE_VOID_REJECT: 'Void Sale Rejected',
   SALE_REFUND: 'Sale Refunded',
   PARTIAL_REFUND: 'Partial Refund Processed',
 
@@ -212,7 +215,7 @@ const AUDIT_ACTIONS = [
   // Purchase Orders
   'PO_CREATE', 'PO_SUBMIT', 'PO_APPROVE', 'PO_REJECT', 'PO_RECEIVE', 'PO_CANCEL',
   // Sales & Refunds
-  'SALE', 'RECEIPT_GENERATED', 'SALE_REFUND', 'PARTIAL_REFUND',
+  'SALE', 'RECEIPT_GENERATED', 'SALE_REFUND', 'PARTIAL_REFUND', 'SALE_VOID', 'SALE_VOID_REQUEST', 'SALE_VOID_APPROVE', 'SALE_VOID_REJECT',
   // User & Supplier Management
   'USER_CREATE', 'USER_UPDATE', 'USER_DEACTIVATE', 'USER_REACTIVATE', 'USER_ROLE_CHANGE', 'USER_STATUS',
   'SUPPLIER_CREATE', 'SUPPLIER_UPDATE', 'SUPPLIER_STATUS',
@@ -249,7 +252,10 @@ function auditActClass(a) {
   if (act === 'LOGIN_FAILED' || act === 'UNAUTHORIZED_ACCESS') return 'security-alert';
   if (act === 'PASSWORD_CHANGE' || act === 'USER_ROLE_CHANGE') return 'security';
   if (act.startsWith('MIXING_')) return act === 'MIXING_CANCEL' ? 'cancel' : 'mixing';
-  if (act === 'SALE_REFUND' || act === 'PARTIAL_REFUND' || act === 'SALE_VOID') return 'refund';
+  if (act === 'SALE_REFUND' || act === 'PARTIAL_REFUND') return 'refund';
+  if (act === 'SALE_VOID' || act === 'SALE_VOID_APPROVE') return 'refund';
+  if (act === 'SALE_VOID_REQUEST') return 'po';
+  if (act === 'SALE_VOID_REJECT') return 'cancel';
   if (act === 'SALE' || act === 'SALE_COMPLETE' || act === 'RECEIPT_GENERATED') return 'sale';
   if (act.startsWith('PO_')) {
     if (act === 'PO_CANCEL' || act === 'PO_REJECT') return 'cancel';
@@ -1673,4 +1679,5 @@ async function loadAuditLogs() {
       recordLabel: 'entries'
     });
   }
+  if (typeof syncRouteState === 'function') syncRouteState({ push: false });
 }

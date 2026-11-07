@@ -7,6 +7,11 @@ let salesDateFrom = currentYearStartISO();
 let salesDateTo = currentYearEndISO();
 let salesYearFilter = 'current';
 let returnExchangeCart = [];
+let currentReturnResolution = 'exchange'; // 'exchange' | 'refund'
+let returnItemConditions = {}; // rowIdx -> 'sealed' | 'opened' | 'defective'
+let adminReviewApproved = false;
+let adminReviewReason = '';
+let adminReviewAdminName = '';
 
 function getSalesDatePreset() {
   return getDateRangePreset(salesDateFrom, salesDateTo);
@@ -32,7 +37,7 @@ function openSalesCalendar(target, anchorEl, event) {
     currentDate: (target === 'from' ? salesDateFrom : salesDateTo),
     otherDate: (target === 'from' ? salesDateTo : salesDateFrom),
     selectedYear: getSalesSelectedYear,
-    onSelect: function(iso) {
+    onSelect: function (iso) {
       if (target === 'from') {
         salesDateFrom = iso;
         if (salesDateTo && salesDateFrom > salesDateTo) salesDateTo = salesDateFrom;
@@ -223,6 +228,74 @@ function resetAllSalesFilters() {
   renderPage();
 }
 
+function isCurrentUserSale(s) {
+  if (!s || !currentUser) return false;
+  if (currentUser.role === 'admin') return true;
+  // Match by authenticated cashier user ID
+  const sCashierId = String(s.cashierId || s.cashier_id || '').trim();
+  const curUserId = String(currentUser.id || '').trim();
+  if (sCashierId && curUserId && sCashierId === curUserId) {
+    return true;
+  }
+  // Fallback to name or username match for historical records
+  const sCashierName = String(s.cashierName || s.cashier_name || '').trim().toLowerCase();
+  const curName = String(currentUser.name || '').trim().toLowerCase();
+  const curUsername = String(currentUser.username || '').trim().toLowerCase();
+  return (sCashierName !== '' && (sCashierName === curName || sCashierName === curUsername));
+}
+
+function renderCashierSalesSummaryHtml(cashierSales, fromDate, toDate) {
+  const periodInfo = getReportingPeriodDisplayInfo(fromDate, toDate);
+  const completedSales = cashierSales.filter(s => s.status !== 'voided' && s.status !== 'cancelled');
+  const totalGross = completedSales.reduce((sum, s) => sum + Number(s.subtotal || s.total || 0), 0);
+  const totalNet = completedSales.reduce((sum, s) => {
+    const refund = Number(s.refundTotal || 0);
+    return sum + (Number(s.total || 0) - refund);
+  }, 0);
+  const totalTx = completedSales.length;
+  const returnTx = cashierSales.filter(s => Array.isArray(s.returns) && s.returns.length > 0).length;
+
+  return `
+    <div class="sh-cashier-summary-wrap" style="margin-bottom:14px;">
+      <div class="sh-period-banner" style="margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <span style="font-weight:700; color:var(--ink-soft); text-transform:uppercase; font-size:11px; letter-spacing:0.04em;">Cashier Overview:</span>
+          <span class="badge" style="background:#E6F4F1; color:#0F766E; font-weight:700; border:1px solid #B5D2CD;">👤 ${escapeHtml(currentUser.name)}</span>
+          <span class="sh-period-pill">${periodInfo.icon} ${escapeHtml(periodInfo.badge)}</span>
+          <strong style="font-family:'Space Grotesk',sans-serif; font-size:13.5px; color:var(--ink);">${escapeHtml(periodInfo.rangeText)}</strong>
+        </div>
+        <div class="muted small" style="font-size:12px;">
+          Showing <b>${cashierSales.length}</b> transaction record${cashierSales.length === 1 ? '' : 's'}
+        </div>
+      </div>
+      <div class="stat-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:12px;">
+        <div class="stat-card" style="border-left:4px solid var(--teal); padding:12px 16px;">
+          <div class="label" style="font-size:11px; text-transform:uppercase; letter-spacing:0.04em;">My Total Net Sales</div>
+          <div class="value" style="color:var(--teal); font-size:22px; font-family:'Space Grotesk',sans-serif; font-weight:700;">${peso(totalNet)}</div>
+          <div class="sub" style="font-size:11px;">Total net revenue collected</div>
+        </div>
+        <div class="stat-card sage" style="padding:12px 16px;">
+          <div class="label" style="font-size:11px; text-transform:uppercase; letter-spacing:0.04em;">My Completed Transactions</div>
+          <div class="value" style="font-size:22px; font-family:'Space Grotesk',sans-serif; font-weight:700;">${totalTx.toLocaleString()}</div>
+          <div class="sub" style="font-size:11px;">Completed sales transactions</div>
+        </div>
+        <div class="stat-card mustard" style="padding:12px 16px;">
+          <div class="label" style="font-size:11px; text-transform:uppercase; letter-spacing:0.04em;">My Gross Transaction Value</div>
+          <div class="value" style="font-size:22px; font-family:'Space Grotesk',sans-serif; font-weight:700;">${peso(totalGross)}</div>
+          <div class="sub" style="font-size:11px;">Gross sales before discounts/refunds</div>
+        </div>
+        ${returnTx > 0 ? `
+        <div class="stat-card" style="border-left:4px solid #D97706; padding:12px 16px;">
+          <div class="label" style="font-size:11px; text-transform:uppercase; letter-spacing:0.04em;">My Returns &amp; Exchanges</div>
+          <div class="value" style="color:#D97706; font-size:22px; font-family:'Space Grotesk',sans-serif; font-weight:700;">${returnTx.toLocaleString()}</div>
+          <div class="sub" style="font-size:11px;">Transactions with return / exchange slips</div>
+        </div>
+        ` : ''}
+      </div>
+    </div>
+  `;
+}
+
 function salesHistoryPage() {
   const curY = getCurrentYear();
   const availableYears = getAvailableRecordYears();
@@ -230,17 +303,27 @@ function salesHistoryPage() {
   const activePreset = getSalesDatePreset();
   const hasDates = Boolean(salesDateFrom || salesDateTo);
   const isHistorical = isHistoricalView(salesDateFrom, salesDateTo);
+  const isCashier = currentUser && currentUser.role === 'cashier';
+  const mySales = (db.sales || []).filter(s => isCurrentUserSale(s));
+  const pendingVoidCount = mySales.filter(s => normalizeSaleStatus(s.status) === 'pending_void').length;
+  const voidedCount = mySales.filter(s => normalizeSaleStatus(s.status) === 'voided').length;
+  const voidRejectedCount = mySales.filter(s => normalizeSaleStatus(s.status) === 'void_rejected').length;
 
   return `
   <div class="panel" id="sales-history-panel" style="padding:0; overflow:hidden;">
     <div class="panel-head row wrap" style="padding:14px 18px 12px; gap:10px;">
       <div>
         <h3 style="margin:0;">Sales History &amp; Aftersales</h3>
-        <span class="muted small">Review sales receipts, process same-day product returns &amp; exchanges (within day only), and issue exchange slips</span>
+        <span class="muted small">${isCashier ? `Viewing your personal sales transactions (Cashier: <b>${escapeHtml(currentUser.name)}</b>)` : 'Review sales receipts, process same-day product returns &amp; exchanges (within day only), and issue exchange slips'}</span>
       </div>
       <div class="spacer"></div>
       <div class="row wrap" style="gap:8px; align-items:center;">
-        <input id="sh-search" type="text" placeholder="🔍 Search receipt #, cashier…" value="${escapeHtml(salesSearchQuery)}" style="width:250px;" oninput="salesSearchQuery=this.value; renderSalesHistoryTable()">
+        ${isCashier ? `
+          <span class="badge" style="background:#E6F4F1; color:#0F766E; font-weight:700; border:1px solid #B5D2CD; padding:4px 10px; border-radius:12px;">
+            👤 ${escapeHtml(currentUser.name)} (Cashier)
+          </span>
+        ` : ''}
+        <input id="sh-search" type="text" placeholder="${isCashier ? '🔍 Search receipt #, customer, items…' : '🔍 Search receipt #, cashier, customer…'}" value="${escapeHtml(salesSearchQuery)}" style="width:250px;" oninput="salesSearchQuery=this.value; renderSalesHistoryTable()">
         <button type="button" class="btn ghost small" onclick="resetAllSalesFilters()" title="Reset all search and date filters to current year">Reset All</button>
       </div>
     </div>
@@ -249,8 +332,10 @@ function salesHistoryPage() {
     <div style="padding:10px 18px; display:flex; gap:8px; border-bottom:1px solid var(--line-light); background:#FAF7F2; flex-wrap:wrap;">
       <button class="btn ghost small filter-tab ${salesFilterStatus === 'all' ? 'active' : ''}" onclick="setSalesFilter('all')">All Transactions</button>
       <button class="btn ghost small filter-tab ${salesFilterStatus === 'completed' ? 'active' : ''}" onclick="setSalesFilter('completed')">Completed</button>
-      <button class="btn ghost small filter-tab ${salesFilterStatus === 'partially_refunded' ? 'active' : ''}" onclick="setSalesFilter('partially_refunded')">Partial Return / Exchange</button>
+      <button class="btn ghost small filter-tab ${salesFilterStatus === 'pending_void' ? 'active' : ''}" onclick="setSalesFilter('pending_void')">⏳ Pending Void (${pendingVoidCount})</button>
       <button class="btn ghost small filter-tab ${salesFilterStatus === 'refunded' ? 'active' : ''}" onclick="setSalesFilter('refunded')">Returned / Exchanged</button>
+      <button class="btn ghost small filter-tab ${salesFilterStatus === 'voided' ? 'active' : ''}" onclick="setSalesFilter('voided')">🚫 Voided (${voidedCount})</button>
+      <button class="btn ghost small filter-tab ${salesFilterStatus === 'void_rejected' ? 'active' : ''}" onclick="setSalesFilter('void_rejected')">✕ Void Rejected (${voidRejectedCount})</button>
     </div>
 
     <!-- Dedicated Date Range Bar, Year Selector & Historical Records Option -->
@@ -324,6 +409,7 @@ function salesHistoryPage() {
 function setSalesFilter(status) {
   salesFilterStatus = status;
   resetPaginationPage('sales_history');
+  if (typeof syncRouteState === 'function') syncRouteState({ push: true });
   renderSalesHistoryTable(true);
   // Update tab visual state
   document.querySelectorAll('.filter-tab').forEach(btn => {
@@ -332,25 +418,45 @@ function setSalesFilter(status) {
 }
 
 function renderSalesHistoryTable(keepPage = false) {
+  const searchEl = document.getElementById('sh-search');
+  if (searchEl) salesSearchQuery = searchEl.value;
   if (!keepPage) {
     resetPaginationPage('sales_history');
   }
   const el = document.getElementById('sales-history-table');
   if (el) el.innerHTML = salesHistoryTableHtml();
+  if (typeof syncRouteState === 'function') syncRouteState({ push: false });
+}
+
+function normalizeSaleStatus(status) {
+  const s = String(status || 'completed').trim().toLowerCase();
+  if (s === 'pending void approval' || s === 'pending_void' || s === 'pending void') return 'pending_void';
+  if (s === 'void rejected' || s === 'void_rejected') return 'void_rejected';
+  if (s === 'voided' || s === 'void') return 'voided';
+  if (s === 'cancelled' || s === 'canceled') return 'cancelled';
+  if (s === 'refunded' || s === 'exchanged' || s === 'returned') return 'refunded';
+  if (s === 'partially_refunded' || s === 'partially_exchanged' || s === 'partially_returned') return 'partially_refunded';
+  return 'completed';
 }
 
 function saleStatusBadge(status) {
-  const s = String(status || 'completed').trim().toLowerCase();
-  if (s === 'voided' || s === 'void') {
-    return `<span class="badge out">Voided</span>`;
+  const norm = normalizeSaleStatus(status);
+  if (norm === 'pending_void') {
+    return `<span class="badge warning" style="background:#FEF3C7; color:#92400E; border:1px solid #FCD34D; font-weight:700;">⏳ Pending Void Approval</span>`;
   }
-  if (s === 'cancelled' || s === 'canceled') {
+  if (norm === 'void_rejected') {
+    return `<span class="badge danger" style="background:#FEE2E2; color:#991B1B; border:1px solid #FCA5A5; font-weight:700;">✕ Void Rejected</span>`;
+  }
+  if (norm === 'voided') {
+    return `<span class="badge out">🚫 Voided</span>`;
+  }
+  if (norm === 'cancelled') {
     return `<span class="badge out">Cancelled</span>`;
   }
-  if (s === 'refunded' || s === 'exchanged' || s === 'returned') {
+  if (norm === 'refunded') {
     return `<span class="badge sale-refunded">Returned / Exchanged</span>`;
   }
-  if (s === 'partially_refunded' || s === 'partially_exchanged' || s === 'partially_returned') {
+  if (norm === 'partially_refunded') {
     return `<span class="badge sale-partial-refund">Partial Return / Exchange</span>`;
   }
   return `<span class="badge sale-completed">Completed</span>`;
@@ -377,21 +483,52 @@ function isSaleReturnWithinDay(sale) {
   return saleDateISO === todayISO();
 }
 
+function hasSaleReturnableItems(sale, includeLockedMix = false) {
+  if (!sale || !Array.isArray(sale.items)) return false;
+  return sale.items.some(it => {
+    const qty = Number(it.qty || 0);
+    const ret = Number(it.returnedQty || 0);
+    const rem = qty - ret;
+    if (rem <= 0.001) return false;
+    // Under official store policy, Custom Color Mix is strictly Final Sale (non-returnable / non-exchangeable)
+    // unless includeLockedMix is explicitly true (for admin exception review)
+    if (!includeLockedMix && it.type === 'colormix') return false;
+    return true;
+  });
+}
+
+function saleHasOnlyCustomMixItems(sale) {
+  if (!sale || !Array.isArray(sale.items)) return false;
+  const unreturned = sale.items.filter(it => (Number(it.qty || 0) - Number(it.returnedQty || 0)) > 0.001);
+  return unreturned.length > 0 && unreturned.every(it => it.type === 'colormix');
+}
+
 function salesHistoryTableHtml() {
-  const searchEl = document.getElementById('sh-search');
-  if (searchEl) salesSearchQuery = searchEl.value;
   const q = String(salesSearchQuery || '').trim().toLowerCase();
   const fromDate = salesDateFrom;
   const toDate = salesDateTo;
-  let list = [...db.sales].sort((a, b) => new Date(b.date) - new Date(a.date));
+  const isCashier = currentUser && currentUser.role === 'cashier';
+  let list = [...(db.sales || [])].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  // Role-based filtering: Cashier only sees their own transactions
+  if (isCashier) {
+    list = list.filter(s => isCurrentUserSale(s));
+  }
 
   if (salesFilterStatus !== 'all') {
-    list = list.filter(s => (s.status || 'completed') === salesFilterStatus);
+    list = list.filter(s => {
+      const norm = normalizeSaleStatus(s.status);
+      if (salesFilterStatus === 'refunded') {
+        return norm === 'refunded' || norm === 'partially_refunded';
+      }
+      return norm === salesFilterStatus;
+    });
   }
   if (q) {
     list = list.filter(s => {
       const itemsText = (s.items || []).map(it => it.name || it.productName || '').join(' ');
-      return (getReceiptNo(s) + ' ' + (s.cashierName || '') + ' ' + itemsText).toLowerCase().includes(q);
+      const custText = s.customerName || s.customer_name || '';
+      return (getReceiptNo(s) + ' ' + (s.cashierName || '') + ' ' + custText + ' ' + itemsText).toLowerCase().includes(q);
     });
   }
   if (fromDate) {
@@ -421,18 +558,58 @@ function salesHistoryTableHtml() {
     histLabel = `Historical Records until ${formatDateReadable(toDate)}`;
   }
 
-  return `
-  ${isHistorical ? `
+  const historicalBannerHtml = isHistorical ? `
     <div class="historical-records-banner">
       <div>
         🏛️ <b>${escapeHtml(histLabel)}:</b> <b>${list.length}</b> transaction(s) found. All historical business records are permanently retained in the database.
       </div>
       <button type="button" class="btn ghost small" onclick="setSalesDatePreset('year')" style="color:#7B4F09; border-color:#D19A42; background:#fff;">Return to Current Year (${curY}) &rarr;</button>
     </div>
-  ` : ''}
-  ${typeof renderSalesHistorySummaryAndBreakdownsHtml === 'function'
-    ? `<div style="padding:14px 18px 0;">${renderSalesHistorySummaryAndBreakdownsHtml(list, fromDate, toDate)}</div>`
-    : ''}
+  ` : '';
+
+  let cashierNoticeHtml = '';
+  if (isCashier) {
+    const dismissed = getDismissedCashierVoidNotifs();
+    const decided = (db.sales || []).filter(s => isCurrentUserSale(s) && (normalizeSaleStatus(s.status) === 'voided' || normalizeSaleStatus(s.status) === 'void_rejected') && !dismissed.has(s.id));
+    if (decided.length > 0) {
+      cashierNoticeHtml = `
+        <div style="margin:12px 18px 0; background:#F0FDF4; border:1.5px solid #BBF7D0; border-radius:8px; padding:12px 16px; display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+          <div>
+            <div style="font-weight:700; color:#166534; font-size:13px; display:flex; align-items:center; gap:6px;">
+              <span>🔔 Void Request Decision Notice</span>
+              <span class="badge ok" style="font-size:10px;">${decided.length} Notification${decided.length === 1 ? '' : 's'}</span>
+            </div>
+            <div style="margin-top:6px; font-size:12px; color:#14532D; display:flex; flex-direction:column; gap:4px;">
+              ${decided.slice(0, 4).map(ds => {
+        const isApproved = normalizeSaleStatus(ds.status) === 'voided';
+        const rNo = getReceiptNo(ds);
+        const decAdmin = isApproved ? (ds.voidedBy || 'Admin') : (ds.voidRejectedBy || 'Admin');
+        const decDate = isApproved ? ds.voidedAt : ds.voidRejectedAt;
+        const decTimeStr = decDate ? formatDateTime(decDate) : '';
+        return `
+                  <div>
+                    • <b>Receipt ${escapeHtml(rNo)}</b>:
+                    ${isApproved
+            ? `<span style="color:#166534; font-weight:700;">Approved</span> by ${escapeHtml(decAdmin)} ${decTimeStr ? `(${decTimeStr})` : ''} — Sale voided &amp; eligible inventory restored.`
+            : `<span style="color:#991B1B; font-weight:700;">Rejected</span> by ${escapeHtml(decAdmin)} ${decTimeStr ? `(${decTimeStr})` : ''} — Original transaction kept Completed. Reason: "${escapeHtml(ds.voidAdminRemarks || ds.voidRejectReason || 'No note')}".`}
+                    <a href="#" onclick="openVoidDetailsModal('${ds.id}'); return false;" style="margin-left:6px; text-decoration:underline; font-weight:600; color:inherit;">View Details</a>
+                  </div>
+                `;
+      }).join('')}
+            </div>
+          </div>
+          <button type="button" class="btn ghost small" onclick="dismissAllCashierVoidNotifs()" style="font-size:11px; padding:2px 8px; color:#166534;" title="Dismiss notifications">✕ Dismiss</button>
+        </div>
+      `;
+    }
+  }
+
+  return `
+  ${historicalBannerHtml}
+  ${cashierNoticeHtml}
+  ${!isCashier && typeof renderSalesHistorySummaryAndBreakdownsHtml === 'function'
+      ? `<div style="padding:14px 18px 0;">${renderSalesHistorySummaryAndBreakdownsHtml(list, fromDate, toDate)}</div>`
+      : (isCashier ? renderCashierSalesSummaryHtml(list, fromDate, toDate) : '')}
   <table>
     <thead>
       <tr>
@@ -447,15 +624,16 @@ function salesHistoryTableHtml() {
     </thead>
     <tbody>
       ${pagedList.length ? pagedList.map(s => {
-    const status = s.status || 'completed';
-    const returnedVal = getSaleReturnedValue(s);
-    const exchangeTotal = getSaleExchangeTotal(s);
-    const refundTotal = Number(s.refundTotal || 0);
-    const netTotal = Number((s.total - refundTotal).toFixed(2));
-    const hasReturns = Array.isArray(s.returns) && s.returns.length > 0;
-    const isWithinDay = isSaleReturnWithinDay(s);
+        const status = s.status || 'completed';
+        const normStatus = normalizeSaleStatus(status);
+        const returnedVal = getSaleReturnedValue(s);
+        const exchangeTotal = getSaleExchangeTotal(s);
+        const refundTotal = Number(s.refundTotal || 0);
+        const netTotal = Number((s.total - refundTotal).toFixed(2));
+        const hasReturns = Array.isArray(s.returns) && s.returns.length > 0;
+        const isWithinDay = isSaleReturnWithinDay(s);
 
-    return `
+        return `
         <tr>
           <td><code style="color:var(--teal); font-weight:700;">${escapeHtml(getReceiptNo(s))}</code></td>
           <td>${formatDateTime(s.date)}</td>
@@ -464,170 +642,1048 @@ function salesHistoryTableHtml() {
           <td class="center">${saleStatusBadge(status)}</td>
           <td class="right">
             ${(returnedVal > 0 || refundTotal > 0)
-        ? `<div><strong style="font-family:'Space Grotesk'; font-size:13.5px;">${peso(netTotal)}</strong></div>
+            ? `<div><strong style="font-family:'Space Grotesk'; font-size:13.5px;">${peso(netTotal)}</strong></div>
                  <div class="muted small" style="color:${exchangeTotal > 0 ? 'var(--teal)' : 'var(--danger)'}; font-size:11px;">
                    ${exchangeTotal > 0
-          ? `Exchanged: ${peso(exchangeTotal)}`
-          : `Returned: -${peso(returnedVal || refundTotal)}`}
+              ? `Exchanged: ${peso(exchangeTotal)}`
+              : `Returned: -${peso(returnedVal || refundTotal)}`}
                  </div>`
-        : `<strong style="font-family:'Space Grotesk'; font-size:13.5px;">${peso(s.total)}</strong>`}
+            : `<div><strong style="font-family:'Space Grotesk'; font-size:13.5px;">${peso(s.total)}</strong></div>
+           ${(Number(s.discountAmount || s.discount || 0) > 0) ? `<div class="muted small" style="color:var(--teal); font-size:11px; font-weight:600;">10% Disc: -${peso(Number(s.discountAmount || s.discount || 0))}</div>` : ''}`}
           </td>
           <td class="right" style="white-space:nowrap;">
             <div class="row wrap" style="justify-content:flex-end; gap:6px;">
               <button class="btn ghost small" onclick='viewSale("${s.id}")' title="View Sales Receipt">🧾 Receipt</button>
-              ${status !== 'refunded' ? (
-        isWithinDay
-          ? `<button class="btn secondary small" onclick='openReturnRefundModal("${s.id}")' title="Return cans and process exchange (same-day only)">↩️ Return / Exchange</button>`
-          : `<button class="btn ghost small" disabled style="opacity:0.55; cursor:not-allowed;" title="Return / Exchange is only allowed within the same day of purchase">🔒 Return Expired</button>`
-      ) : ''}
+              ${normStatus === 'completed' && !hasReturns ? `
+                <button class="btn ghost small" style="color:var(--danger); border-color:#F0C4BF; background:#FFF8F7;" onclick='openVoidSaleModal("${s.id}")' title="Submit Void Request for Admin Approval">🚫 Void</button>
+              ` : ''}
+              ${normStatus === 'pending_void' ? `
+                <button class="btn ghost small" style="color:#B45309; border-color:#FCD34D; background:#FEF3C7; font-weight:600;" onclick='openVoidDetailsModal("${s.id}")' title="Void request submitted. Awaiting Admin review. Click to view details.">⏳ Pending Void</button>
+              ` : ''}
+              ${normStatus === 'voided' ? `
+                <button class="btn ghost small" style="color:var(--ink-soft); font-size:11px;" onclick='openVoidDetailsModal("${s.id}")' title="View void approval details">ℹ️ Void Details</button>
+              ` : ''}
+              ${normStatus === 'void_rejected' ? `
+                <button class="btn ghost small" style="color:var(--danger); border-color:#FCA5A5; background:#FEE2E2; font-size:11px;" onclick='openVoidDetailsModal("${s.id}")' title="View Admin rejection details">✕ Void Rejected</button>
+              ` : ''}
+              ${normStatus !== 'refunded' && normStatus !== 'voided' && normStatus !== 'pending_void' ? (
+            hasSaleReturnableItems(s)
+              ? `<button class="btn secondary small" onclick='openReturnRefundModal("${s.id}")' title="Process Return &amp; Exchange under store policy">↩️ Return / Exchange</button>`
+              : (saleHasOnlyCustomMixItems(s)
+                ? (currentUser && (currentUser.role === 'admin' || currentUser.role === 'manager')
+                  ? `<button class="btn ghost small" onclick='openReturnRefundModal("${s.id}")' style="border-color:#D8A868; color:#8A5A24;" title="Custom Color Mix is strictly Final Sale under standard policy. Click to open Administrator Review for store mixing errors.">🛡️ Custom Mix (Admin Review)</button>`
+                  : `<button class="btn ghost small" disabled style="opacity:0.65; cursor:not-allowed;" title="Custom Color Mix cannot be returned or exchanged once mixed (Final Sale)">🔒 Custom Mix (Final Sale)</button>`)
+                : `<button class="btn ghost small" disabled style="opacity:0.55; cursor:not-allowed;" title="All items from this transaction have already been returned or exchanged">✓ Fully Returned</button>`)
+          ) : ''}
               ${hasReturns ? `
                 <button class="btn ghost small" onclick='viewReturnVouchers("${s.id}")' title="View return &amp; exchange slips" style="color:#856404; background:#FFF3CD; border:1px solid #FFEBAA;">📋 Slip (${s.returns.length})</button>
               ` : ''}
             </div>
           </td>
         </tr>`;
-  }).join('') : `<tr><td colspan="7" class="empty-state">No sales transactions found matching filters.</td></tr>`}
+      }).join('') : `<tr><td colspan="7" class="empty-state">No sales transactions found matching filters.</td></tr>`}
     </tbody>
   </table>
   ${pag.html}`;
 }
 
 function viewSale(id) {
-  const sale = db.sales.find(s => s.id === id);
+  const sale = (db.sales || []).find(s => s.id === id);
   if (!sale) return;
+  if (currentUser && currentUser.role === 'cashier' && !isCurrentUserSale(sale)) {
+    showToast('Access denied: You are restricted from viewing other cashiers\' receipts.', 'error');
+    return;
+  }
   showReceipt(sale);
+}
+
+/* ============================================================
+   VOID SALE TRANSACTION WORKFLOW (ADMIN APPROVAL REQUEST)
+   ============================================================ */
+
+let dismissedCashierVoidNotifIds = null;
+function getDismissedCashierVoidNotifs() {
+  if (dismissedCashierVoidNotifIds) return dismissedCashierVoidNotifIds;
+  try {
+    const raw = localStorage.getItem('mrgr_dismissed_void_notifs');
+    dismissedCashierVoidNotifIds = new Set(raw ? JSON.parse(raw) : []);
+  } catch (e) {
+    dismissedCashierVoidNotifIds = new Set();
+  }
+  return dismissedCashierVoidNotifIds;
+}
+
+function dismissAllCashierVoidNotifs() {
+  const set = getDismissedCashierVoidNotifs();
+  (db.sales || []).forEach(s => {
+    if (normalizeSaleStatus(s.status) === 'voided' || normalizeSaleStatus(s.status) === 'void_rejected') {
+      set.add(s.id);
+    }
+  });
+  try {
+    localStorage.setItem('mrgr_dismissed_void_notifs', JSON.stringify([...set]));
+  } catch (e) { }
+  renderSalesHistoryTable(true);
+}
+
+function openVoidSaleModal(saleId) {
+  const sale = (db.sales || []).find(s => s.id === saleId);
+  if (!sale) {
+    showToast('Sale transaction not found.', 'error');
+    return;
+  }
+  if (currentUser && currentUser.role === 'cashier' && !isCurrentUserSale(sale)) {
+    showToast('Access denied: You cannot void transactions of other cashiers.', 'error');
+    return;
+  }
+  const norm = normalizeSaleStatus(sale.status);
+  if (norm === 'voided') {
+    showToast('This transaction has already been voided.', 'error');
+    return;
+  }
+  if (norm === 'pending_void' || (Array.isArray(db.voidRequests) && db.voidRequests.some(vr => (vr.saleId === sale.id || vr.receiptNo === getReceiptNo(sale)) && vr.status === 'pending'))) {
+    showToast('A void request for this receipt is already pending Admin approval.', 'warning');
+    return;
+  }
+  if (sale.status === 'refunded' || (Array.isArray(sale.returns) && sale.returns.length > 0)) {
+    showToast('Cannot void a transaction that already has returns or exchanges processed.', 'error');
+    return;
+  }
+
+  const receiptNo = getReceiptNo(sale);
+  const items = Array.isArray(sale.items) ? sale.items : [];
+  const hasCustomMix = items.some(it => it.type === 'colormix');
+
+  const itemsListHtml = items.map(it => {
+    const size = Number(it.size) || 1;
+    const qty = Number(it.qty) || 1;
+    const isMix = it.type === 'colormix';
+    const sizeStr = !isMix ? `${size}L` : `${formatStock(it.liters || qty)}L`;
+    const mixTag = isMix ? `<span class="badge low" style="font-size:10px; margin-left:4px;">Custom Mix</span>` : '';
+    return `
+      <tr style="border-bottom:1px solid var(--line-light);">
+        <td style="padding:6px 8px; font-weight:600;">${escapeHtml(it.name)}${mixTag}</td>
+        <td style="padding:6px 8px; text-align:center;">${sizeStr}</td>
+        <td style="padding:6px 8px; text-align:center; font-weight:700;">${qty}</td>
+        <td style="padding:6px 8px; text-align:right; font-family:'Space Grotesk',monospace;">${peso(it.lineTotal)}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const bodyHtml = `
+    <div style="display:flex; flex-direction:column; gap:14px; max-width:540px;">
+      <div style="background:#FFFBEB; border:1.5px solid #FCD34D; border-radius:8px; padding:12px 14px; display:flex; gap:10px; align-items:flex-start;">
+        <span style="font-size:24px; line-height:1;">⏳</span>
+        <div>
+          <div style="font-weight:700; color:#92400E; font-size:13.5px;">Void Sale Request — Receipt ${escapeHtml(receiptNo)}</div>
+          <div style="font-size:12px; color:#78350F; margin-top:2px;">
+            Submitting will send this void request to the Administrator's <b>Pending Approvals Hub</b> for review. The transaction will be marked as <b>Pending Void Approval</b>.
+            Inventory will remain unchanged until an Administrator reviews and approves the request.
+          </div>
+        </div>
+      </div>
+
+      <div style="background:#FAF8F5; border:1px solid var(--line-light); border-radius:6px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
+        <span style="font-size:12.5px; color:var(--ink-soft);">Total Transaction Amount:</span>
+        <span style="font-family:'Space Grotesk',monospace; font-size:16px; font-weight:700; color:var(--ink);">${peso(sale.total)}</span>
+      </div>
+
+      <div>
+        <label style="font-size:12px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.04em;">Purchased Items in Transaction</label>
+        <div style="max-height:150px; overflow-y:auto; border:1px solid var(--line); border-radius:6px; margin-top:4px; background:#fff;">
+          <table style="width:100%; border-collapse:collapse; font-size:12px;">
+            <thead style="background:#FAF8F5; border-bottom:1px solid var(--line);">
+              <tr>
+                <th style="padding:6px 8px; text-align:left;">Item</th>
+                <th style="padding:6px 8px; text-align:center;">Size</th>
+                <th style="padding:6px 8px; text-align:center;">Qty</th>
+                <th style="padding:6px 8px; text-align:right;">Subtotal</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsListHtml}
+            </tbody>
+          </table>
+        </div>
+        ${hasCustomMix ? `
+          <div style="margin-top:6px; font-size:11px; color:#6B6259; background:#FAF6EE; padding:6px 10px; border-radius:4px; border:1px dashed #D6CBBA;">
+            ℹ️ <b>Custom Color Mix Notice</b>: Blended paint cannot be returned to regular sealed inventory upon approval and will be quarantined as miscast stock per store policy.
+          </div>
+        ` : ''}
+      </div>
+
+      <div>
+        <label for="void-sale-reason-select" style="font-weight:700; font-size:12.5px; display:block; margin-bottom:4px;">
+          Void Reason <span style="color:var(--danger);">*</span>
+        </label>
+        <select id="void-sale-reason-select" class="input" style="width:100%; margin-bottom:6px;" onchange="onVoidReasonSelectChange(this.value)">
+          <option value="Cashier input error / wrong product selected">Cashier input error / wrong product selected</option>
+          <option value="Customer cancelled before counter departure">Customer cancelled before counter departure</option>
+          <option value="Duplicate transaction ring-up">Duplicate transaction ring-up</option>
+          <option value="Wrong payment amount or tender calculation error">Wrong payment amount or tender calculation error</option>
+          <option value="Customer changed mind before leaving counter">Customer changed mind before leaving counter</option>
+          <option value="Other">Other (specify explanation below)…</option>
+        </select>
+        <label for="void-sale-reason" style="font-size:11.5px; font-weight:600; color:var(--ink-soft); display:block; margin-bottom:2px;">
+          Explanation / Remarks <span id="void-expl-required-tag" style="color:var(--danger); display:none;">* Required for "Other"</span>
+        </label>
+        <textarea id="void-sale-reason" rows="2" placeholder="Specify void explanation and details for Admin review…"
+          style="width:100%; box-sizing:border-box; padding:8px 10px; font-size:12.5px; border:1px solid var(--line); border-radius:6px; font-family:inherit; resize:vertical;"></textarea>
+      </div>
+
+      <div style="background:#EDF5F4; border:1px solid #C4DFDC; border-radius:6px; padding:8px 12px; font-size:12px; color:#1F6F6B;">
+        <span>👤 Requesting Cashier: <b>${escapeHtml((currentUser && currentUser.name) || sale.cashierName || 'Cashier')}</b></span>
+      </div>
+    </div>
+  `;
+
+  const footHtml = `
+    <button type="button" class="btn secondary" onclick="closeModal()">Cancel</button>
+    <button type="button" class="btn" id="btn-submit-void-request" onclick="submitVoidSale('${sale.id}')"
+      style="background:var(--mustard-dark, #B45309); color:#fff; font-weight:700;">
+      📨 Submit Void Request
+    </button>
+  `;
+
+  openModal('🚫 Void Sale Transaction', bodyHtml, footHtml, 'void-sale-modal');
+  setTimeout(() => {
+    const sel = document.getElementById('void-sale-reason-select');
+    const ta = document.getElementById('void-sale-reason');
+    if (sel && ta && sel.value !== 'Other') {
+      ta.placeholder = `Explanation for: ${sel.value} (optional or enter additional details)…`;
+    }
+  }, 50);
+}
+
+function onVoidReasonSelectChange(val) {
+  const ta = document.getElementById('void-sale-reason');
+  const reqTag = document.getElementById('void-expl-required-tag');
+  if (!ta) return;
+  if (val === 'Other') {
+    ta.value = '';
+    ta.placeholder = 'Please specify the exact void explanation (required)…';
+    if (reqTag) reqTag.style.display = 'inline';
+    ta.focus();
+  } else {
+    if (reqTag) reqTag.style.display = 'none';
+    ta.placeholder = `Explanation for: ${val} (optional or enter additional details)…`;
+  }
+}
+
+async function submitVoidSale(saleId) {
+  const sale = (db.sales || []).find(s => s.id === saleId);
+  if (!sale) return;
+
+  const selEl = document.getElementById('void-sale-reason-select');
+  const reason = selEl ? selEl.value.trim() : '';
+  const reasonEl = document.getElementById('void-sale-reason');
+  const explanation = reasonEl ? reasonEl.value.trim() : '';
+
+  if (!reason) {
+    showToast('Please select a reason for voiding this sale.', 'error');
+    if (selEl) selEl.focus();
+    return;
+  }
+
+  if (reason === 'Other' && !explanation) {
+    showToast('Please enter an explanation for void reason "Other".', 'error');
+    if (reasonEl) reasonEl.focus();
+    return;
+  }
+
+  // Prevent multiple pending requests for the same receipt
+  const norm = normalizeSaleStatus(sale.status);
+  if (norm === 'pending_void' || (Array.isArray(db.voidRequests) && db.voidRequests.some(vr => (vr.saleId === sale.id || vr.receiptNo === getReceiptNo(sale)) && vr.status === 'pending'))) {
+    showToast('A void request for this receipt is already pending Admin approval.', 'warning');
+    closeModal();
+    return;
+  }
+
+  if (norm === 'voided') {
+    showToast('This transaction has already been voided.', 'error');
+    closeModal();
+    return;
+  }
+
+  const btn = document.getElementById('btn-submit-void-request');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Submitting Request…';
+  }
+
+  const receiptNo = getReceiptNo(sale);
+  const now = nowISO();
+  const cashierId = (currentUser && currentUser.id) || sale.cashierId || 'cashier';
+  const cashierName = (currentUser && currentUser.name) || sale.cashierName || 'Cashier';
+  let voidReqId = uid('vr');
+
+  // Attempt backend API submission
+  try {
+    const vrResp = await fetch('api/void.php?action=submit_request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        saleId: sale.id,
+        reason: reason,
+        explanation: explanation,
+        currentUser: (typeof currentUser !== 'undefined' && currentUser) ? { id: currentUser.id, role: currentUser.role, username: currentUser.username, name: currentUser.name } : null
+      })
+    });
+    if (vrResp.ok) {
+      const vrData = await vrResp.json();
+      if (vrData && vrData.voidRequestId) {
+        voidReqId = vrData.voidRequestId;
+      }
+    }
+  } catch (err) {
+    console.warn('api/void.php submit fallback to db sync:', err.message);
+  }
+
+  // Update sale status to Pending Void Approval
+  sale.status = 'Pending Void Approval';
+  sale.voidRequestId = voidReqId;
+  sale.voidReason = reason;
+  sale.voidExplanation = explanation;
+  sale.voidRequestedAt = now;
+  sale.voidRequestedBy = cashierName;
+
+  // Add void request record to db.voidRequests
+  if (!Array.isArray(db.voidRequests)) db.voidRequests = [];
+  const existingIndex = db.voidRequests.findIndex(vr => vr.saleId === sale.id && vr.status === 'pending');
+  if (existingIndex >= 0) {
+    db.voidRequests[existingIndex].reason = reason;
+    db.voidRequests[existingIndex].explanation = explanation;
+    db.voidRequests[existingIndex].date = now;
+  } else {
+    db.voidRequests.push({
+      id: voidReqId,
+      saleId: sale.id,
+      receiptNo: receiptNo,
+      date: now,
+      requestDate: now,
+      cashierId: cashierId,
+      cashierName: cashierName,
+      reason: reason,
+      explanation: explanation,
+      total: Number(sale.total || 0),
+      items: sale.items || [],
+      status: 'pending',
+      reviewedBy: null,
+      reviewedAt: null,
+      adminRemarks: null,
+      inventoryRestored: false
+    });
+  }
+
+  // Log Audit Event
+  logAudit(
+    'SALE_VOID_REQUEST',
+    `Receipt ${receiptNo}`,
+    `Void request submitted by ${cashierName} for receipt ${receiptNo} (${peso(sale.total)}) — Reason: ${reason}${explanation ? ` · Note: ${explanation}` : ''}. Transaction status set to Pending Void Approval.`,
+    {
+      entityName: `Receipt ${receiptNo}`,
+      fieldChanged: 'Transaction Status',
+      oldValue: 'Completed',
+      newValue: 'Pending Void Approval',
+      referenceNo: receiptNo,
+      reason: reason,
+      meta: {
+        receiptNo,
+        cashierId,
+        cashierName,
+        total: sale.total,
+        voidReason: reason,
+        explanation: explanation,
+        requestDate: now
+      }
+    }
+  );
+
+  // Persist to database and update UI
+  await saveDB();
+  closeModal();
+  renderSalesHistoryTable(true);
+  if (typeof updateNavBadges === 'function') updateNavBadges();
+  showToast(`Void request for Receipt ${receiptNo} submitted for Admin approval. Transaction set to Pending Void Approval.`, 'info');
+}
+
+function openVoidDetailsModal(saleId) {
+  const sale = (db.sales || []).find(s => s.id === saleId);
+  if (!sale) {
+    showToast('Transaction record not found.', 'error');
+    return;
+  }
+
+  const receiptNo = getReceiptNo(sale);
+  const norm = normalizeSaleStatus(sale.status);
+  const vr = (Array.isArray(db.voidRequests) ? db.voidRequests : []).find(v => v.saleId === sale.id || v.receiptNo === receiptNo) || {};
+  const reason = sale.voidReason || vr.reason || 'N/A';
+  const explanation = sale.voidExplanation || vr.explanation || 'None provided';
+  const requestedBy = sale.voidRequestedBy || vr.cashierName || sale.cashierName || 'Cashier';
+  const requestedAt = sale.voidRequestedAt || vr.date || vr.requestDate || sale.date;
+
+  const isAdmin = currentUser && currentUser.role === 'admin';
+
+  let decisionBoxHtml = '';
+  if (norm === 'pending_void') {
+    decisionBoxHtml = `
+      <div style="background:#FFFBEB; border:1.5px solid #FCD34D; border-radius:8px; padding:12px 14px;">
+        <div style="display:flex; align-items:center; gap:8px; font-weight:700; color:#92400E; font-size:13px;">
+          <span>⏳ Awaiting Administrator Review</span>
+        </div>
+        <p style="margin:4px 0 0; font-size:12px; color:#78350F;">
+          This void request is currently queued in the <b>Pending Approvals Hub</b>. No inventory has been restored yet.
+        </p>
+        ${isAdmin ? `
+          <div style="margin-top:10px;">
+            <button class="btn small" onclick="closeModal(); goToApprovalsTab('voidRequests');" style="background:var(--teal); color:#fff; font-size:12px;">
+              ⚖️ Open in Pending Approvals Hub &rarr;
+            </button>
+          </div>
+        ` : ''}
+      </div>
+    `;
+  } else if (norm === 'voided') {
+    const adminName = sale.voidedBy || vr.reviewedBy || 'Administrator';
+    const decisionDate = sale.voidedAt || vr.reviewedAt;
+    const remarks = sale.voidAdminRemarks || vr.adminRemarks;
+    decisionBoxHtml = `
+      <div style="background:#F0FDF4; border:1.5px solid #BBF7D0; border-radius:8px; padding:12px 14px;">
+        <div style="display:flex; align-items:center; gap:8px; font-weight:700; color:#166534; font-size:13px;">
+          <span>✅ Void Request Approved</span>
+        </div>
+        <div style="margin-top:6px; font-size:12px; color:#14532D; line-height:1.5;">
+          <div><b>Authorized by Administrator:</b> ${escapeHtml(adminName)}</div>
+          <div><b>Approval Date &amp; Time:</b> ${decisionDate ? formatDateTime(decisionDate) : 'Recorded'}</div>
+          <div><b>Inventory Restoration:</b> Eligible sealed merchandise restored to active stock exactly once. Custom-mix items quarantined per store policy.</div>
+          ${remarks ? `<div style="margin-top:4px;"><b>Admin Remarks:</b> <span style="font-style:italic;">"${escapeHtml(remarks)}"</span></div>` : ''}
+        </div>
+      </div>
+    `;
+  } else if (norm === 'void_rejected') {
+    const adminName = sale.voidRejectedBy || vr.reviewedBy || 'Administrator';
+    const decisionDate = sale.voidRejectedAt || vr.reviewedAt;
+    const remarks = sale.voidAdminRemarks || sale.voidRejectReason || vr.adminRemarks || 'Void request was not approved by administration';
+    decisionBoxHtml = `
+      <div style="background:#FEF2F2; border:1.5px solid #FECACA; border-radius:8px; padding:12px 14px;">
+        <div style="display:flex; align-items:center; gap:8px; font-weight:700; color:#991B1B; font-size:13px;">
+          <span>✕ Void Request Rejected</span>
+        </div>
+        <div style="margin-top:6px; font-size:12px; color:#7F1D1D; line-height:1.5;">
+          <div><b>Reviewed by Administrator:</b> ${escapeHtml(adminName)}</div>
+          <div><b>Decision Date &amp; Time:</b> ${decisionDate ? formatDateTime(decisionDate) : 'Recorded'}</div>
+          <div><b>Original Sale Status:</b> Maintained as Completed. Store merchandise remains sold; no inventory was restored.</div>
+          <div style="margin-top:4px; background:#fff; border:1px solid #FCA5A5; border-radius:4px; padding:6px 10px;">
+            <b>Admin Rejection Reason:</b> <span style="color:#991B1B; font-weight:600;">"${escapeHtml(remarks)}"</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const items = Array.isArray(sale.items) ? sale.items : [];
+  const itemsListHtml = items.map(it => {
+    const size = Number(it.size) || 1;
+    const qty = Number(it.qty) || 1;
+    const isMix = it.type === 'colormix';
+    const sizeStr = !isMix ? `${size}L` : `${formatStock(it.liters || qty)}L`;
+    return `
+      <tr style="border-bottom:1px solid var(--line-light);">
+        <td style="padding:5px 8px; font-weight:600;">${escapeHtml(it.name)}${isMix ? ' (Custom Mix)' : ''}</td>
+        <td style="padding:5px 8px; text-align:center;">${sizeStr}</td>
+        <td style="padding:5px 8px; text-align:center; font-weight:700;">${qty}</td>
+        <td style="padding:5px 8px; text-align:right; font-family:'Space Grotesk',monospace;">${peso(it.lineTotal)}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const bodyHtml = `
+    <div style="display:flex; flex-direction:column; gap:14px; max-width:560px;">
+      ${decisionBoxHtml}
+
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; background:#FAF8F5; border:1px solid var(--line); border-radius:6px; padding:10px 14px; font-size:12px;">
+        <div>
+          <div class="muted small" style="text-transform:uppercase; font-size:10px; font-weight:700;">Receipt Number</div>
+          <div style="font-weight:700; color:var(--teal); font-size:13px;"><code style="font-size:12.5px;">${escapeHtml(receiptNo)}</code></div>
+        </div>
+        <div>
+          <div class="muted small" style="text-transform:uppercase; font-size:10px; font-weight:700;">Transaction Total</div>
+          <div style="font-family:'Space Grotesk',monospace; font-weight:700; font-size:13px;">${peso(sale.total)}</div>
+        </div>
+        <div>
+          <div class="muted small" style="text-transform:uppercase; font-size:10px; font-weight:700;">Requesting Cashier</div>
+          <div style="font-weight:600;">${escapeHtml(requestedBy)}</div>
+        </div>
+        <div>
+          <div class="muted small" style="text-transform:uppercase; font-size:10px; font-weight:700;">Submitted At</div>
+          <div>${requestedAt ? formatDateTime(requestedAt) : 'N/A'}</div>
+        </div>
+      </div>
+
+      <div style="border:1px solid var(--line); border-radius:6px; padding:10px 14px; background:#fff;">
+        <div style="font-weight:700; font-size:12px; color:var(--ink-soft); text-transform:uppercase; margin-bottom:4px;">Void Reason &amp; Cashier Explanation</div>
+        <div style="font-size:13px; font-weight:700; color:var(--danger);">${escapeHtml(reason)}</div>
+        ${explanation ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">"${escapeHtml(explanation)}"</div>` : ''}
+      </div>
+
+      <div>
+        <label style="font-size:11px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.04em;">Purchased Products (${items.length})</label>
+        <div style="max-height:130px; overflow-y:auto; border:1px solid var(--line); border-radius:6px; margin-top:4px; background:#fff;">
+          <table style="width:100%; border-collapse:collapse; font-size:12px;">
+            <thead style="background:#FAF8F5; border-bottom:1px solid var(--line);">
+              <tr>
+                <th style="padding:5px 8px; text-align:left;">Item</th>
+                <th style="padding:5px 8px; text-align:center;">Size</th>
+                <th style="padding:5px 8px; text-align:center;">Qty</th>
+                <th style="padding:5px 8px; text-align:right;">Subtotal</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsListHtml}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const footHtml = `
+    <button type="button" class="btn secondary" onclick="closeModal()">Close</button>
+  `;
+
+  openModal(`📋 Void Details — ${escapeHtml(receiptNo)}`, bodyHtml, footHtml, 'void-details-modal');
+}
+
+// Global execution functions for Admin Approvals Hub & Void Requests
+async function executeApproveVoid(vrId, remarks = '') {
+  if (!currentUser || currentUser.role !== 'admin') {
+    showToast('Access denied: Only Administrators can approve void requests.', 'error');
+    return false;
+  }
+
+  const vr = (Array.isArray(db.voidRequests) ? db.voidRequests : []).find(v => v.id === vrId);
+  const sale = (db.sales || []).find(s => (vr && s.id === vr.saleId) || s.id === vrId || getReceiptNo(s) === vrId);
+
+  if (!sale) {
+    showToast('Sale transaction record not found.', 'error');
+    return false;
+  }
+
+  // Idempotency: Restores eligible quantities exactly once!
+  if (sale.voidInventoryRestored || normalizeSaleStatus(sale.status) === 'voided') {
+    showToast('This transaction has already been voided and inventory restored.', 'warning');
+    return false;
+  }
+
+  const receiptNo = getReceiptNo(sale);
+  const items = Array.isArray(sale.items) ? sale.items : [];
+  const adminName = currentUser.name;
+  const now = nowISO();
+  const revertSummary = [];
+
+  // Attempt backend API approval first
+  try {
+    await fetch('api/void.php?action=approve_request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        voidRequestId: vr ? vr.id : sale.voidRequestId,
+        adminRemarks: remarks,
+        currentUser: { id: currentUser.id, role: currentUser.role, username: currentUser.username, name: currentUser.name }
+      })
+    });
+  } catch (err) {
+    console.warn('api/void.php approve_request fallback to db sync:', err.message);
+  }
+
+  // 1. Revert Inventory: Exactly once
+  items.forEach(c => {
+    if (c.type === 'product') {
+      const p = productById(c.productId);
+      const size = Number(c.size) || 1;
+      const count = Number(c.qty) || 0;
+      const litersReverted = Number((count * size).toFixed(2));
+      const variant = p ? productSizeVariantBySize(p, size) : null;
+      const sizeId = c.sizeId || (variant ? variant.sizeId : null);
+
+      if (p) {
+        const beforeStock = Number(p.stock) || 0;
+        const beforeCans = productCanCount(p, size);
+        p.stock = Number((p.stock + litersReverted).toFixed(2));
+        if (!p.canStock || typeof p.canStock !== 'object' || Array.isArray(p.canStock)) {
+          p.canStock = {};
+        }
+        p.canStock[size] = (Number(p.canStock[size]) || 0) + count;
+        syncProductVariants(p);
+        const afterCans = productCanCount(p, size);
+
+        revertSummary.push(`${p.name} (${count} × ${size}L)`);
+
+        const trailNote = ` · ${size}L Units: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(p.stock)}L`;
+
+        db.movements.push({
+          id: uid('mv'),
+          date: now,
+          type: 'adjustment',
+          productId: p.productId || p.id,
+          product_id: p.productId || p.id,
+          sizeId: sizeId,
+          size_id: sizeId,
+          container_size: size,
+          containerSize: size,
+          productName: p.name,
+          qtyChange: litersReverted,
+          note: `Void Sale Reversal (${receiptNo}) [Reverted ${count} × ${size}L${trailNote}] · Reason: ${vr ? vr.reason : (sale.voidReason || 'Admin Void')} (Auth: ${adminName})`,
+          staffName: adminName
+        });
+      }
+    } else if (c.type === 'colormix') {
+      // Custom Color Mix rule: Do NOT return mixed paint to regular sealed inventory!
+      // Quarantined per miscast / defective custom-mix stock rules.
+      const mixLiters = Number(c.liters || c.qty || 1);
+      revertSummary.push(`Quarantined Mix: ${c.colorName || c.name} (${mixLiters}L)`);
+
+      db.movements.push({
+        id: uid('mv'),
+        date: now,
+        type: 'adjustment',
+        productId: null,
+        product_id: null,
+        sizeId: null,
+        size_id: null,
+        productName: `Quarantined Custom Mix — ${c.colorName || c.name}`,
+        colorName: c.colorName || 'Custom Shade',
+        qtyChange: 0,
+        note: `Void Sale Reversal (${receiptNo}): ${mixLiters}L Custom Mix quarantined as miscast/defective stock. NOT restored to regular sealed units. Reason: ${vr ? vr.reason : (sale.voidReason || 'Admin Void')} (Auth: ${adminName})`,
+        staffName: adminName
+      });
+    }
+  });
+
+  // 2. Mark Sale as Voided and flag inventory as restored
+  sale.status = 'Voided';
+  sale.voidedAt = now;
+  sale.voidedBy = adminName;
+  sale.voidAdminRemarks = remarks;
+  sale.voidInventoryRestored = true;
+
+  // 3. Mark Void Request as Approved
+  if (vr) {
+    vr.status = 'approved';
+    vr.reviewedBy = adminName;
+    vr.reviewedAt = now;
+    vr.adminRemarks = remarks;
+    vr.inventoryRestored = true;
+  }
+
+  // 4. Record Audit Log
+  const cashierName = (vr && vr.cashierName) || sale.cashierName || 'Cashier';
+  const voidReason = (vr && vr.reason) || sale.voidReason || 'Void Sale Approved';
+  const explanation = (vr && vr.explanation) || sale.voidExplanation || '';
+  logAudit(
+    'SALE_VOID_APPROVE',
+    `Receipt ${receiptNo}`,
+    `Void request approved by Admin ${adminName} for receipt ${receiptNo} (${peso(sale.total)}) — Sale reversed and eligible inventory restored: ${revertSummary.join(', ')}. ${remarks ? `Admin remarks: "${remarks}"` : ''}`,
+    {
+      entityName: `Receipt ${receiptNo}`,
+      fieldChanged: 'Transaction Status',
+      oldValue: 'Pending Void Approval',
+      newValue: 'Voided',
+      referenceNo: receiptNo,
+      reason: voidReason,
+      meta: {
+        receiptNo,
+        cashierName,
+        requestDate: (vr && vr.date) || sale.voidRequestedAt || sale.date,
+        voidReason,
+        explanation,
+        adminName,
+        approvalDate: now,
+        adminRemarks: remarks,
+        previousStatus: 'Pending Void Approval',
+        resultingStatus: 'Voided',
+        revertSummary
+      }
+    }
+  );
+
+  // 5. Persist to MySQL and update UI
+  await saveDB();
+  if (typeof updateNavBadges === 'function') updateNavBadges();
+  if (typeof renderSalesHistoryTable === 'function') renderSalesHistoryTable(true);
+  if (typeof refreshApprovalsTabContent === 'function') refreshApprovalsTabContent();
+  showToast(`Receipt ${receiptNo} has been successfully voided and inventory restored.`, 'success');
+  return true;
+}
+
+async function executeRejectVoid(vrId, rejectNote = '') {
+  if (!currentUser || currentUser.role !== 'admin') {
+    showToast('Access denied: Only Administrators can reject void requests.', 'error');
+    return false;
+  }
+
+  const note = String(rejectNote || '').trim();
+  if (!note) {
+    showToast('Administrator rejection reason or note is required.', 'error');
+    return false;
+  }
+
+  const vr = (Array.isArray(db.voidRequests) ? db.voidRequests : []).find(v => v.id === vrId);
+  const sale = (db.sales || []).find(s => (vr && s.id === vr.saleId) || s.id === vrId || getReceiptNo(s) === vrId);
+
+  if (!sale) {
+    showToast('Sale transaction record not found.', 'error');
+    return false;
+  }
+
+  const receiptNo = getReceiptNo(sale);
+  const adminName = currentUser.name;
+  const now = nowISO();
+
+  // Attempt backend API rejection first
+  try {
+    await fetch('api/void.php?action=reject_request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        voidRequestId: vr ? vr.id : sale.voidRequestId,
+        rejectionReason: note,
+        currentUser: { id: currentUser.id, role: currentUser.role, username: currentUser.username, name: currentUser.name }
+      })
+    });
+  } catch (err) {
+    console.warn('api/void.php reject_request fallback to db sync:', err.message);
+  }
+
+  // 1. Update Sale Status to Void Rejected (Keeps original completed sale & inventory intact)
+  sale.status = 'Void Rejected';
+  sale.voidRejectReason = note;
+  sale.voidAdminRemarks = note;
+  sale.voidRejectedAt = now;
+  sale.voidRejectedBy = adminName;
+
+  // 2. Update Void Request to Rejected
+  if (vr) {
+    vr.status = 'rejected';
+    vr.reviewedBy = adminName;
+    vr.reviewedAt = now;
+    vr.adminRemarks = note;
+  }
+
+  // 3. Record Audit Log
+  const cashierName = (vr && vr.cashierName) || sale.cashierName || 'Cashier';
+  const voidReason = (vr && vr.reason) || sale.voidReason || 'Void Sale Request';
+  const explanation = (vr && vr.explanation) || sale.voidExplanation || '';
+  logAudit(
+    'SALE_VOID_REJECT',
+    `Receipt ${receiptNo}`,
+    `Void request rejected by Admin ${adminName} for receipt ${receiptNo} (${peso(sale.total)}) — Original sale kept Completed. Rejection note: "${note}".`,
+    {
+      entityName: `Receipt ${receiptNo}`,
+      fieldChanged: 'Transaction Status',
+      oldValue: 'Pending Void Approval',
+      newValue: 'Void Rejected',
+      referenceNo: receiptNo,
+      reason: note,
+      meta: {
+        receiptNo,
+        cashierName,
+        requestDate: (vr && vr.date) || sale.voidRequestedAt || sale.date,
+        voidReason,
+        explanation,
+        adminName,
+        rejectionDate: now,
+        adminRemarks: note,
+        previousStatus: 'Pending Void Approval',
+        resultingStatus: 'Void Rejected'
+      }
+    }
+  );
+
+  // 4. Persist to MySQL and update UI
+  await saveDB();
+  if (typeof updateNavBadges === 'function') updateNavBadges();
+  if (typeof renderSalesHistoryTable === 'function') renderSalesHistoryTable(true);
+  if (typeof refreshApprovalsTabContent === 'function') refreshApprovalsTabContent();
+  showToast(`Void request for Receipt ${receiptNo} rejected. Original transaction kept completed.`, 'info');
+  return true;
 }
 
 /* ============================================================
    RETURN & EXCHANGE MODAL WORKFLOW
    ============================================================ */
 
-function openReturnRefundModal(saleId) {
+function getItemReturnPolicy(item, isSameDay, isAdminApproved = false) {
+  const isBlend = item.type === 'colormix';
+  const paintClass = isBlend ? 'Custom Mixed-Color Paint' : 'Single-Color Paint';
+
+  // 1. Custom Mixed-Color Paint Policy:
+  // Strictly Final Sale (non-returnable & non-exchangeable) because the paint formula has already been mixed / tinted.
+  // Exception only allowed under Administrator Review (e.g. store mixing error or statutory consumer remedy).
+  if (isBlend) {
+    if (isAdminApproved) {
+      return {
+        isSameDay,
+        paintClass,
+        isBlend: true,
+        eligible: true,
+        allowedResolutions: ['replacement', 'refund'],
+        badgeClass: 'badge ok',
+        badgeText: '🛡️ Admin Approved Exception (Mixing Error Remedy)',
+        policyText: 'Authorized Exception: Return / exchange approved under Administrator Review for verified store mixing error, off-shade formula, or statutory consumer remedy.',
+        restricted: false,
+        requiresAdminReview: false,
+        restockableIfSealed: false // NEVER restocked into regular sealed base inventory
+      };
+    }
+
+    return {
+      isSameDay,
+      paintClass,
+      isBlend: true,
+      eligible: false,
+      allowedResolutions: [],
+      badgeClass: 'badge low',
+      badgeText: '🔒 Final Sale — Non-Returnable / Non-Exchangeable (Custom Mixed)',
+      policyText: 'Strict Policy: Custom Color Mixed paints are strictly non-returnable and non-exchangeable once mixed because the paint formula has already been tinted.',
+      restrictedReason: 'Custom Color Mix items cannot be returned or exchanged because the paint has already been tinted and cannot be restocked into base inventory or resold.',
+      restricted: true,
+      requiresAdminReview: true,
+      restockableIfSealed: false
+    };
+  }
+
+  // 2. Single-Color Paint Policy:
+  // Same-Day Return
+  if (isSameDay) {
+    return {
+      isSameDay: true,
+      paintClass,
+      isBlend: false,
+      eligible: true,
+      allowedResolutions: ['replacement', 'refund'],
+      badgeClass: 'badge ok',
+      badgeText: '✓ Same-Day Return Eligible',
+      policyText: 'Same-Day Policy: Single-color paint is eligible for refund or replacement if returned within the same calendar day of purchase, subject to product inspection and authorized approval.',
+      restricted: false,
+      requiresAdminReview: false,
+      restockableIfSealed: true
+    };
+  }
+
+  // Single-Color Paint – After Purchase Day
+  return {
+    isSameDay: false,
+    paintClass,
+    isBlend: false,
+    eligible: true,
+    allowedResolutions: isAdminApproved ? ['replacement', 'refund'] : ['replacement'],
+    badgeClass: 'badge mid',
+    badgeText: '🔄 Replacement Only (After Purchase Day)',
+    policyText: 'After Purchase Day Policy: Single-color paint is eligible for replacement only (same product or eligible alternative). Ordinary cash refunds are not offered under standard store policy.',
+    restrictedReason: 'Ordinary cash refunds are restricted after purchase day under standard policy. Replacement is available, or Admin Review for exceptional refund requests.',
+    restricted: false,
+    requiresAdminReview: false,
+    restockableIfSealed: true
+  };
+}
+
+function openReturnRefundModal(saleId, keepState = false) {
   const sale = (db.sales || []).find(s => s.id === saleId);
   if (!sale) return;
-  if (!isSaleReturnWithinDay(sale)) {
-    showToast('Return / Exchange is only allowed within the same day of purchase.', 'error');
+  if (currentUser && currentUser.role === 'cashier' && !isCurrentUserSale(sale)) {
+    showToast('Access denied: You can only process returns or exchanges on your own transactions.', 'error');
     return;
   }
-  returnExchangeCart = [];
-  openExchangePickerRow = null;
-  exchangePickerTab = 'recommended';
-  exchangePickerQuery = '';
+
+  const onlyMix = saleHasOnlyCustomMixItems(sale);
+  const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'manager');
+
+  if (onlyMix && !isAdmin && !adminReviewApproved) {
+    showToast('Custom Color Mix items cannot be returned or exchanged once mixed (Final Sale).', 'error');
+    return;
+  }
+
+  if (!hasSaleReturnableItems(sale, true)) {
+    showToast('All items from this transaction have already been returned or exchanged.', 'error');
+    return;
+  }
+
+  const isSameDay = isSaleReturnWithinDay(sale);
+
+  // Preserve previous input quantities if keepState is true
+  const prevInputs = {};
+  if (keepState) {
+    (sale.items || []).forEach((_, idx) => {
+      const el = document.getElementById(`ret-qty-input-${idx}`);
+      if (el) prevInputs[idx] = parseFloat(el.value) || 0;
+    });
+  } else {
+    returnExchangeCart = [];
+    openExchangePickerRow = null;
+    exchangePickerTab = 'recommended';
+    exchangePickerQuery = '';
+    returnItemConditions = {};
+    adminReviewApproved = false;
+    adminReviewReason = '';
+    adminReviewAdminName = '';
+    currentReturnResolution = 'exchange';
+  }
+
+  const canRefund = isSameDay || adminReviewApproved;
+  if (currentReturnResolution === 'refund' && !canRefund) {
+    currentReturnResolution = 'exchange';
+  }
 
   const receiptNo = getReceiptNo(sale);
   const saleItems = Array.isArray(sale.items) ? sale.items : [];
   const hasColorMixItems = saleItems.some(it => it.type === 'colormix');
+  const anyRestrictedMixItems = hasColorMixItems;
 
   const rowsHtml = saleItems.map((item, idx) => {
     const qtyPurchased = Number(item.qty || 0);
     const qtyReturned = Number(item.returnedQty || 0);
     const returnable = Math.max(0, Number((qtyPurchased - qtyReturned).toFixed(2)));
 
-    // Unit price per item
     const rawUnitPrice = Number(item.unitPrice !== undefined ? item.unitPrice : (item.price !== undefined ? item.price : (Number(item.lineTotal || 0) / Math.max(1, Number(item.qty || 1))))) || 0;
     const effectiveUnitPrice = Number(rawUnitPrice.toFixed(2));
 
     const isBlend = item.type === 'colormix';
+    const policy = getItemReturnPolicy(item, isSameDay, adminReviewApproved);
     const hex = isBlend ? (item.hexColor || '#1F6F6B') : getProductHex(productById(item.productId));
-    const prod = !isBlend && item.productId ? productById(item.productId) : null;
-    const variant = prod ? productSizeVariantBySize(prod, item.size) : null;
-    const sizeId = item.sizeId || (variant ? variant.sizeId : null);
-    const prodId = prod ? (prod.productId || prod.id) : item.productId;
-    const sizeStr = item.size ? ` · Size: <b>${item.size}L</b>` : '';
+    const sizeStr = item.size ? ` · Size: <b>${item.size}L</b>` : (item.liters ? ` · Volume: <b>${item.liters}L</b>` : '');
     const formulaStr = isBlend && Array.isArray(item.components) && item.components.length
       ? `<div class="muted small" style="font-size:11px; margin-top:2px;">Formula: ${item.components.map(cp => `${cp.percentage}% ${escapeHtml(cp.name)} (${formatStock(cp.liters)}L)`).join(' + ')}</div>`
       : '';
+
+    if (!returnItemConditions[idx]) {
+      returnItemConditions[idx] = 'sealed';
+    }
+    const cond = returnItemConditions[idx];
+
     const desc = isBlend
-      ? `<div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-           <span class="cm-color-dot" style="background:${escapeHtml(hex)}; width:12px; height:12px; display:inline-block; border-radius:50%; border:1px solid rgba(0,0,0,0.15);"></span>
-           <b>${escapeHtml(item.name)}</b> — <b>${escapeHtml(item.colorName || 'Custom Shade')}</b>
-           <span class="muted small">(${item.liters || item.qty}L Mix)</span>
-           <span class="badge low" id="ret-cm-badge-${idx}" style="font-size:10px; padding:1px 6px;">🔒 Custom Mix — Final Sale</span>
-         </div>
-         ${formulaStr}`
+      ? `<div>
+           <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+             <span class="cm-color-dot" style="background:${escapeHtml(hex)}; width:13px; height:13px; display:inline-block; border-radius:50%; border:1px solid rgba(0,0,0,0.18);"></span>
+             <b>${escapeHtml(item.name)}</b> — <b>${escapeHtml(item.colorName || 'Custom Shade')}</b>
+             <span class="badge mid" style="font-size:10px; padding:1px 6px;">🎨 ${escapeHtml(policy.paintClass)}</span>
+           </div>
+           <div class="muted small" style="margin-top:2px;">Custom Tint Mixture${sizeStr}</div>
+           ${formulaStr}
+           <div style="margin-top:4px;">
+             <span class="${policy.badgeClass}" style="font-size:10px; padding:1px 6px;">${policy.badgeText}</span>
+             <div class="muted small" style="font-size:11px; margin-top:2px;">${policy.policyText}</div>
+             ${policy.restricted && !adminReviewApproved ? `<div style="color:var(--danger); font-size:11px; font-weight:600; margin-top:2px;">⚠️ ${policy.restrictedReason}</div>` : ''}
+           </div>
+         </div>`
       : `<div>
            <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
              <b>${escapeHtml(item.name)}</b>
              ${hex ? `<code style="font-family:'Space Grotesk',monospace; font-size:11px; font-weight:600; color:var(--teal);">(${hex})</code>` : ''}
              ${item.color && item.color !== '-' ? `(${escapeHtml(item.color)})` : ''}
+             <span class="badge ghost" style="font-size:10px; padding:1px 6px;">🥫 ${escapeHtml(policy.paintClass)}</span>
            </div>
            <div class="muted small">${escapeHtml(item.brand || '')}${sizeStr}</div>
+           <div style="margin-top:4px;">
+             <span class="${policy.badgeClass}" style="font-size:10px; padding:1px 6px;">${policy.badgeText}</span>
+             <div class="muted small" style="font-size:11px; margin-top:2px;">${policy.policyText}</div>
+           </div>
          </div>`;
 
-    // Custom mixes are locked by default unless override is enabled
-    const isInputDisabled = returnable === 0 || isBlend;
+    const isInputDisabled = returnable <= 0 || (policy.restricted && !adminReviewApproved);
+    const initVal = prevInputs[idx] !== undefined ? Math.min(prevInputs[idx], returnable) : 0;
 
     return `
     <tr data-ret-row="${idx}" style="${isBlend ? 'background:#FDFBF7;' : ''}">
-      <td>${desc}</td>
-      <td class="right">${formatStock(qtyPurchased)}${isBlend ? 'L' : ''}</td>
-      <td class="right" style="color:var(--ink-soft);">${formatStock(qtyReturned)}${isBlend ? 'L' : ''}</td>
-      <td class="right" style="font-weight:700; color:${returnable > 0 ? 'var(--teal)' : 'var(--ink-soft)'};" id="ret-max-${idx}">
+      <td style="vertical-align:top; padding:10px 8px;">${desc}</td>
+      <td class="right" style="vertical-align:top; padding:10px 8px;">${formatStock(qtyPurchased)}${isBlend ? 'L' : ''}</td>
+      <td class="right" style="vertical-align:top; padding:10px 8px; color:var(--ink-soft);">${formatStock(qtyReturned)}${isBlend ? 'L' : ''}</td>
+      <td class="right" style="vertical-align:top; padding:10px 8px; font-weight:700; color:${returnable > 0 ? 'var(--teal)' : 'var(--ink-soft)'};" id="ret-max-${idx}">
         ${formatStock(returnable)}${isBlend ? 'L' : ''}
       </td>
-      <td class="right" style="font-family:'Space Grotesk'; font-size:12.5px;">
+      <td class="right" style="vertical-align:top; padding:10px 8px; font-family:'Space Grotesk'; font-size:12.5px;">
         ${peso(effectiveUnitPrice)}
       </td>
-      <td style="width:130px;">
+      <td style="vertical-align:top; padding:10px 8px; width:140px;">
+        <select id="ret-condition-${idx}" class="input" style="width:100%; font-size:11.5px; padding:3px 5px;"
+          ${returnable <= 0 ? 'disabled' : ''}
+          onchange="onReturnConditionChange('${sale.id}', ${idx}, this.value)">
+          <option value="sealed" ${cond === 'sealed' ? 'selected' : ''}>🟢 Sealed / Undamaged</option>
+          <option value="opened" ${cond === 'opened' ? 'selected' : ''}>🟡 Opened / Unsealed</option>
+          <option value="defective" ${cond === 'defective' ? 'selected' : ''}>🔴 Defective / Damaged</option>
+        </select>
+        <div class="muted small" style="font-size:10.5px; margin-top:2px;">Inspection condition</div>
+      </td>
+      <td style="vertical-align:top; padding:10px 8px; width:125px;">
         <div style="display:flex; gap:4px; align-items:center;">
-          <input type="number" id="ret-qty-input-${idx}" min="0" max="${returnable}" step="any" value="0"
-            style="width:75px; text-align:right; font-weight:700; font-family:'Space Grotesk';"
+          <input type="number" id="ret-qty-input-${idx}" min="0" max="${returnable}" step="any" value="${initVal}"
+            style="width:70px; text-align:right; font-weight:700; font-family:'Space Grotesk';"
             ${isInputDisabled ? 'disabled' : ''}
             data-is-colormix="${isBlend ? '1' : '0'}"
             data-unit-price="${effectiveUnitPrice}"
             data-max="${returnable}"
             oninput="onReturnQtyInput('${sale.id}', ${idx})">
-          ${returnable > 0 ? `
-            <button type="button" id="ret-max-btn-${idx}" class="btn ghost small" style="padding:2px 6px; font-size:11px; ${isBlend ? 'display:none;' : ''}" onclick="fillMaxReturnLine('${sale.id}', ${idx})">Max</button>
+          ${returnable > 0 && !isInputDisabled ? `
+            <button type="button" id="ret-max-btn-${idx}" class="btn ghost small" style="padding:2px 5px; font-size:11px;" onclick="fillMaxReturnLine('${sale.id}', ${idx})">Max</button>
           ` : ''}
         </div>
       </td>
-      <td class="right" style="font-weight:700; font-family:'Space Grotesk'; color:var(--danger);" id="ret-line-total-${idx}">
-        ₱0.00
+      <td class="right" style="vertical-align:top; padding:10px 8px; font-weight:700; font-family:'Space Grotesk'; color:var(--danger);" id="ret-line-total-${idx}">
+        ${peso(initVal * effectiveUnitPrice)}
       </td>
     </tr>`;
   }).join('');
 
-  const availableProducts = activeProducts().filter(p => Number(p.stock) > 0);
-  const productOptionsHtml = availableProducts.length
-    ? availableProducts.map(p => {
-      const hex = getProductHex(p);
-      const col = p.color && p.color !== '-' ? ` (${p.color})` : '';
-      return `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}${hex ? ` [${hex}]` : ''}${escapeHtml(col)} — ${escapeHtml(p.brand)} (${formatLiters(p.stock)} avail · ${peso(p.price)}/L)</option>`;
-    }).join('')
-    : `<option value="">No products in stock</option>`;
-
-  const colorMixPolicyBanner = hasColorMixItems ? `
-    <div style="margin-top:10px; padding:10px 14px; background:#FFF8EC; border:1px solid #F0D9B5; border-radius:var(--radius-sm); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-      <div style="flex:1; min-width:240px;">
-        <div style="font-weight:700; font-size:12.5px; color:#8A5A24;">🎨 Custom Color-Mixed Paint Policy</div>
-        <div class="muted small" style="margin-top:2px;">
-          Custom-tinted paints cannot be un-mixed back into sealed base units and are <b>Final Sale</b> by default. Unlock only if the store mixed the wrong formula/shade or the batch was defective.
-        </div>
-      </div>
-      <label style="display:inline-flex; align-items:center; gap:8px; cursor:pointer; font-weight:700; font-size:12.5px; color:var(--danger); background:#fff; padding:6px 10px; border:1px solid #F3C4BF; border-radius:6px; margin:0;">
-        <input type="checkbox" id="ret-colormix-override" onchange="onToggleColorMixOverride('${sale.id}', this.checked)">
-        <span>⚠️ Unlock Custom Mix (Store Mixing Error / Defective)</span>
-      </label>
-    </div>
-  ` : '';
-
   openModal(`↩️ Return &amp; Exchange — ${escapeHtml(receiptNo)}`, `
+    <!-- RECEIPT & POLICY HEADER -->
     <div style="background:#FAF7F2; border:1px solid var(--line); border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:14px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px;">
       <div>
-        <div><span class="muted">Receipt #:</span> <code style="font-weight:700; color:var(--teal);">${escapeHtml(receiptNo)}</code> <span class="badge ok" style="font-size:10.5px; margin-left:6px;">✓ Same-Day Eligible</span></div>
+        <div>
+          <span class="muted">Receipt #:</span> <code style="font-weight:700; color:var(--teal);">${escapeHtml(receiptNo)}</code>
+          ${isSameDay
+      ? `<span class="badge ok" style="font-size:10.5px; margin-left:6px;">✓ Same-Day Return Eligible</span>`
+      : `<span class="badge mid" style="font-size:10.5px; margin-left:6px;">🔄 Post-Purchase Return (Replacement Only)</span>`}
+          ${adminReviewApproved ? `<span class="badge ok" style="font-size:10.5px; margin-left:4px;">🛡️ Exception Approved</span>` : ''}
+        </div>
+        ${sale.customerName ? `<div style="margin-top:2px;"><span class="muted">Customer:</span> <b>${escapeHtml(sale.customerName)}</b></div>` : ''}
       </div>
       <div>
         <div><span class="muted">Date of Sale:</span> <b>${formatDateTime(sale.date)}</b></div>
-        <div><span class="muted">Original Total:</span> <b>${peso(sale.total)}</b></div>
+        <div><span class="muted">Current Return Date:</span> <b>${formatDateTime(nowISO())}</b></div>
+        <div><span class="muted">Original Sale Total:</span> <b>${peso(sale.total)}</b></div>
       </div>
     </div>
 
-    <!-- STEP 1: ITEMS BEING RETURNED -->
+    <!-- RESOLUTION SELECTOR (REPLACEMENT VS REFUND) -->
+    <div style="background:#fff; border:1px solid var(--line); border-radius:var(--radius-sm); padding:10px 14px; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+      <div>
+        <span style="font-weight:700; font-size:13px; color:var(--ink);">Approved Resolution Option:</span>
+        <div class="muted small" style="font-size:11.5px;">
+          ${isSameDay
+      ? 'Same-day purchases are eligible for Replacement (exchange) or Tender Refund.'
+      : (adminReviewApproved
+        ? 'Administrator exception active: Replacement or Refund authorized.'
+        : 'Standard store policy: Single-color paint is eligible for Replacement only; ordinary cash refunds are restricted.')}
+        </div>
+      </div>
+      <div style="display:flex; gap:16px; align-items:center;">
+        <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-weight:700; font-size:13px; color:var(--ink); margin:0;">
+          <input type="radio" name="ret-resolution-choice" value="exchange" ${currentReturnResolution === 'exchange' ? 'checked' : ''} onchange="onReturnResolutionChange('${sale.id}', 'exchange')">
+          <span>🔄 Replacement (Exchange)</span>
+        </label>
+        <label style="display:inline-flex; align-items:center; gap:6px; cursor:${canRefund ? 'pointer' : 'not-allowed'}; font-weight:700; font-size:13px; color:${canRefund ? 'var(--ink)' : 'var(--ink-soft)'}; opacity:${canRefund ? '1' : '0.55'}; margin:0;">
+          <input type="radio" name="ret-resolution-choice" value="refund" ${currentReturnResolution === 'refund' ? 'checked' : ''} ${canRefund ? '' : 'disabled'} onchange="onReturnResolutionChange('${sale.id}', 'refund')">
+          <span>💵 Refund (Tender Credit)</span>
+          ${!canRefund ? '<span class="badge low" style="font-size:10px; margin-left:4px;" title="Ordinary cash refund restricted after purchase day. Replacement only under standard store policy.">Restricted</span>' : ''}
+        </label>
+      </div>
+    </div>
+
+    <!-- STEP 1: ITEMS BEING RETURNED & PHYSICAL INSPECTION -->
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:8px; flex-wrap:wrap;">
       <div>
-        <strong style="font-size:13.5px; color:var(--ink);">1. Select Items Being Returned</strong>
-        <div class="muted small">Enter the quantity of paint units being returned:</div>
+        <strong style="font-size:13.5px; color:var(--ink);">1. Select Items Being Returned &amp; Inspect Condition</strong>
+        <div class="muted small">Enter the return quantity and verify the physical condition of each paint container:</div>
       </div>
       <div class="row wrap" style="gap:6px;">
         <button type="button" class="btn secondary small" onclick="fillAllReturnLines('${sale.id}', true)">⚡ Return All Eligible</button>
@@ -635,15 +1691,16 @@ function openReturnRefundModal(saleId) {
       </div>
     </div>
 
-    <div class="bulk-adj-wrap" style="max-height:220px; overflow-y:auto;">
+    <div class="bulk-adj-wrap" style="max-height:240px; overflow-y:auto;">
       <table class="bulk-adj-table">
         <thead>
           <tr>
-            <th>Item Purchased</th>
+            <th>Item Purchased &amp; Classification</th>
             <th class="right">Sold</th>
             <th class="right">Returned</th>
             <th class="right">Returnable</th>
             <th class="right">Unit Credit</th>
+            <th>Inspection Condition</th>
             <th class="right">Return Qty</th>
             <th class="right">Return Credit</th>
           </tr>
@@ -652,15 +1709,24 @@ function openReturnRefundModal(saleId) {
       </table>
     </div>
 
-    ${colorMixPolicyBanner}
-
-    <!-- STEP 2: REPLACEMENT ITEMS FOR EXCHANGE (FIXED SIZE & QTY) -->
-    <div style="margin-top:16px; padding:12px 14px; background:#F4F8F7; border:1px solid #C8DDD9; border-radius:var(--radius-sm);">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:8px; flex-wrap:wrap;">
+    <!-- PHYSICAL INSPECTION VERIFICATION (MANDATORY) -->
+    <div id="ret-inspection-box" style="margin-top:12px; padding:10px 14px; background:#FAF7F2; border:1px solid var(--line); border-radius:var(--radius-sm); transition:all 0.15s ease;">
+      <label style="display:flex; align-items:flex-start; gap:10px; cursor:pointer; font-weight:700; font-size:12.5px; margin:0;">
+        <input type="checkbox" id="ret-inspection-verified" style="margin-top:2px;" onchange="recalcReturnGrandTotal('${sale.id}')">
         <div>
-          <strong style="font-size:13.5px; color:var(--teal);">2. Replacement Item(s) for Exchange <span class="badge mid" style="font-size:10.5px; margin-left:6px;">🔒 Fixed Container Size &amp; Qty</span></strong>
-          <div class="muted small">Container size and quantity are automatically fixed to match each item being returned above. You may keep the same product or select an alternative product of the same container size:</div>
+          <span style="color:var(--ink);">🔍 Verified Physical Product Inspection Conducted <span style="color:var(--danger);">*</span></span>
+          <div class="muted small" style="font-weight:400; margin-top:2px; font-size:11.5px;">
+            Mandatory store policy check: Staff has physically examined the returned paint container(s), verified product condition, checked for opening/damage/defects, and validated the return reason.
+          </div>
         </div>
+      </label>
+    </div>
+
+    <!-- STEP 2: REPLACEMENT ITEMS FOR EXCHANGE (FIXED SIZE, QTY & SAME PRICE) -->
+    <div id="ret-exchange-step-container" style="margin-top:16px; padding:12px 14px; background:#F4F8F7; border:1px solid #C8DDD9; border-radius:var(--radius-sm);">
+      <div class="ret-exchange-header" style="display:${currentReturnResolution === 'refund' ? 'none' : 'block'}; margin-bottom:10px;">
+        <strong style="font-size:13.5px; color:var(--teal);">2. Replacement Item(s) for Exchange <span class="badge mid" style="font-size:10.5px; margin-left:6px;">🔒 Fixed Size, Qty &amp; Same Price Only</span></strong>
+        <div class="muted small">Container size, quantity, and unit price are automatically fixed to match each item being returned above. Only products with the <b>exact same price</b> and container size are eligible for replacement:</div>
       </div>
 
       <div id="ret-exchange-cart-wrap"></div>
@@ -676,27 +1742,33 @@ function openReturnRefundModal(saleId) {
           <option value="Store mixing error / off-shade formula (Re-Mix Exchange)">Store mixing error / off-shade formula (Re-Mix Exchange)</option>
           <option value="Returned unopened / excess paint units">Returned unopened / excess paint units</option>
           <option value="Job cancelled / changed mind">Job cancelled / changed mind</option>
+          <option value="Statutory defect remedy (Consumer Protection Act)">Statutory defect remedy (Consumer Protection Act)</option>
           <option value="Other return / exchange reason">Other return / exchange reason</option>
         </select>
       </div>
       <div class="field">
         <label>Cashier / Manager Note (optional)</label>
-        <input id="ret-note" type="text" placeholder="e.g. Unopened units inspected, exchanged for new shade">
+        <input id="ret-note" type="text" placeholder="e.g. Unopened containers inspected, customer selected new shade">
       </div>
     </div>
 
-    <div style="margin-top:10px; background:#FAF6EE; border:1px solid #E4D8C5; border-radius:var(--radius-sm); padding:10px 14px;">
-      <label style="display:flex; align-items:flex-start; gap:10px; cursor:pointer; font-weight:600; font-size:13px; margin:0;">
-        <input type="checkbox" id="ret-restock" checked style="margin-top:3px;">
-        <div>
-          <span>Restock returned sealed paint units back into inventory</span>
-          <div class="muted small" style="font-weight:400; margin-top:2px;">
-            Adds returned sealed units back to product stock. (Note: Custom Color-Mixed paints are never restocked into sealed base units and are automatically logged as Miscast / Defective Mix.)
-          </div>
-        </div>
-      </label>
+    <!-- INVENTORY RESTORATION DISPOSITION SECTION -->
+    <div id="ret-restock-section" style="margin-top:10px; background:#F8FAF9; border:1px solid #D1E5E1; border-radius:var(--radius-sm); padding:10px 14px;">
+      <div style="font-weight:700; font-size:12px; color:var(--teal); margin-bottom:4px; text-transform:uppercase; letter-spacing:0.03em;">
+        📦 Inventory Restoration Handling
+      </div>
+      <div id="ret-restock-summary-text" class="small" style="font-size:11.5px; color:var(--ink);">
+        <span class="muted">Enter return quantity above and select inspection condition to determine inventory restoration handling.</span>
+      </div>
+      <div style="margin-top:8px;">
+        <label style="display:inline-flex; align-items:center; gap:8px; cursor:pointer; font-size:12px; font-weight:600; color:var(--ink); margin:0;">
+          <input type="checkbox" id="ret-restock" disabled>
+          <span>Restock verified sealed &amp; undamaged single-color paint into sellable inventory</span>
+        </label>
+      </div>
     </div>
 
+    <!-- SETTLEMENT SUMMARY -->
     <div style="margin-top:14px; padding:12px 14px; background:#FAF7F2; border:1px dashed var(--line); border-radius:var(--radius-sm); display:flex; flex-direction:column; gap:6px;">
       <div style="display:flex; justify-content:space-between; align-items:center; font-size:13px;">
         <span class="muted">Return Credit (Returned Items):</span>
@@ -713,59 +1785,155 @@ function openReturnRefundModal(saleId) {
     </div>
   `, `
     <button class="btn secondary" onclick="closeModal()">Cancel</button>
-    <button class="btn" id="btn-submit-return" onclick="processSaleReturn('${sale.id}')" disabled>Confirm Return &amp; Exchange</button>
+    <button class="btn" id="btn-submit-return" onclick="processSaleReturn('${sale.id}')" disabled style="background:#DDD6CA; color:#8C8275; border-color:#CFC7B8; cursor:not-allowed; opacity:0.65; box-shadow:none;">Confirm Return &amp; Exchange</button>
   `, 'wide');
 
-  syncFixedExchangeLines(sale.id);
+  if (currentReturnResolution === 'exchange') {
+    syncFixedExchangeLines(sale.id);
+  } else {
+    renderExchangeReplacementCart(sale.id);
+  }
+  recalcReturnGrandTotal(sale.id);
 }
 
 const openReturnExchangeModal = openReturnRefundModal;
 
-function onToggleColorMixOverride(saleId, unlocked) {
-  const sale = (db.sales || []).find(s => s.id === saleId);
-  if (!sale) return;
-
-  sale.items.forEach((item, idx) => {
-    if (item.type === 'colormix') {
-      const input = document.getElementById(`ret-qty-input-${idx}`);
-      const maxBtn = document.getElementById(`ret-max-btn-${idx}`);
-      const badge = document.getElementById(`ret-cm-badge-${idx}`);
-      const max = input ? (parseFloat(input.dataset.max) || 0) : 0;
-
-      if (input) {
-        if (unlocked && max > 0) {
-          input.disabled = false;
-        } else {
-          input.value = 0;
-          input.disabled = true;
-          onReturnQtyInput(saleId, idx);
-        }
-      }
-      if (maxBtn) {
-        maxBtn.style.display = (unlocked && max > 0) ? 'inline-block' : 'none';
-      }
-      if (badge) {
-        badge.className = unlocked ? 'badge mid' : 'badge low';
-        badge.innerHTML = unlocked ? '🔓 Unlocked (Mixing Error / Defect)' : '🔒 Custom Mix — Final Sale';
-      }
+function onReturnResolutionChange(saleId, resolution) {
+  currentReturnResolution = resolution;
+  const exWrap = document.getElementById('ret-exchange-step-container');
+  if (exWrap) {
+    const exHeader = exWrap.querySelector('.ret-exchange-header');
+    if (exHeader) {
+      exHeader.style.display = resolution === 'refund' ? 'none' : 'block';
     }
-  });
-
-  if (unlocked) {
-    const reasonSel = document.getElementById('ret-reason');
-    if (reasonSel) {
-      reasonSel.value = 'Store mixing error / off-shade formula (Re-Mix Exchange)';
-    }
-    showToast('Custom Mix unlocked for Store Mixing Error / Defective Re-Mix Exchange.', 'ok');
-  } else {
-    syncFixedExchangeLines(saleId);
-    recalcReturnGrandTotal(saleId);
   }
+  if (resolution === 'exchange') {
+    syncFixedExchangeLines(saleId);
+  } else {
+    returnExchangeCart = [];
+    renderExchangeReplacementCart(saleId);
+  }
+  recalcReturnGrandTotal(saleId);
+}
+
+function onReturnConditionChange(saleId, idx, condition) {
+  returnItemConditions[idx] = condition;
+  const reasonSel = document.getElementById('ret-reason');
+  if (condition === 'defective' && reasonSel && (reasonSel.value.includes('different color') || reasonSel.value.includes('excess paint'))) {
+    reasonSel.value = 'Defective / damaged product container (Replace)';
+  }
+  updateRestockSummary(saleId);
+  recalcReturnGrandTotal(saleId);
+}
+
+function toggleAdminReviewSection() {
+  const panel = document.getElementById('ret-admin-review-panel');
+  if (!panel) return;
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+}
+
+async function submitInlineAdminReview(saleId) {
+  const reasonSel = document.getElementById('ret-inline-admin-reason');
+  const noteEl = document.getElementById('ret-inline-admin-note');
+  const userEl = document.getElementById('ret-inline-admin-user');
+  const passEl = document.getElementById('ret-inline-admin-pass');
+  const btn = document.getElementById('btn-approve-inline-admin');
+
+  const reason = reasonSel ? reasonSel.value : 'Authorized exception';
+  const note = noteEl ? noteEl.value.trim() : '';
+  const fullReason = note ? `${reason} — ${note}` : reason;
+
+  const isAdmin = currentUser && currentUser.role === 'admin';
+  let adminName = isAdmin ? currentUser.name : '';
+
+  if (!isAdmin) {
+    const username = userEl ? userEl.value.trim() : '';
+    const password = passEl ? passEl.value : '';
+    if (!username || !password) {
+      showToast('Please enter administrator username and password.', 'error');
+      return;
+    }
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '⏳ Verifying Admin…';
+    }
+    try {
+      const res = await fetch('api/auth.php?action=verify_admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Invalid administrator credentials.');
+      }
+      adminName = data.admin.name;
+    } catch (err) {
+      showToast(err.message, 'error');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '🔐 Authenticate & Authorize';
+      }
+      return;
+    }
+  }
+
+  adminReviewApproved = true;
+  adminReviewReason = fullReason;
+  adminReviewAdminName = adminName;
+  showToast(`Admin Review Exception authorized by ${adminName}.`, 'ok');
+
+  openReturnRefundModal(saleId, true);
+}
+
+function cancelInlineAdminReview(saleId) {
+  adminReviewApproved = false;
+  adminReviewReason = '';
+  adminReviewAdminName = '';
+  showToast('Admin review exception revoked.', 'ok');
+  openReturnRefundModal(saleId, true);
+}
+
+function onToggleColorMixOverride(saleId, unlocked) {
+  if (unlocked) {
+    adminReviewApproved = true;
+    adminReviewReason = 'Store mixing error / off-shade formula re-mix remedy';
+    adminReviewAdminName = (currentUser && currentUser.name) || 'Administrator';
+  } else {
+    adminReviewApproved = false;
+    adminReviewReason = '';
+    adminReviewAdminName = '';
+  }
+  openReturnRefundModal(saleId, true);
+}
+
+function getReplacementUnitPriceForSize(p, fixedSize, origProductId, origUnitPrice) {
+  if (!p) return 0;
+  if (origProductId && p.id === origProductId && origUnitPrice !== undefined) {
+    return Number(Number(origUnitPrice).toFixed(2));
+  }
+  const sz = Number(fixedSize) || 1;
+  const variant = typeof productSizeVariantBySize === 'function' ? productSizeVariantBySize(p, sz) : null;
+  const raw = (variant && variant.pricePerCan !== undefined && Number(variant.pricePerCan) > 0)
+    ? Number(variant.pricePerCan)
+    : Number(p.price || 0) * sz;
+  return Number(raw.toFixed(2));
+}
+
+function isSameReplacementPrice(p, fixedSize, origProductId, origUnitPrice) {
+  const unitP = getReplacementUnitPriceForSize(p, fixedSize, origProductId, origUnitPrice);
+  return Math.abs(unitP - Number(origUnitPrice || 0)) < 0.005;
 }
 
 function syncFixedExchangeLines(saleId) {
   const sale = (db.sales || []).find(s => s.id === saleId);
   if (!sale) return;
+
+  if (currentReturnResolution === 'refund') {
+    returnExchangeCart = [];
+    renderExchangeReplacementCart(saleId);
+    return;
+  }
 
   // Preserve any user-chosen replacement productId per source row index
   const prevChoiceByRow = {};
@@ -813,9 +1981,14 @@ function syncFixedExchangeLines(saleId) {
       const chosenProdId = prevChoiceByRow[idx] || item.productId;
       let p = productById(chosenProdId);
 
-      // If original product isn't found or has 0 stock, fallback to first active product with enough stock of fixedSize
+      if (p && !isSameReplacementPrice(p, fixedSize, item.productId, effectiveUnitPrice)) {
+        p = productById(item.productId);
+      }
+
+      // If original product isn't found or has 0 stock, fallback to first active product with enough stock of fixedSize AND exact same price
       if (!p || p.stock < fixedQty * fixedSize) {
         const fallback = activeProducts().find(cand => {
+          if (!isSameReplacementPrice(cand, fixedSize, item.productId, effectiveUnitPrice)) return false;
           if (cand.stock < fixedQty * fixedSize) return false;
           if (productHasCanBreakdown(cand) && productCanCount(cand, fixedSize) < fixedQty) return false;
           return true;
@@ -826,10 +1999,7 @@ function syncFixedExchangeLines(saleId) {
       }
 
       if (p) {
-        const isSameProduct = p.id === item.productId;
-        const unitPrice = isSameProduct
-          ? effectiveUnitPrice
-          : Number((p.price * fixedSize).toFixed(2));
+        const unitPrice = effectiveUnitPrice;
         nextCart.push({
           sourceRowIdx: idx,
           origProductId: item.productId,
@@ -885,6 +2055,11 @@ function onChangeFixedReplacementProduct(saleId, sourceRowIdx, newProductId) {
   const fixedSize = Number(line.size) || 1;
   const fixedQty = Number(line.qty) || 1;
 
+  if (!isSameReplacementPrice(p, fixedSize, line.origProductId, line.origUnitPrice)) {
+    showToast(`Replacement product must have the exact same price (${peso(line.origUnitPrice)}/${fixedSize}L) as the returned item.`, 'error');
+    return;
+  }
+
   if (p.stock < fixedQty * fixedSize) {
     showToast(`Not enough stock for ${p.name} (${formatLiters(p.stock)} available, need ${fixedQty * fixedSize}L).`, 'error');
     return;
@@ -902,9 +2077,7 @@ function onChangeFixedReplacementProduct(saleId, sourceRowIdx, newProductId) {
   line.name = p.name;
   line.brand = p.brand || '';
   line.color = p.color || '';
-  line.unitPrice = (p.id === line.origProductId && line.origUnitPrice)
-    ? line.origUnitPrice
-    : (variant ? variant.pricePerCan : Number((p.price * fixedSize).toFixed(2)));
+  line.unitPrice = Number(line.origUnitPrice || getReplacementUnitPriceForSize(p, fixedSize, line.origProductId, line.origUnitPrice));
   line.lineTotal = Number((fixedQty * line.unitPrice).toFixed(2));
 
   openExchangePickerRow = null;
@@ -913,13 +2086,17 @@ function onChangeFixedReplacementProduct(saleId, sourceRowIdx, newProductId) {
 }
 
 function buildExchangePickerCardsHtml(saleId, ex) {
-  const allProds = activeProducts();
   const fixedSize = Number(ex.size) || 1;
   const fixedQty = Number(ex.qty) || 1;
   const origProd = productById(ex.origProductId);
   const q = exchangePickerQuery.trim().toLowerCase();
 
-  let list = allProds.slice();
+  // Strictly restrict replacement options to products with the exact same unit price for fixedSize
+  const samePriceProds = activeProducts().filter(p =>
+    isSameReplacementPrice(p, fixedSize, ex.origProductId, ex.origUnitPrice)
+  );
+
+  let list = samePriceProds.slice();
   if (exchangePickerTab === 'recommended' && origProd) {
     const rec = list.filter(p => p.id === ex.origProductId || p.type === origProd.type || p.brand === origProd.brand);
     if (rec.length > 0) list = rec;
@@ -950,7 +2127,7 @@ function buildExchangePickerCardsHtml(saleId, ex) {
   });
 
   if (!list.length) {
-    return `<div class="muted small center" style="padding:18px; grid-column:1 / -1;">No matching paint products found. Try switching to <b>🌈 All Products</b>.</div>`;
+    return `<div class="muted small center" style="padding:18px; grid-column:1 / -1;">No matching paint products with the same price (${peso(ex.origUnitPrice)}/${fixedSize}L) found.</div>`;
   }
 
   return list.map(p => {
@@ -967,19 +2144,14 @@ function buildExchangePickerCardsHtml(saleId, ex) {
     const rgb = hexToRgb(hex);
     const detected = detectMixedColorName(rgb.r, rgb.g, rgb.b);
     const colorLabel = p.color && p.color !== '-' ? p.color : detected.name;
-    const unitP = isOrig && ex.origUnitPrice ? ex.origUnitPrice : Number((p.price * fixedSize).toFixed(2));
-    const priceDiff = Number((unitP - (ex.origUnitPrice || unitP)).toFixed(2));
+    const unitP = getReplacementUnitPriceForSize(p, fixedSize, ex.origProductId, ex.origUnitPrice);
     const stockLabel = hasBreakdown
       ? `${canCount} × ${fixedSize}L in stock`
       : `${formatLiters(p.stock)} in stock`;
 
     const diffTag = isOrig
       ? `<span class="badge ok" style="font-size:10px; padding:1px 6px;">★ Same Item · Even Exchange</span>`
-      : (Math.abs(priceDiff) < 0.005
-        ? `<span class="badge ok" style="font-size:10px; padding:1px 6px;">Even Exchange</span>`
-        : (priceDiff > 0
-          ? `<span class="badge mid" style="font-size:10px; padding:1px 6px;">+${peso(priceDiff)}/unit</span>`
-          : `<span class="badge low" style="font-size:10px; padding:1px 6px;">${peso(priceDiff)}/unit</span>`));
+      : `<span class="badge ok" style="font-size:10px; padding:1px 6px;">Same Price · Even Exchange</span>`;
 
     return `
       <div onclick="${enoughStock ? `onChangeFixedReplacementProduct('${saleId}', ${ex.sourceRowIdx}, '${p.id}')` : ''}"
@@ -1018,6 +2190,21 @@ function renderExchangePickerCardsOnly(saleId) {
 function renderExchangeReplacementCart(saleId) {
   const wrap = document.getElementById('ret-exchange-cart-wrap');
   if (!wrap) return;
+
+  if (currentReturnResolution === 'refund') {
+    wrap.innerHTML = `
+      <div style="padding:14px 16px; background:#FFF8EC; border:1px solid #F0D9B5; border-radius:6px; display:flex; align-items:center; gap:12px;">
+        <span style="font-size:24px;">💵</span>
+        <div>
+          <div style="font-weight:700; color:#8A5A24; font-size:13px;">Refund Resolution Selected</div>
+          <div class="muted small" style="margin-top:2px; font-size:11.5px;">
+            No replacement merchandise will be issued. Total approved return credit will be refunded to the customer upon transaction completion.
+          </div>
+        </div>
+      </div>
+    `;
+    return;
+  }
 
   if (!returnExchangeCart.length) {
     wrap.innerHTML = `<div class="muted small" style="padding:10px 12px; background:#fff; border:1px dashed #C8DDD9; border-radius:4px; text-align:center;">Enter a <b>Return Qty</b> in Step 1 above — the replacement item card with matching <b>fixed Container Size</b> and <b>fixed Quantity</b> will appear here automatically.</div>`;
@@ -1087,9 +2274,12 @@ function renderExchangeReplacementCart(saleId) {
           ? `<span class="badge mid" style="font-size:10px; padding:1px 6px;">+${peso(priceDiffPerCan)}/unit</span>`
           : `<span class="badge low" style="font-size:10px; padding:1px 6px;">${peso(priceDiffPerCan)}/unit</span>`));
 
+    const samePriceProds = allProds.filter(p =>
+      isSameReplacementPrice(p, fixedSize, ex.origProductId, ex.origUnitPrice)
+    );
     const recCount = origProd
-      ? allProds.filter(p => p.id === ex.origProductId || p.type === origProd.type || p.brand === origProd.brand).length
-      : allProds.length;
+      ? samePriceProds.filter(p => p.id === ex.origProductId || p.type === origProd.type || p.brand === origProd.brand).length
+      : samePriceProds.length;
 
     return `
             <tr>
@@ -1126,7 +2316,7 @@ function renderExchangeReplacementCart(saleId) {
                           🎨 Same Brand / Category (${recCount})
                         </button>
                         <button type="button" class="pos-cat-pill ${exchangePickerTab === 'all' ? 'active' : ''}" onclick="setExchangePickerTab('${saleId}', 'all')">
-                          🌈 All Products (${allProds.length})
+                          🌈 All Same-Price (${samePriceProds.length})
                         </button>
                         ${!isOrig && ex.origProductId ? `
                           <button type="button" class="btn ghost small" style="font-size:11px; padding:3px 8px;" onclick="onChangeFixedReplacementProduct('${saleId}', ${ex.sourceRowIdx}, '${ex.origProductId}')">
@@ -1134,7 +2324,7 @@ function renderExchangeReplacementCart(saleId) {
                           </button>
                         ` : ''}
                       </div>
-                      <input type="text" placeholder="🔍 Search shade, color, or brand..." value="${escapeHtml(exchangePickerQuery)}"
+                      <input type="text" placeholder="🔍 Search same-price shade or brand..." value="${escapeHtml(exchangePickerQuery)}"
                              oninput="onExchangePickerSearch('${saleId}', this.value)"
                              style="width:220px; padding:5px 10px; font-size:12px; border-radius:6px; background:#fff;">
                     </div>
@@ -1156,46 +2346,93 @@ function renderExchangeReplacementCart(saleId) {
 }
 
 function openStartReturnPickerModal() {
-  const eligibleSales = (db.sales || [])
-    .filter(s => (s.status || 'completed') !== 'refunded' && isSaleReturnWithinDay(s))
+  const allSales = (db.sales || [])
+    .filter(s => (s.status || 'completed') !== 'voided' && isCurrentUserSale(s))
     .slice()
     .sort((a, b) => new Date(b.date) - new Date(a.date));
 
   const renderPickerList = (filter = '') => {
     const q = filter.trim().toLowerCase();
-    const filtered = q
-      ? eligibleSales.filter(s => (getReceiptNo(s) + ' ' + (s.cashierName || '')).toLowerCase().includes(q))
-      : eligibleSales.slice(0, 15);
-
     const container = document.getElementById('ret-picker-list');
     if (!container) return;
 
-    if (!filtered.length) {
-      container.innerHTML = `<div class="empty-state" style="padding:20px;">No eligible same-day sales transactions found for today (${escapeHtml(todayISO())}). Return / Exchange is only allowed within the same day of purchase.</div>`;
+    let filtered = allSales;
+    if (q) {
+      filtered = allSales.filter(s => {
+        const rc = (getReceiptNo(s) || '').toLowerCase();
+        const cName = (s.cashierName || '').toLowerCase();
+        const cust = (s.customerName || s.customer_name || '').toLowerCase();
+        return rc.includes(q) || cName.includes(q) || cust.includes(q);
+      });
+    }
+
+    if (q && !filtered.length) {
+      container.innerHTML = `
+        <div class="empty-state" style="padding:24px 16px; text-align:center;">
+          <div style="font-size:24px; margin-bottom:6px;">⚠️</div>
+          <div style="font-weight:700; color:var(--danger); font-size:13.5px;">Invalid or Missing Receipt</div>
+          <div class="muted small" style="margin-top:4px; max-width:440px; margin-left:auto; margin-right:auto;">
+            No official sales record found matching "<b>${escapeHtml(filter.trim())}</b>". A valid official sales receipt is strictly required under store policy to verify the purchase date, pricing, and product eligibility before processing any return, refund, or replacement.
+          </div>
+        </div>
+      `;
       return;
     }
+
+    const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'manager');
+    const eligibleFiltered = filtered.filter(s => (s.status || 'completed') !== 'refunded' && (hasSaleReturnableItems(s) || (isAdmin && saleHasOnlyCustomMixItems(s))));
+
+    if (!eligibleFiltered.length) {
+      container.innerHTML = `
+        <div class="empty-state" style="padding:20px; text-align:center;">
+          <div class="muted">No sales transactions with eligible returnable items found matching your filter.</div>
+        </div>
+      `;
+      return;
+    }
+
+    const displayList = q ? eligibleFiltered : eligibleFiltered.slice(0, 15);
 
     container.innerHTML = `
       <table style="width:100%; border-collapse:collapse; font-size:13px;">
         <thead>
           <tr style="border-bottom:1px solid var(--line); background:#FAF7F2;">
             <th style="padding:8px 10px; text-align:left;">Receipt #</th>
-            <th style="padding:8px 10px; text-align:left;">Date &amp; Time</th>
+            <th style="padding:8px 10px; text-align:left;">Date of Sale</th>
+            <th style="padding:8px 10px; text-align:left;">Policy Status</th>
             <th style="padding:8px 10px; text-align:right;">Total Paid</th>
             <th style="padding:8px 10px; text-align:right;">Action</th>
           </tr>
         </thead>
         <tbody>
-          ${filtered.map(s => `
+          ${displayList.map(s => {
+      const isSameDay = isSaleReturnWithinDay(s);
+      const onlyMix = saleHasOnlyCustomMixItems(s);
+      const statusTag = onlyMix
+        ? '<span class="badge low" style="font-size:10px;">🔒 Custom Mix (Final Sale)</span>'
+        : (isSameDay
+          ? '<span class="badge ok" style="font-size:10px;">✓ Same-Day Return Eligible</span>'
+          : '<span class="badge mid" style="font-size:10px;">🔄 Replacement (Single-Color)</span>');
+      const isActionAllowed = hasSaleReturnableItems(s) || (isAdmin && onlyMix);
+      return `
             <tr style="border-bottom:1px solid #F0EAE0;">
-              <td style="padding:8px 10px;"><code style="color:var(--teal); font-weight:700;">${escapeHtml(getReceiptNo(s))}</code></td>
-              <td style="padding:8px 10px;">${formatDateTime(s.date)}</td>
+              <td style="padding:8px 10px;">
+                <code style="color:var(--teal); font-weight:700;">${escapeHtml(getReceiptNo(s))}</code>
+                ${s.customerName ? `<div class="muted small" style="font-size:11px;">${escapeHtml(s.customerName)}</div>` : ''}
+              </td>
+              <td style="padding:8px 10px;">
+                <div>${formatDateTime(s.date)}</div>
+                <div class="muted small" style="font-size:11px;">Cashier: ${escapeHtml(s.cashierName || 'Staff')}</div>
+              </td>
+              <td style="padding:8px 10px;">${statusTag}</td>
               <td style="padding:8px 10px; text-align:right; font-weight:700; font-family:'Space Grotesk';">${peso(s.total)}</td>
               <td style="padding:8px 10px; text-align:right;">
-                <button type="button" class="btn secondary small" onclick='closeModal(); openReturnRefundModal("${s.id}")'>↩️ Return / Exchange</button>
+                ${isActionAllowed
+          ? `<button type="button" class="btn secondary small" onclick='closeModal(); openReturnRefundModal("${s.id}")'>↩️ Return / Exchange</button>`
+          : `<button type="button" class="btn ghost small" disabled style="opacity:0.6; cursor:not-allowed;" title="Custom Color Mix cannot be returned or exchanged once mixed">🔒 Final Sale</button>`}
               </td>
-            </tr>
-          `).join('')}
+            </tr>`;
+    }).join('')}
         </tbody>
       </table>
     `;
@@ -1203,12 +2440,12 @@ function openStartReturnPickerModal() {
 
   window.onReturnPickerSearch = renderPickerList;
 
-  openModal('↩️ Select Same-Day Sale to Process Return &amp; Exchange', `
-    <div style="margin-bottom:10px; padding:8px 12px; background:#EDF7F6; border:1px solid #B5D2CD; border-radius:var(--radius-sm); font-size:12.5px; color:var(--ink);">
-      <b>Same-Day Return &amp; Exchange Policy:</b> Only sales transactions completed today (<b>${escapeHtml(todayISO())}</b>) are eligible for return or exchange.
+  openModal('↩️ Select Sale to Process Return &amp; Exchange', `
+    <div style="margin-bottom:10px; padding:8px 12px; background:#EDF7F6; border:1px solid #B5D2CD; border-radius:var(--radius-sm); font-size:12px; color:var(--ink);">
+      <b>Official Return &amp; Exchange Policy:</b> All returns require a valid receipt, physical product inspection, and authorized approval. Single-color paint is eligible for same-day refund/replacement, or replacement only after purchase day. Custom Color Mix paint is strictly Final Sale (non-returnable and non-exchangeable once mixed) unless approved by Administrator Review for store mixing defects.
     </div>
     <div style="margin-bottom:12px;">
-      <input type="text" id="ret-picker-search" placeholder="Search today's receipt # (e.g. OR-2026...) or cashier..." style="width:100%; padding:9px 12px; font-size:13.5px;" oninput="onReturnPickerSearch(this.value)">
+      <input type="text" id="ret-picker-search" placeholder="Search official receipt # (e.g. OR-2026...), customer, or cashier..." style="width:100%; padding:9px 12px; font-size:13.5px;" oninput="onReturnPickerSearch(this.value)">
     </div>
     <div id="ret-picker-list" style="max-height:360px; overflow-y:auto; border:1px solid var(--line); border-radius:var(--radius-sm); background:#fff;"></div>
   `, `
@@ -1235,7 +2472,10 @@ function onReturnQtyInput(saleId, idx) {
 
   const lineTotal = Number((val * unitPrice).toFixed(2));
   lineTotalEl.textContent = peso(lineTotal);
-  syncFixedExchangeLines(saleId);
+  if (currentReturnResolution === 'exchange') {
+    syncFixedExchangeLines(saleId);
+  }
+  updateRestockSummary(saleId);
   recalcReturnGrandTotal(saleId);
 }
 
@@ -1259,6 +2499,56 @@ function fillAllReturnLines(saleId, isMax) {
   });
 }
 
+function updateRestockSummary(saleId) {
+  const sale = (db.sales || []).find(s => s.id === saleId);
+  const textEl = document.getElementById('ret-restock-summary-text');
+  const restockCheckbox = document.getElementById('ret-restock');
+  if (!sale || !textEl) return;
+
+  const summaryLines = [];
+  let hasSealedSingleColor = false;
+
+  sale.items.forEach((item, idx) => {
+    const input = document.getElementById(`ret-qty-input-${idx}`);
+    const qty = input ? (parseFloat(input.value) || 0) : 0;
+    if (qty <= 0) return;
+
+    const isBlend = item.type === 'colormix';
+    const cond = returnItemConditions[idx] || 'sealed';
+    const size = Number(item.size) || 1;
+
+    if (isBlend) {
+      summaryLines.push(`• <b>${escapeHtml(item.name)}</b> (${formatStock(qty)}L Mix): Quarantined as miscast/returned mix. <span class="badge low" style="font-size:10px;">Not Restocked to Base Stock</span>`);
+    } else if (cond === 'sealed') {
+      hasSealedSingleColor = true;
+      summaryLines.push(`• <b>${escapeHtml(item.name)}</b> (${formatStock(qty)} × ${size}L): Verified sealed &amp; undamaged. <span class="badge ok" style="font-size:10px;">Eligible for Sellable Restock (+${formatStock(qty * size)}L)</span>`);
+    } else if (cond === 'opened') {
+      summaryLines.push(`• <b>${escapeHtml(item.name)}</b> (${formatStock(qty)} × ${size}L): Opened/unsealed container. <span class="badge low" style="font-size:10px;">Quarantined / Used Stock (Not Restocked)</span>`);
+    } else {
+      summaryLines.push(`• <b>${escapeHtml(item.name)}</b> (${formatStock(qty)} × ${size}L): Defective/damaged unit. <span class="badge low" style="font-size:10px;">Quarantined / Damaged Stock (Not Restocked)</span>`);
+    }
+  });
+
+  if (!summaryLines.length) {
+    textEl.innerHTML = '<span class="muted">Enter return quantity above and select container condition to determine inventory restoration handling.</span>';
+    if (restockCheckbox) {
+      restockCheckbox.checked = false;
+      restockCheckbox.disabled = true;
+    }
+  } else {
+    textEl.innerHTML = summaryLines.join('<br>');
+    if (restockCheckbox) {
+      if (hasSealedSingleColor) {
+        restockCheckbox.disabled = false;
+        restockCheckbox.checked = true;
+      } else {
+        restockCheckbox.checked = false;
+        restockCheckbox.disabled = true;
+      }
+    }
+  }
+}
+
 function recalcReturnGrandTotal(saleId) {
   const sale = (db.sales || []).find(s => s.id === saleId);
   if (!sale) return;
@@ -1279,7 +2569,8 @@ function recalcReturnGrandTotal(saleId) {
   });
 
   grandTotal = Number(grandTotal.toFixed(2));
-  const exchangeTotal = Number(returnExchangeCart.reduce((sum, c) => sum + Number(c.lineTotal || 0), 0).toFixed(2));
+  const isRefund = currentReturnResolution === 'refund';
+  const exchangeTotal = isRefund ? 0 : Number(returnExchangeCart.reduce((sum, c) => sum + Number(c.lineTotal || 0), 0).toFixed(2));
   const diff = Number((exchangeTotal - grandTotal).toFixed(2));
 
   const grandTotalEl = document.getElementById('ret-grand-total');
@@ -1287,12 +2578,17 @@ function recalcReturnGrandTotal(saleId) {
   const settlementLabelEl = document.getElementById('ret-settlement-label');
   const settlementValueEl = document.getElementById('ret-settlement-value');
   const submitBtn = document.getElementById('btn-submit-return');
+  const inspectionVerified = document.getElementById('ret-inspection-verified') ? document.getElementById('ret-inspection-verified').checked : false;
 
   if (grandTotalEl) grandTotalEl.textContent = peso(grandTotal);
-  if (exchangeTotalEl) exchangeTotalEl.textContent = peso(exchangeTotal);
+  if (exchangeTotalEl) exchangeTotalEl.textContent = isRefund ? '₱0.00 (Refund Only)' : peso(exchangeTotal);
 
   if (settlementLabelEl && settlementValueEl) {
-    if (exchangeTotal > 0 && Math.abs(diff) < 0.005) {
+    if (isRefund) {
+      settlementLabelEl.textContent = 'Total Approved Refund Due:';
+      settlementValueEl.textContent = peso(grandTotal);
+      settlementValueEl.style.color = 'var(--danger)';
+    } else if (exchangeTotal > 0 && Math.abs(diff) < 0.005) {
       settlementLabelEl.textContent = 'Exchange Settlement (Even Exchange):';
       settlementValueEl.textContent = '₱0.00 (Even Exchange)';
       settlementValueEl.style.color = 'var(--teal)';
@@ -1311,45 +2607,90 @@ function recalcReturnGrandTotal(saleId) {
     }
   }
 
+  updateRestockSummary(saleId);
+
+  const inspectionBox = document.getElementById('ret-inspection-box');
+  if (inspectionBox) {
+    inspectionBox.style.background = inspectionVerified ? '#EDF7F6' : '#FAF7F2';
+    inspectionBox.style.borderColor = inspectionVerified ? 'var(--teal)' : 'var(--line)';
+  }
+
   if (submitBtn) {
-    submitBtn.disabled = !hasValidReturn || grandTotal <= 0;
-    submitBtn.textContent = exchangeTotal > 0
-      ? `Confirm Return & Exchange (${peso(exchangeTotal)} Replacement)`
-      : `Confirm Return / Exchange (${peso(grandTotal)})`;
+    const canSubmit = Boolean(inspectionVerified);
+    submitBtn.disabled = !canSubmit;
+    submitBtn.style.background = canSubmit ? 'var(--teal)' : '#DDD6CA';
+    submitBtn.style.color = canSubmit ? '#FFFFFF' : '#8C8275';
+    submitBtn.style.borderColor = canSubmit ? 'transparent' : '#CFC7B8';
+    submitBtn.style.cursor = canSubmit ? 'pointer' : 'not-allowed';
+    submitBtn.style.opacity = canSubmit ? '1' : '0.65';
+    submitBtn.style.boxShadow = canSubmit ? '' : 'none';
+    submitBtn.title = !inspectionVerified
+      ? 'Check "Verified Physical Product Inspection Conducted" first to enable confirmation'
+      : '';
+    if (isRefund) {
+      submitBtn.textContent = `Confirm Refund (${peso(grandTotal)})`;
+    } else {
+      submitBtn.textContent = exchangeTotal > 0
+        ? `Confirm Return & Exchange (${peso(exchangeTotal)} Replacement)`
+        : `Confirm Return / Exchange (${peso(grandTotal)})`;
+    }
   }
 }
 
 async function processSaleReturn(saleId) {
   const sale = (db.sales || []).find(s => s.id === saleId);
   if (!sale) return;
-  if (!isSaleReturnWithinDay(sale)) {
-    showToast('Return / Exchange is only allowed within the same day of purchase.', 'error');
+
+  const isSameDay = isSaleReturnWithinDay(sale);
+
+  // 1. Mandatory Physical Inspection Check
+  const inspectionCheckbox = document.getElementById('ret-inspection-verified');
+  if (!inspectionCheckbox || !inspectionCheckbox.checked) {
+    showToast('Physical product inspection must be conducted and verified before completing transaction.', 'error');
     return;
   }
 
+  // 2. Processed By / Authorization Resolution
+  const authorizedAdminName = (adminReviewApproved && adminReviewAdminName)
+    ? adminReviewAdminName
+    : ((currentUser && currentUser.name) || 'Cashier');
+
   const reason = document.getElementById('ret-reason') ? document.getElementById('ret-reason').value : 'Return / exchange';
   const note = document.getElementById('ret-note') ? document.getElementById('ret-note').value.trim() : '';
-  const restock = document.getElementById('ret-restock') ? document.getElementById('ret-restock').checked : true;
+  const restock = document.getElementById('ret-restock') ? document.getElementById('ret-restock').checked : false;
   const date = nowISO();
   const receiptNo = getReceiptNo(sale);
+  const isRefund = currentReturnResolution === 'refund';
 
-  // Validate stock for replacement items first (both standard products and custom re-mix formulas)
-  for (const exItem of returnExchangeCart) {
-    if (exItem.type === 'colormix') {
-      if (Array.isArray(exItem.components)) {
-        for (const comp of exItem.components) {
-          const p = productById(comp.productId);
-          if (p && productMixAvailableStock(p) < Number(comp.liters || 0)) {
-            showToast(`Insufficient ingredient stock for "${comp.name}" (${formatStock(productMixAvailableStock(p))}L left, need ${comp.liters}L) for Re-Mix.`, 'error');
-            return;
+  // 3. Check Policy Restrictions for after purchase day
+  if (!isSameDay && isRefund && !adminReviewApproved) {
+    showToast('Ordinary cash refunds after the purchase day are restricted under standard store policy. Administrator Review is required for refund exceptions.', 'error');
+    return;
+  }
+
+  // 4. Validate stock for replacement items if Exchange resolution
+  if (!isRefund) {
+    for (const exItem of returnExchangeCart) {
+      if (exItem.type === 'colormix') {
+        if (Array.isArray(exItem.components)) {
+          for (const comp of exItem.components) {
+            const p = productById(comp.productId);
+            if (p && productMixAvailableStock(p) < Number(comp.liters || 0)) {
+              showToast(`Insufficient ingredient stock for "${comp.name}" (${formatStock(productMixAvailableStock(p))}L left, need ${comp.liters}L) for Re-Mix.`, 'error');
+              return;
+            }
           }
         }
-      }
-    } else {
-      const p = productById(exItem.productId);
-      if (!p || p.stock < exItem.qty * exItem.size) {
-        showToast(`Insufficient stock for replacement item: ${exItem.name}.`, 'error');
-        return;
+      } else {
+        const p = productById(exItem.productId);
+        if (!p || p.stock < exItem.qty * exItem.size) {
+          showToast(`Insufficient stock for replacement item: ${exItem.name}.`, 'error');
+          return;
+        }
+        if (!isSameReplacementPrice(p, exItem.size || 1, exItem.origProductId, exItem.origUnitPrice !== undefined ? exItem.origUnitPrice : exItem.unitPrice)) {
+          showToast(`Replacement item "${exItem.name}" must have the exact same price as the returned product.`, 'error');
+          return;
+        }
       }
     }
   }
@@ -1358,41 +2699,68 @@ async function processSaleReturn(saleId) {
   let thisRefundAmount = 0;
   let anySealedRestocked = false;
 
+  // 5. Process Each Returned Item
   for (let idx = 0; idx < sale.items.length; idx++) {
     const item = sale.items[idx];
     const input = document.getElementById(`ret-qty-input-${idx}`);
     const qtyToReturn = input ? Math.max(0, parseFloat(input.value) || 0) : 0;
 
     if (qtyToReturn > 0) {
+      const isBlend = item.type === 'colormix';
+      const policy = getItemReturnPolicy(item, isSameDay, adminReviewApproved);
+
+      if (policy.restricted && !adminReviewApproved) {
+        showToast(isBlend
+          ? `"${item.name}" cannot be returned or exchanged because it is a Custom Color Mix (already tinted). Administrator Review authorization is required for formula mixing errors.`
+          : `Return of "${item.name}" is restricted after purchase day. Admin Review approval is required.`, 'error');
+        return;
+      }
+
+      const returnable = Math.max(0, Number(((item.qty || 0) - (item.returnedQty || 0)).toFixed(2)));
+      if (qtyToReturn > returnable + 0.0001) {
+        showToast(`Return quantity for "${item.name}" (${qtyToReturn}) exceeds remaining returnable quantity (${returnable}).`, 'error');
+        return;
+      }
+
       const unitPrice = parseFloat(input.dataset.unitPrice) || Number(item.unitPrice || 0);
       const lineRefund = Number((qtyToReturn * unitPrice).toFixed(2));
       thisRefundAmount += lineRefund;
 
-      // Update item returned quantity
       item.returnedQty = Number(((item.returnedQty || 0) + qtyToReturn).toFixed(2));
 
       const prodObj = item.productId ? productById(item.productId) : null;
       const sizeNum = Number(item.size) || 1;
       const itemVariant = prodObj ? productSizeVariantBySize(prodObj, sizeNum) : null;
       const resolvedSizeId = item.sizeId || (itemVariant ? itemVariant.sizeId : null);
+      const condition = returnItemConditions[idx] || 'sealed';
+      const conditionLabel = condition === 'sealed'
+        ? 'Verified Sealed & Undamaged'
+        : (condition === 'opened' ? 'Opened / Unsealed' : 'Defective / Damaged');
+
+      const isRestocked = Boolean(restock && condition === 'sealed' && !isBlend);
 
       returnedItems.push({
         type: item.type || 'product',
+        paintClassification: isBlend ? 'Custom Mixed-Color Paint' : 'Single-Color Paint',
         productId: prodObj ? (prodObj.productId || prodObj.id) : (item.productId || null),
         product_id: prodObj ? (prodObj.productId || prodObj.id) : (item.productId || null),
         sizeId: resolvedSizeId,
         size_id: resolvedSizeId,
         name: item.name,
         color: item.color || item.colorName || '',
-        brand: item.brand || (item.type === 'colormix' ? 'Custom Color Mix' : ''),
+        brand: item.brand || (isBlend ? 'Custom Color Mix' : ''),
         size: item.size || null,
+        origQty: Number(item.qty || 0),
         qty: qtyToReturn,
         unitPrice,
-        lineRefund
+        lineRefund,
+        condition,
+        inspectionResult: conditionLabel,
+        restocked: isRestocked
       });
 
-      if (item.type === 'colormix') {
-        // Custom-mixed paint cannot be un-mixed back into sealed base cans: log as Miscast / Defective Mix
+      if (isBlend) {
+        // Custom-mixed paint cannot be un-mixed back into sealed base cans: log as Quarantined/Defective Mix
         db.movements.push({
           id: uid('mv'),
           date,
@@ -1401,12 +2769,12 @@ async function processSaleReturn(saleId) {
           product_id: null,
           sizeId: null,
           size_id: null,
-          productName: `Miscast / Returned Mix — ${item.name} (${item.colorName || 'Custom'})`,
+          productName: `Quarantined Custom Mix — ${item.name} (${item.colorName || 'Custom'})`,
           qtyChange: 0,
-          note: `Custom Mix Return / Exchange: ${receiptNo} (${reason}) [${qtyToReturn}L Miscast/Defective — Not Restocked to Base Units]${note ? ' — ' + note : ''}`,
+          note: `Custom Mix Return / Exchange: ${receiptNo} (${reason}) [${qtyToReturn}L Custom Mix — Condition: ${condition.toUpperCase()} — Quarantined / Not Restocked to Base Units]${note ? ' — ' + note : ''}`,
           staffName: (currentUser && currentUser.name) || 'Cashier'
         });
-      } else if (restock) {
+      } else if (isRestocked) {
         if (item.productId) {
           const product = productById(item.productId);
           if (product) {
@@ -1435,13 +2803,13 @@ async function processSaleReturn(saleId) {
               container_size: size,
               productName: product.name,
               qtyChange: litersRestocked,
-              note: `Product Return / Exchange: ${receiptNo} (${reason}) [Return ${qtyToReturn} × ${size}L Restocked · ${size}L Units: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(product.stock)}L]${note ? ' — ' + note : ''}`,
+              note: `Product Return / Exchange: ${receiptNo} (${reason}) [Return ${qtyToReturn} × ${size}L Verified Sealed Restocked · ${size}L Units: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(product.stock)}L]${note ? ' — ' + note : ''}`,
               staffName: (currentUser && currentUser.name) || 'Cashier'
             });
           }
         }
       } else {
-        // Damaged return — logged for audit without adding stock
+        // Opened, defective, or unrestocked single-color unit: recorded as Quarantined/Damaged stock
         const product = item.productId ? productById(item.productId) : null;
         const curStock = product ? Number(product.stock || 0) : 0;
         const variant = product && item.size ? productSizeVariantBySize(product, item.size) : null;
@@ -1457,7 +2825,7 @@ async function processSaleReturn(saleId) {
           container_size: item.size || null,
           productName: item.name,
           qtyChange: 0,
-          note: `Product Return / Exchange: ${receiptNo} (${reason}) [Damaged/Not Restocked · Stock: ${formatStock(curStock)}L→${formatStock(curStock)}L]${note ? ' — ' + note : ''}`,
+          note: `Product Return / Exchange: ${receiptNo} (${reason}) [Quarantined / Damaged Stock — Condition: ${condition.toUpperCase()} — NOT Added to Sellable Stock · Stock: ${formatStock(curStock)}L]${note ? ' — ' + note : ''}`,
           staffName: (currentUser && currentUser.name) || 'Cashier'
         });
       }
@@ -1471,83 +2839,99 @@ async function processSaleReturn(saleId) {
 
   thisRefundAmount = Number(thisRefundAmount.toFixed(2));
 
-  // Deduct stock for replacement items & log exchange movements
-  const exchangeItems = returnExchangeCart.map(ex => ({ ...ex }));
-  const thisExchangeAmount = Number(exchangeItems.reduce((sum, ex) => sum + Number(ex.lineTotal || 0), 0).toFixed(2));
+  // 6. Deduct replacement items if Exchange resolution
+  const exchangeItems = isRefund ? [] : returnExchangeCart.map(ex => ({ ...ex }));
+  const thisExchangeAmount = isRefund ? 0 : Number(exchangeItems.reduce((sum, ex) => sum + Number(ex.lineTotal || 0), 0).toFixed(2));
 
-  for (const exItem of exchangeItems) {
-    if (exItem.type === 'colormix') {
-      // Deduct constituent ingredients for Re-Mix Replacement using Opened / Used Stock first, then sealed cans
-      if (Array.isArray(exItem.components)) {
-        exItem.components.forEach(comp => {
-          const p = productById(comp.productId);
-          if (p) {
-            const beforeStock = Number(p.stock) || 0;
-            const plan = consumeProductForColorMix(p, comp.liters, comp.preferredCanSize || 0);
-            const mixNoteExtra = formatMixConsumptionNote(plan);
-            db.movements.push({
-              id: uid('mv'),
-              date,
-              type: 'colormix',
-              productId: p.id,
-              productName: `${p.name} (for ${exItem.colorName || 'Re-Mix'} mix)`,
-              colorName: exItem.colorName || 'Custom Shade',
-              qtyChange: -comp.liters,
-              note: `Exchange Re-Mix ingredient: ${comp.percentage}% of ${exItem.liters || exItem.qty}L (${exItem.colorName || 'Custom'}) · Receipt: ${receiptNo}${mixNoteExtra} · Stock: ${formatStock(beforeStock)}L→${formatStock(p.stock)}L`,
-              staffName: (currentUser && currentUser.name) || 'Cashier'
-            });
-          }
-        });
-      }
-      const formulaSummary = Array.isArray(exItem.components) && exItem.components.length
-        ? exItem.components.map(cp => `${cp.percentage}% ${cp.name}`).join(' + ')
-        : 'Custom Re-Mix';
-      db.movements.push({
-        id: uid('mv'),
-        date,
-        type: 'colormix',
-        productId: null,
-        productName: `Exchange Re-Mix — ${exItem.colorName || exItem.name}`,
-        colorName: exItem.colorName || 'Custom Shade',
-        qtyChange: Number(exItem.liters || exItem.qty || 1),
-        note: `Aftersales Re-Mix Formula: ${formulaSummary} · Orig Receipt: ${receiptNo}`,
-        staffName: (currentUser && currentUser.name) || 'Cashier'
-      });
-    } else {
-      const product = productById(exItem.productId);
-      if (product) {
-        const size = Number(exItem.size) || 1;
-        const variant = productSizeVariantBySize(product, size);
-        const sizeId = exItem.sizeId || (variant ? variant.sizeId : null);
-        const litersIssued = Number((exItem.qty * size).toFixed(2));
-        const beforeStock = Number(product.stock) || 0;
-        const beforeCans = productCanCount(product, size);
-        product.stock = Math.max(0, Number((product.stock - litersIssued).toFixed(2)));
-        if (!product.canStock || typeof product.canStock !== 'object' || Array.isArray(product.canStock)) {
-          product.canStock = {};
+  if (!isRefund) {
+    for (const exItem of exchangeItems) {
+      if (exItem.type === 'colormix') {
+        if (Array.isArray(exItem.components)) {
+          exItem.components.forEach(comp => {
+            const p = productById(comp.productId);
+            if (p) {
+              const beforeStock = Number(p.stock) || 0;
+              const plan = consumeProductForColorMix(p, comp.liters, comp.preferredCanSize || 0);
+              const mixNoteExtra = formatMixConsumptionNote(plan);
+              comp.containerSource = mixNoteExtra ? mixNoteExtra.replace(/^[ ·\[]+|[ ·\]]+$/g, '').trim() : (comp.preferredCanSize ? `${comp.preferredCanSize}L container` : '');
+              if (!comp.colorName && typeof getProductColorName === 'function') {
+                comp.colorName = getProductColorName(p);
+                comp.color = comp.colorName;
+              }
+              if (!comp.hex && typeof getProductDefaultColor === 'function') {
+                comp.hex = getProductDefaultColor(p);
+                comp.colorHex = comp.hex;
+              }
+              db.movements.push({
+                id: uid('mv'),
+                date,
+                type: 'colormix',
+                productId: p.id,
+                productName: `${p.name} (for ${exItem.colorName || 'Re-Mix'} mix)`,
+                colorName: exItem.colorName || 'Custom Shade',
+                qtyChange: -comp.liters,
+                note: `Exchange Re-Mix ingredient: ${comp.percentage}% of ${exItem.liters || exItem.qty}L (${exItem.colorName || 'Custom'}) · Receipt: ${receiptNo}${mixNoteExtra} · Stock: ${formatStock(beforeStock)}L→${formatStock(p.stock)}L`,
+                staffName: (currentUser && currentUser.name) || 'Cashier'
+              });
+            }
+          });
         }
-        product.canStock[size] = Math.max(0, (Number(product.canStock[size]) || 0) - exItem.qty);
-        syncProductVariants(product);
-        const afterCans = productCanCount(product, size);
+        const formulaSummary = Array.isArray(exItem.components) && exItem.components.length
+          ? exItem.components.map(cp => `${cp.percentage}% ${cp.name}`).join(' + ')
+          : 'Custom Re-Mix';
         db.movements.push({
           id: uid('mv'),
           date,
-          type: 'return',
-          productId: product.productId || product.id,
-          product_id: product.productId || product.id,
-          sizeId: sizeId,
-          size_id: sizeId,
-          container_size: size,
-          productName: product.name,
-          qtyChange: -litersIssued,
-          note: `Exchange Replacement Issued: ${receiptNo} (${reason}) [Exchange ${exItem.qty} × ${size}L Issued · ${size}L Units: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(product.stock)}L]${note ? ' — ' + note : ''}`,
+          type: 'colormix',
+          productId: null,
+          productName: `Exchange Re-Mix — ${exItem.colorName || exItem.name}`,
+          colorName: exItem.colorName || 'Custom Shade',
+          hexColor: exItem.hexColor || null,
+          colorHex: exItem.hexColor || null,
+          detectedColorName: exItem.detectedColorName || null,
+          receiptNo: receiptNo,
+          components: exItem.components || [],
+          formulaJson: JSON.stringify(exItem.components || []),
+          qtyChange: Number(exItem.liters || exItem.qty || 1),
+          note: `Aftersales Re-Mix Formula: ${formulaSummary} · Orig Receipt: ${receiptNo}`,
           staffName: (currentUser && currentUser.name) || 'Cashier'
         });
+      } else {
+        const product = productById(exItem.productId);
+        if (product) {
+          const size = Number(exItem.size) || 1;
+          const variant = productSizeVariantBySize(product, size);
+          const sizeId = exItem.sizeId || (variant ? variant.sizeId : null);
+          const litersIssued = Number((exItem.qty * size).toFixed(2));
+          const beforeStock = Number(product.stock) || 0;
+          const beforeCans = productCanCount(product, size);
+          product.stock = Math.max(0, Number((product.stock - litersIssued).toFixed(2)));
+          if (!product.canStock || typeof product.canStock !== 'object' || Array.isArray(product.canStock)) {
+            product.canStock = {};
+          }
+          product.canStock[size] = Math.max(0, (Number(product.canStock[size]) || 0) - exItem.qty);
+          syncProductVariants(product);
+          const afterCans = productCanCount(product, size);
+          db.movements.push({
+            id: uid('mv'),
+            date,
+            type: 'return',
+            productId: product.productId || product.id,
+            product_id: product.productId || product.id,
+            sizeId: sizeId,
+            size_id: sizeId,
+            container_size: size,
+            productName: product.name,
+            qtyChange: -litersIssued,
+            note: `Exchange Replacement Issued: ${receiptNo} (${reason}) [Exchange ${exItem.qty} × ${size}L Issued · ${size}L Units: ${beforeCans}→${afterCans}, Stock: ${formatStock(beforeStock)}L→${formatStock(product.stock)}L]${note ? ' — ' + note : ''}`,
+            staffName: (currentUser && currentUser.name) || 'Cashier'
+          });
+        }
       }
     }
   }
 
-  // Net adjustment to sale.refundTotal (returned credit minus replacement items issued)
+  // 7. Update Sale Financials & Status
   const netReduction = Number((thisRefundAmount - thisExchangeAmount).toFixed(2));
   sale.refundTotal = Number(((sale.refundTotal || 0) + netReduction).toFixed(2));
   const allFullyReturned = sale.items.every(it => Number(it.returnedQty || 0) >= Number(it.qty || 0));
@@ -1557,10 +2941,19 @@ async function processSaleReturn(saleId) {
     id: uid('ret'),
     voucherNo: `RE-${Date.now().toString(36).toUpperCase()}`,
     date,
-    cashierName: (currentUser && currentUser.name) || 'Cashier',
+    receiptNo,
+    origPurchaseDate: sale.date,
+    resolution: currentReturnResolution,
     reason,
     note,
-    restocked: Boolean(restock && anySealedRestocked),
+    inspectionConducted: true,
+    cashierId: (currentUser && currentUser.id) || null,
+    cashierName: (currentUser && currentUser.name) || 'Cashier',
+    authorizedBy: authorizedAdminName || (currentUser && currentUser.role === 'admin' ? currentUser.name : 'Administrator'),
+    adminApproved: true,
+    adminException: Boolean(adminReviewApproved),
+    adminExceptionReason: adminReviewReason || '',
+    restocked: Boolean(anySealedRestocked),
     refundAmount: thisRefundAmount,
     exchangeAmount: thisExchangeAmount,
     netDiff: Number((thisExchangeAmount - thisRefundAmount).toFixed(2)),
@@ -1572,31 +2965,36 @@ async function processSaleReturn(saleId) {
   sale.returns.push(returnRecord);
   returnExchangeCart = [];
 
-  const auditAction = allFullyReturned ? 'SALE_REFUND' : 'PARTIAL_REFUND';
-  const retItemSummary = returnedItems.map(it => `${it.qty}${it.size ? '×' + it.size + 'L' : 'L'} ${it.name} (${peso(it.lineRefund)})`).join(', ');
+  const auditAction = allFullyReturned ? 'SALE_REFUND' : (isRefund ? 'PARTIAL_REFUND' : 'SALE_EXCHANGE');
+  const retItemSummary = returnedItems.map(it => `${it.qty}${it.size ? '×' + it.size + 'L' : 'L'} ${it.name} [${it.paintClassification}] (${peso(it.lineRefund)})`).join(', ');
   const exItemSummary = exchangeItems.length > 0
     ? exchangeItems.map(ex => `${ex.qty}${ex.size ? '×' + ex.size + 'L' : 'L'} ${ex.name} (${peso(ex.lineTotal)})`).join(', ')
     : '';
   const prevNetTotal = Number((sale.total - (sale.refundTotal - netReduction)).toFixed(2));
   const newNetTotal = Number((sale.total - sale.refundTotal).toFixed(2));
+
   logAudit(
     auditAction,
     `Receipt ${receiptNo}`,
-    `${allFullyReturned ? 'Full Sale Refund' : 'Partial Return / Refund'} processed for ${receiptNo} (Voucher ${returnRecord.voucherNo}) — Returned: ${retItemSummary} (${peso(thisRefundAmount)})${exItemSummary ? ' · Exchanged for: ' + exItemSummary + ' (' + peso(thisExchangeAmount) + ')' : ''} · Reason: ${reason}${note ? ' (' + note + ')' : ''}`,
+    `${allFullyReturned ? 'Full Sale Refund' : (isRefund ? 'Partial Sale Refund' : 'Return & Exchange')} processed for ${receiptNo} (Voucher ${returnRecord.voucherNo}) — Returned: ${retItemSummary} (${peso(thisRefundAmount)})${exItemSummary ? ' · Exchanged for: ' + exItemSummary + ' (' + peso(thisExchangeAmount) + ')' : ''} · Resolution: ${currentReturnResolution.toUpperCase()} · Reason: ${reason}${adminReviewApproved ? ' (Admin Exception: ' + adminReviewReason + ')' : ''}${note ? ' (' + note + ')' : ''} · Authorized by: ${authorizedAdminName}`,
     {
       entityName: `Receipt ${receiptNo}`,
-      fieldChanged: allFullyReturned ? 'Full Sale Refund' : (exchangeItems.length > 0 ? 'Partial Return & Exchange' : 'Partial Sale Refund'),
+      fieldChanged: isRefund ? (allFullyReturned ? 'Full Sale Refund' : 'Partial Sale Refund') : 'Return & Exchange',
       oldValue: `Net Sale: ${peso(prevNetTotal)} (Orig: ${peso(sale.total)})`,
       newValue: `Net Sale: ${peso(newNetTotal)} (Returned: ${peso(thisRefundAmount)}${thisExchangeAmount > 0 ? ', Replacement: ' + peso(thisExchangeAmount) : ''})`,
       referenceNo: receiptNo,
-      reason: `${reason}${note ? ' — ' + note : ''}`,
+      reason: `${reason}${adminReviewApproved ? ' [Admin Exception: ' + adminReviewReason + ']' : ''}${note ? ' — ' + note : ''}`,
       meta: {
         voucherNo: returnRecord.voucherNo,
         receiptNo,
+        resolution: currentReturnResolution,
         refundAmount: thisRefundAmount,
         exchangeAmount: thisExchangeAmount,
         restocked: returnRecord.restocked,
-        returnedItems: returnedItems.map(i => ({ name: i.name, qty: i.qty, size: i.size, unitPrice: i.unitPrice, lineRefund: i.lineRefund })),
+        authorizedBy: authorizedAdminName,
+        adminException: returnRecord.adminException,
+        adminExceptionReason: returnRecord.adminExceptionReason,
+        returnedItems: returnedItems.map(i => ({ name: i.name, paintClassification: i.paintClassification, qty: i.qty, size: i.size, unitPrice: i.unitPrice, lineRefund: i.lineRefund, condition: i.condition, inspectionResult: i.inspectionResult, restocked: i.restocked })),
         exchangeItems: exchangeItems.map(i => ({ name: i.name, qty: i.qty, size: i.size, unitPrice: i.unitPrice, lineTotal: i.lineTotal }))
       }
     }
@@ -1606,17 +3004,19 @@ async function processSaleReturn(saleId) {
   closeModal();
 
   showToast(
-    exchangeItems.length > 0
-      ? `Return & Exchange processed (${peso(thisRefundAmount)} returned, ${peso(thisExchangeAmount)} replacement issued).`
-      : `Return / Exchange credit of ${peso(thisRefundAmount)} processed successfully.`,
+    isRefund
+      ? `Refund of ${peso(thisRefundAmount)} processed successfully.`
+      : (exchangeItems.length > 0
+        ? `Return & Exchange processed (${peso(thisRefundAmount)} returned, ${peso(thisExchangeAmount)} replacement issued).`
+        : `Return / Exchange credit of ${peso(thisRefundAmount)} processed successfully.`),
     'ok'
   );
+
   renderSalesHistoryTable();
   if (typeof renderReportBody === 'function' && document.getElementById('report-body')) {
     renderReportBody();
   }
 
-  // Automatically pop up official printable return & exchange voucher
   showReturnVoucherModal(sale.id, returnRecord.id);
 }
 
@@ -1627,6 +3027,10 @@ async function processSaleReturn(saleId) {
 function viewReturnVouchers(saleId) {
   const sale = (db.sales || []).find(s => s.id === saleId);
   if (!sale || !sale.returns || !sale.returns.length) return;
+  if (currentUser && currentUser.role === 'cashier' && !isCurrentUserSale(sale)) {
+    showToast('Access denied: You can only view return vouchers for your own sales.', 'error');
+    return;
+  }
   const latestVoucher = sale.returns[sale.returns.length - 1];
   showReturnVoucherModal(sale.id, latestVoucher.id);
 }
@@ -1634,6 +3038,10 @@ function viewReturnVouchers(saleId) {
 function showReturnVoucherModal(saleId, voucherId) {
   const sale = (db.sales || []).find(s => s.id === saleId);
   if (!sale) return;
+  if (currentUser && currentUser.role === 'cashier' && !isCurrentUserSale(sale)) {
+    showToast('Access denied: You can only view return vouchers for your own sales.', 'error');
+    return;
+  }
   const voucher = (sale.returns || []).find(v => v.id === voucherId) || sale.returns[sale.returns.length - 1];
   if (!voucher) return;
 
@@ -1641,39 +3049,53 @@ function showReturnVoucherModal(saleId, voucherId) {
   const itemsHtml = (voucher.items || []).map(it => {
     const prod = it.productId ? productById(it.productId) : null;
     const itHex = prod ? getProductHex(prod) : '';
-    const variant = prod && it.size ? productSizeVariantBySize(prod, it.size) : null;
-    const sizeId = it.sizeId || (variant ? variant.sizeId : null);
-    const prodId = prod ? (prod.productId || prod.id) : it.productId;
+    const isBlend = it.type === 'colormix' || it.paintClassification === 'Custom Mixed-Color Paint';
+    const classification = it.paintClassification || (isBlend ? 'Custom Mixed-Color Paint' : 'Single-Color Paint');
+    const condBadge = it.condition === 'sealed'
+      ? '<span class="badge ok" style="font-size:10px;">🟢 Verified Sealed</span>'
+      : (it.condition === 'opened'
+        ? '<span class="badge mid" style="font-size:10px;">🟡 Opened / Unsealed</span>'
+        : '<span class="badge low" style="font-size:10px;">🔴 Defective / Damaged</span>');
+
     return `
     <tr>
-      <td>
+      <td style="padding:6px 4px;">
         <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
-          <b>${escapeHtml(it.name)}</b> ${itHex ? `<span class="muted small" style="font-family:monospace; font-weight:600; color:var(--teal);">(${itHex})</span>` : ''}
+          <b>${escapeHtml(it.name)}</b>
+          ${itHex ? `<span class="muted small" style="font-family:monospace; font-weight:600; color:var(--teal);">(${itHex})</span>` : ''}
           ${it.color ? `<span class="muted small"> (${escapeHtml(it.color)})</span>` : ''}
         </div>
-        ${it.brand ? `<div class="muted small">${escapeHtml(it.brand || '')}${it.size ? ` · Size: <b>${it.size}L</b>` : ''}</div>` : ''}
+        <div class="muted small" style="font-size:11px; margin-top:2px;">
+          ${escapeHtml(it.brand || '')}${it.size ? ` · Size: <b>${it.size}L</b>` : ''}
+          <span class="badge ${isBlend ? 'mid' : 'ghost'}" style="font-size:9.5px; margin-left:4px;">${escapeHtml(classification)}</span>
+        </div>
       </td>
-      <td class="right">${formatStock(it.qty)}</td>
-      <td class="right">${peso(it.unitPrice)}</td>
-      <td class="right" style="font-weight:700;">${peso(it.lineRefund)}</td>
+      <td class="center" style="padding:6px 4px; font-size:11px;">${condBadge}</td>
+      <td class="right" style="padding:6px 4px;">${formatStock(it.origQty || it.qty)}</td>
+      <td class="right" style="padding:6px 4px; font-weight:700;">${formatStock(it.qty)}</td>
+      <td class="right" style="padding:6px 4px;">${peso(it.unitPrice)}</td>
+      <td class="right" style="padding:6px 4px; font-weight:700;">${peso(it.lineRefund)}</td>
     </tr>`;
   }).join('');
 
-  const onlyColorMixReturned = (voucher.items || []).length > 0 && (voucher.items || []).every(it => it.type === 'colormix');
+  const onlyColorMixReturned = (voucher.items || []).length > 0 && (voucher.items || []).every(it => it.type === 'colormix' || it.paintClassification === 'Custom Mixed-Color Paint');
   const restockBadgeHtml = voucher.restocked
-    ? '<span class="badge ok">✓ Restocked into inventory</span>'
+    ? '<span class="badge ok">✓ Sealed units restored to sellable inventory</span>'
     : (onlyColorMixReturned
-      ? '<span class="badge low">🎨 Miscast Mix (Not Restocked to Base Units)</span>'
-      : '<span class="badge low">✕ Damaged / Not Restocked</span>');
+      ? '<span class="badge low">🎨 Quarantined Custom Mix (Not Restocked to Base Stock)</span>'
+      : '<span class="badge low">⚠️ Quarantined / Damaged Stock (Not Restocked)</span>');
 
   const exItems = Array.isArray(voucher.exchangeItems) ? voucher.exchangeItems : [];
-  const exchangeHtml = exItems.length ? `
+  const isRefund = voucher.resolution === 'refund';
+
+  const exchangeHtml = (!isRefund && exItems.length) ? `
     <div style="margin-top:14px; font-weight:700; font-size:11.5px; text-transform:uppercase; color:var(--teal); letter-spacing:0.03em;">Replacement Items Issued (Exchange)</div>
     <table style="width:100%; border-collapse:collapse; margin-top:4px;">
       <thead>
         <tr style="border-bottom:1px solid var(--line); font-size:11px; text-transform:uppercase; color:var(--ink-soft);">
           <th style="text-align:left; padding:6px 0;">Replacement Item</th>
-          <th class="right" style="padding:6px 8px;">Qty</th>
+          <th class="center" style="padding:6px 8px;">Fixed Size</th>
+          <th class="right" style="padding:6px 8px;">Qty Issued</th>
           <th class="right" style="padding:6px 8px;">Unit Price</th>
           <th class="right" style="padding:6px 0;">Line Total</th>
         </tr>
@@ -1686,32 +3108,31 @@ function showReturnVoucherModal(saleId, voucherId) {
         : '';
       return `
             <tr>
-              <td>
+              <td style="padding:6px 0;">
                 <b>${escapeHtml(ex.name)}</b> <span class="muted small">(${escapeHtml(ex.colorName || ex.color || 'Custom Shade')})</span>
-                <div class="muted small">Fresh Custom Re-Mix · Volume: <b>${formatStock(ex.liters || ex.qty)}L</b>${formulaStr}</div>
+                <div class="muted small">Fresh Custom Re-Mix${formulaStr}</div>
               </td>
-              <td class="right">${formatStock(ex.qty)}L</td>
-              <td class="right">${peso(ex.unitPrice)}</td>
-              <td class="right" style="font-weight:700; color:var(--teal);">${peso(ex.lineTotal)}</td>
+              <td class="center" style="padding:6px 8px;"><span class="badge mid">${formatStock(ex.liters || ex.qty)}L Mix</span></td>
+              <td class="right" style="padding:6px 8px;">${formatStock(ex.qty)}L</td>
+              <td class="right" style="padding:6px 8px;">${peso(ex.unitPrice)}</td>
+              <td class="right" style="padding:6px 0; font-weight:700; color:var(--teal);">${peso(ex.lineTotal)}</td>
             </tr>`;
     }
     const prod = ex.productId ? productById(ex.productId) : null;
     const exHex = prod ? getProductHex(prod) : '';
-    const variant = prod && ex.size ? productSizeVariantBySize(prod, ex.size) : null;
-    const sizeId = ex.sizeId || (variant ? variant.sizeId : null);
-    const prodId = prod ? (prod.productId || prod.id) : ex.productId;
     return `
           <tr>
-            <td>
+            <td style="padding:6px 0;">
               <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
                 <b>${escapeHtml(ex.name)}</b> ${exHex ? `<span class="muted small" style="font-family:monospace; font-weight:600; color:var(--teal);">(${exHex})</span>` : ''}
                 ${ex.color && ex.color !== '-' ? `<span class="muted small"> (${escapeHtml(ex.color)})</span>` : ''}
               </div>
-              <div class="muted small">${escapeHtml(ex.brand || '')}${ex.size ? ` · Size: <b>${ex.size}L</b>` : ''}</div>
+              <div class="muted small">${escapeHtml(ex.brand || '')}</div>
             </td>
-            <td class="right">${formatStock(ex.qty)}</td>
-            <td class="right">${peso(ex.unitPrice)}</td>
-            <td class="right" style="font-weight:700; color:var(--teal);">${peso(ex.lineTotal)}</td>
+            <td class="center" style="padding:6px 8px;"><span class="badge mid">${ex.size || 1}L</span></td>
+            <td class="right" style="padding:6px 8px;">${formatStock(ex.qty)}</td>
+            <td class="right" style="padding:6px 8px;">${peso(ex.unitPrice)}</td>
+            <td class="right" style="padding:6px 0; font-weight:700; color:var(--teal);">${peso(ex.lineTotal)}</td>
           </tr>`;
   }).join('')}
       </tbody>
@@ -1726,7 +3147,7 @@ function showReturnVoucherModal(saleId, voucherId) {
     <div id="printable-return-slip" style="background:#fff; border:1px solid var(--line); border-radius:var(--radius-sm); padding:18px 20px; font-family:'Inter',system-ui,sans-serif; color:#26211C; font-size:12.5px;">
       <div style="text-align:center; padding-bottom:12px; border-bottom:1px dashed var(--line); margin-bottom:12px;">
         <div style="font-family:'Space Grotesk'; font-weight:700; font-size:16px; letter-spacing:-0.01em;">MRGR COLOR CENTER</div>
-        <div class="muted small">Official Return &amp; Exchange Slip</div>
+        <div class="muted small">Official Return, Refund &amp; Exchange Slip</div>
         <div style="display:inline-block; margin-top:8px; padding:4px 12px; background:#FBEAE8; border:1px solid #F3C4BF; border-radius:4px; font-family:'Space Grotesk'; font-weight:700; font-size:13px; color:var(--danger);">
           Voucher #: <span>${escapeHtml(voucher.voucherNo || voucher.id)}</span>
         </div>
@@ -1735,27 +3156,39 @@ function showReturnVoucherModal(saleId, voucherId) {
       <div class="row wrap" style="justify-content:space-between; margin-bottom:12px; gap:8px;">
         <div>
           <div><span class="muted">Original Receipt:</span> <b>${escapeHtml(receiptNo)}</b></div>
-          <div><span class="muted">Cashier:</span> <b>${escapeHtml(voucher.cashierName)}</b></div>
+          <div><span class="muted">Date of Purchase:</span> <b>${formatDateTime(voucher.origPurchaseDate || sale.date)}</b></div>
+          <div><span class="muted">Processed By:</span> <b>${escapeHtml(voucher.cashierName)}</b></div>
+          ${((sale.customerName || sale.customer_name || '').trim()) ? `<div><span class="muted">Customer:</span> <b>${escapeHtml((sale.customerName || sale.customer_name).trim())}</b></div>` : ''}
         </div>
         <div class="right">
-          <div><span class="muted">Date:</span> <b>${formatDateTime(voucher.date)}</b></div>
-          <div><span class="muted">Restock:</span> ${restockBadgeHtml}</div>
+          <div><span class="muted">Processing Date:</span> <b>${formatDateTime(voucher.date)}</b></div>
+          <div><span class="muted">Authorized By:</span> <b>${escapeHtml(voucher.authorizedBy || 'Administrator')}</b></div>
+          <div><span class="muted">Approved Resolution:</span> <b>${isRefund ? '💵 Refund' : '🔄 Replacement (Exchange)'}</b></div>
+          <div style="margin-top:2px;">${restockBadgeHtml}</div>
         </div>
       </div>
+
+      ${voucher.adminException ? `
+        <div style="margin-bottom:8px; font-size:11.5px; background:#FFF8EC; border:1px solid #F0D9B5; padding:6px 10px; border-radius:4px; color:#8A5A24;">
+          <b>🛡️ Authorized Administrator Exception:</b> ${escapeHtml(voucher.adminExceptionReason || 'Approved under Administrator Review')}
+        </div>
+      ` : ''}
 
       <div style="margin-bottom:10px; font-size:12px; background:#FAF7F2; padding:6px 10px; border-radius:4px;">
         <span class="muted">Reason:</span> <b>${escapeHtml(voucher.reason)}</b>
         ${voucher.note ? `<br><span class="muted">Notes:</span> <i>${escapeHtml(voucher.note)}</i>` : ''}
       </div>
 
-      <div style="font-weight:700; font-size:11.5px; text-transform:uppercase; color:var(--ink-soft); letter-spacing:0.03em; margin-top:8px;">Items Returned</div>
+      <div style="font-weight:700; font-size:11.5px; text-transform:uppercase; color:var(--ink-soft); letter-spacing:0.03em; margin-top:8px;">Items Returned &amp; Physical Inspection Results</div>
       <table style="width:100%; border-collapse:collapse; margin-top:4px;">
         <thead>
           <tr style="border-bottom:1px solid var(--line); font-size:11px; text-transform:uppercase; color:var(--ink-soft);">
-            <th style="text-align:left; padding:6px 0;">Item Returned</th>
-            <th class="right" style="padding:6px 8px;">Qty</th>
-            <th class="right" style="padding:6px 8px;">Unit Credit</th>
-            <th class="right" style="padding:6px 0;">Return Credit</th>
+            <th style="text-align:left; padding:6px 4px;">Item Returned</th>
+            <th class="center" style="padding:6px 4px;">Inspection</th>
+            <th class="right" style="padding:6px 4px;">Sold</th>
+            <th class="right" style="padding:6px 4px;">Returned</th>
+            <th class="right" style="padding:6px 4px;">Unit Credit</th>
+            <th class="right" style="padding:6px 4px;">Return Credit</th>
           </tr>
         </thead>
         <tbody>
@@ -1770,7 +3203,7 @@ function showReturnVoucherModal(saleId, voucherId) {
           <span class="muted">Total Returned Credit:</span>
           <strong style="font-family:'Space Grotesk'; color:var(--danger);">${peso(retVal)}</strong>
         </div>
-        ${exItems.length ? `
+        ${(!isRefund && exItems.length) ? `
           <div style="display:flex; justify-content:space-between; align-items:center;">
             <span class="muted">Total Replacement Issued:</span>
             <strong style="font-family:'Space Grotesk'; color:var(--teal);">${peso(exVal)}</strong>
@@ -1783,7 +3216,7 @@ function showReturnVoucherModal(saleId, voucherId) {
           </div>
         ` : `
           <div style="display:flex; justify-content:space-between; align-items:center; padding-top:6px; border-top:1px solid #ECE4D8;">
-            <span style="font-weight:700; font-size:14px;">Total Return / Exchange Credit:</span>
+            <span style="font-weight:700; font-size:14px;">Total Approved Refund Paid:</span>
             <span style="font-size:18px; font-weight:700; color:var(--danger); font-family:'Space Grotesk';">${peso(retVal)}</span>
           </div>
         `}
@@ -1791,17 +3224,17 @@ function showReturnVoucherModal(saleId, voucherId) {
 
       <div class="row wrap" style="justify-content:space-between; margin-top:30px; padding-top:20px; border-top:1px solid #ECE4D8; gap:20px;">
         <div style="text-align:center; min-width:140px;">
-          <div style="border-bottom:1px solid #8A8070; width:100%; height:20px; margin-bottom:4px;"></div>
-          <span class="muted small" style="font-size:11px;">Authorized Signature</span>
+          <div style="border-bottom:1px solid #8A8070; width:100%; height:20px; margin-bottom:4px; font-weight:700; font-size:11px;">${escapeHtml(voucher.authorizedBy || 'Administrator')}</div>
+          <span class="muted small" style="font-size:11px;">Authorized Administrator Approval</span>
         </div>
         <div style="text-align:center; min-width:140px;">
-          <div style="border-bottom:1px solid #8A8070; width:100%; height:20px; margin-bottom:4px;"></div>
-          <span class="muted small" style="font-size:11px;">Cashier / Authorized By</span>
+          <div style="border-bottom:1px solid #8A8070; width:100%; height:20px; margin-bottom:4px; font-weight:700; font-size:11px;">${escapeHtml(voucher.cashierName)}</div>
+          <span class="muted small" style="font-size:11px;">Processing Staff Member</span>
         </div>
       </div>
 
       <div class="muted center small" style="margin-top:16px; font-size:11px;">
-        Official Return &amp; Exchange acknowledgement for the items listed above. Retain copy for accounting and inventory records.
+        Official Return, Refund &amp; Exchange acknowledgement under store policy. Retain copy for accounting and inventory audits.
       </div>
     </div>
   `, `
@@ -1843,6 +3276,8 @@ function printReturnSlipSection() {
       .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; }
       .badge.ok { background: #eaf4ec; color: #2f6b41; }
       .badge.low { background: #fbeae8; color: #c1443d; }
+      .badge.mid { background: #fff3cd; color: #856404; }
+      .badge.ghost { background: #f0f0f0; color: #555; }
     </style>
   </head>
   <body>

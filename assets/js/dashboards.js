@@ -127,9 +127,6 @@ function renderAdminPOMonitoringPanel() {
       </div>
       <div class="spacer"></div>
       <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-        <button class="btn small" style="background:var(--teal); color:#fff;" onclick="goTo('purchaseOrders'); setTimeout(()=>openPOModal(), 80);">
-          + New Purchase Order
-        </button>
         <button class="btn secondary small" onclick="goTo('purchaseOrders')">
           View All POs &rarr;
         </button>
@@ -650,6 +647,12 @@ function renderAdminRecentTransactionsPanel(recent) {
                         <span class="muted" style="display:block; font-size:11px; margin-bottom:2px;">Subtotal:</span>
                         <strong style="font-size:13.5px; font-family:'Space Grotesk';">${peso(subtotalAmount)}</strong>
                       </div>
+                      ${(Number(s.discountAmount || s.discount || 0) > 0) ? `
+                        <div>
+                          <span class="muted" style="display:block; font-size:11px; margin-bottom:2px;">Promo Discount (10%):</span>
+                          <strong style="font-size:13.5px; font-family:'Space Grotesk'; color:var(--teal); font-weight:700;">-${peso(Number(s.discountAmount || s.discount || 0))}</strong>
+                        </div>
+                      ` : ''}
                       <div>
                         <span class="muted" style="display:block; font-size:11px; margin-bottom:2px;">Total Due:</span>
                         <strong style="font-size:14px; font-family:'Space Grotesk'; color:var(--teal);">${peso(totalAmount)}</strong>
@@ -679,13 +682,14 @@ function adminDashboard() {
   const pendingPOs = (db.purchaseOrders || []).filter(o => o.status === 'pending');
   const orderedPOs = (db.purchaseOrders || []).filter(o => o.status === 'ordered' || o.status === 'partial');
   const pendingAdj = (typeof pendingAdjRequests === 'function' ? pendingAdjRequests() : (db.adjustmentRequests || []).filter(r => r.status === 'pending'));
+  const pendingVoid = (typeof getPendingVoidRequests === 'function' ? getPendingVoidRequests() : (db.voidRequests || []).filter(v => v.status === 'pending'));
   const pendingInv = (db.products || []).filter(p =>
     p.status === 'pending_approval' ||
     Boolean(p.pendingEdit) ||
     (p.pendingSizes && p.pendingSizes.length > 0) ||
     (p.pendingPrice != null && Number(p.pendingPrice) > 0)
   );
-  const totalPending = pendingAdj.length + pendingPOs.length + pendingInv.length;
+  const totalPending = pendingAdj.length + pendingPOs.length + pendingInv.length + pendingVoid.length;
   const recent = [...db.sales].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 10);
   const greeting = getGreeting();
   const activeSuppliers = (db.suppliers || []).filter(s => s.status === 'active');
@@ -743,6 +747,11 @@ function adminDashboard() {
       <button class="btn secondary small" onclick="goToApprovalsTab('purchaseOrders')" title="Review and authorize purchase orders">
         📋 Review Purchase Orders ${pendingPOs.length ? `<span class="nav-badge">${pendingPOs.length}</span>` : ''}
       </button>
+      ${pendingVoid.length ? `
+        <button class="btn secondary small" style="border-color:var(--danger); color:var(--danger); font-weight:700;" onclick="goToApprovalsTab('voidRequests')" title="Review and authorize cashier void sale requests">
+          🚫 Void Requests <span class="nav-badge" style="background:var(--danger); color:#fff;">${pendingVoid.length}</span>
+        </button>
+      ` : ''}
       <button class="btn secondary small" onclick="goTo('reports')" title="View business analytics, valuation, and sales history">
         📊 View Business Reports
       </button>
@@ -767,7 +776,7 @@ function adminDashboard() {
     </div>
 
     <!-- Card 2: Pending Approvals (Unified Approval Center) -->
-    <div class="stat-card ${totalPending ? 'highlight-pending' : 'sage'} clickable" onclick="goTo('approvals')" title="Click to view Pending Approvals Hub: ${pendingAdj.length} stock adjustment${pendingAdj.length === 1 ? '' : 's'}, ${pendingPOs.length} purchase order${pendingPOs.length === 1 ? '' : 's'}, ${pendingInv.length} catalog update${pendingInv.length === 1 ? '' : 's'}">
+    <div class="stat-card ${totalPending ? 'highlight-pending' : 'sage'} clickable" onclick="goTo('approvals')" title="Click to view Pending Approvals Hub: ${pendingAdj.length} stock adjustment${pendingAdj.length === 1 ? '' : 's'}, ${pendingPOs.length} purchase order${pendingPOs.length === 1 ? '' : 's'}, ${pendingVoid.length} void request${pendingVoid.length === 1 ? '' : 's'}, ${pendingInv.length} catalog update${pendingInv.length === 1 ? '' : 's'}">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
         <div class="label" style="margin-bottom:0;">⏳ Pending Approvals</div>
         ${totalPending ? `<span class="badge warning" style="font-size:10px; font-weight:700; padding:1px 6px;">Action Req.</span>` : `<span class="badge ok" style="font-size:10px; font-weight:600; padding:1px 6px;">Clear</span>`}
@@ -777,6 +786,7 @@ function adminDashboard() {
         ${totalPending > 0 ? `
           <span><b>${pendingAdj.length}</b> adjustments</span> · 
           <span><b>${pendingPOs.length}</b> POs</span> · 
+          <span><b>${pendingVoid.length}</b> voids</span> · 
           <span><b>${pendingInv.length}</b> catalog</span>
         ` : `<span>All requests reviewed &amp; up to date</span>`}
       </div>
@@ -840,7 +850,7 @@ function adminDashboard() {
 
   ${totalPending > 0 ? `
     <div class="alert-banner warning" style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; border-left:4px solid var(--mustard); margin-bottom:12px;">
-      <span>⏳ <b>${totalPending} Pending Approval Request${totalPending === 1 ? '' : 's'} awaiting your decision</b> (${pendingAdj.length} stock adjustment${pendingAdj.length === 1 ? '' : 's'}, ${pendingPOs.length} purchase order${pendingPOs.length === 1 ? '' : 's'}, ${pendingInv.length} catalog update${pendingInv.length === 1 ? '' : 's'}).</span>
+      <span>⏳ <b>${totalPending} Pending Approval Request${totalPending === 1 ? '' : 's'} awaiting your decision</b> (${pendingAdj.length} stock adjustment${pendingAdj.length === 1 ? '' : 's'}, ${pendingPOs.length} purchase order${pendingPOs.length === 1 ? '' : 's'}, ${pendingVoid.length} void request${pendingVoid.length === 1 ? '' : 's'}, ${pendingInv.length} catalog update${pendingInv.length === 1 ? '' : 's'}).</span>
       <a href="#" onclick="goTo('approvals'); return false;" style="font-weight:700; color:var(--teal); text-decoration:underline;">Review in Approvals Hub &rarr;</a>
     </div>
   ` : ''}
@@ -1100,6 +1110,7 @@ function updateStaffMovementsTableContainer() {
   const container = document.getElementById('staff-movements-table-wrap');
   if (container) {
     container.innerHTML = renderStaffStockMovementsTable();
+    if (typeof syncRouteState === 'function') syncRouteState({ push: false });
   }
 }
 
