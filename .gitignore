@@ -8,6 +8,7 @@ api/.schema_migrated
 Thumbs.db
 Desktop.ini
 .DS_Store
+*.lnk
 
 # Editor / IDE Files
 .vscode/
