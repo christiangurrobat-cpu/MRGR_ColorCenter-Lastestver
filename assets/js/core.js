@@ -1068,6 +1068,39 @@ async function saveDB() {
       const errData = await res.json().catch(() => ({}));
       throw new Error(errData.error || ('HTTP ' + res.status));
     }
+    const respData = await res.json().catch(() => ({}));
+    let syncedFromServer = false;
+    if (respData && Array.isArray(respData.colorLibrary)) {
+      db.colorLibrary = respData.colorLibrary;
+      syncedFromServer = true;
+    }
+    if (respData && respData.syncedProducts && typeof respData.syncedProducts === 'object' && Array.isArray(db.products)) {
+      Object.entries(respData.syncedProducts).forEach(([pid, syncInfo]) => {
+        const prod = db.products.find(p => String(p.id) === String(pid));
+        if (prod && syncInfo) {
+          prod.colorId = syncInfo.colorId || null;
+          prod.color_id = syncInfo.colorId || null;
+          if (syncInfo.color) prod.color = syncInfo.color;
+          if (syncInfo.colorHex) {
+            prod.colorHex = syncInfo.colorHex;
+            prod.color_hex = syncInfo.colorHex;
+          }
+          if (syncInfo.colorClassification) {
+            prod.colorClassification = syncInfo.colorClassification;
+            prod.color_classification = syncInfo.colorClassification;
+          }
+          prod.isColorPigment = Boolean(syncInfo.isColorPigment);
+          prod.is_color_pigment = syncInfo.isColorPigment ? 1 : 0;
+          syncedFromServer = true;
+        }
+      });
+    }
+    if (syncedFromServer) {
+      if (typeof notifyColorLibraryChanged === 'function') {
+        try { notifyColorLibraryChanged('inventory_sync'); } catch (e) { }
+      }
+      try { await storage.set(DB_KEY, JSON.stringify(db)); } catch (e) { }
+    }
     if (db.deletedProductIds && db.deletedProductIds.length) db.deletedProductIds = [];
     if (db.deletedProductSupplierIds && db.deletedProductSupplierIds.length) db.deletedProductSupplierIds = [];
     if (db.deletedSupplierIds && db.deletedSupplierIds.length) db.deletedSupplierIds = [];

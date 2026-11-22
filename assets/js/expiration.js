@@ -80,12 +80,6 @@ function expCanEdit() {
   return EXP.data && EXP.data.permissions ? !!EXP.data.permissions.canEdit : (expIsAdmin() || expIsStaff());
 }
 
-function expCanEditFull() {
-  return EXP.data && EXP.data.permissions && EXP.data.permissions.canEditFull !== undefined
-    ? !!EXP.data.permissions.canEditFull
-    : expIsAdmin();
-}
-
 function expCanAdjust() {
   return EXP.data && EXP.data.permissions && EXP.data.permissions.canAdjust !== undefined
     ? !!EXP.data.permissions.canAdjust
@@ -702,7 +696,7 @@ function expRenderBatchRow(b, canEdit) {
     <td class="exp-actions" onclick="event.stopPropagation()">
       <button type="button" class="exp-act" title="View batch details" onclick="expOpenDetail('${bid}')">👁</button>
       <button type="button" class="exp-act" title="View stock movement history" onclick="expOpenDetail('${bid}', 'movements')">📜</button>
-      <button type="button" class="exp-act ${canEdit ? '' : 'disabled'}" title="${canEdit ? (expCanEditFull() ? 'Edit batch information' : 'Edit expiration date & batch notes') : 'You do not have permission to edit batch information'}" onclick="expOpenEdit('${bid}')">✏️</button>
+      <button type="button" class="exp-act ${canEdit ? '' : 'disabled'}" ${canEdit ? '' : 'disabled'} title="${canEdit ? 'Edit expiration date' : 'You do not have permission to edit expiration dates'}" onclick="expOpenEdit('${bid}')">✏️</button>
       <button type="button" class="exp-act ${expCanAdjust() ? '' : 'disabled'}" ${expCanAdjust() ? '' : 'disabled'} title="${expCanAdjust() ? 'Record stock adjustment' : 'Stock adjustments require Administrator authorization'}" onclick="expOpenAdjust('${bid}')">±</button>
     </td>
   </tr>`;
@@ -710,8 +704,8 @@ function expRenderBatchRow(b, canEdit) {
 
 function expEmptyStateHtml() {
   return `<div class="exp-empty">${(EXP.data.batches || []).length === 0
-      ? '📦 No batches yet. Batches are created automatically when stock is received.'
-      : '🔍 No batches match the current filters.' + (expHasActiveFilters() ? ' <button class="btn ghost small" onclick="expResetFilters()">Clear filters</button>' : '')
+    ? '📦 No batches yet. Batches are created automatically when stock is received.'
+    : '🔍 No batches match the current filters.' + (expHasActiveFilters() ? ' <button class="btn ghost small" onclick="expResetFilters()">Clear filters</button>' : '')
     }</div>`;
 }
 
@@ -947,13 +941,13 @@ function expRenderDetail() {
   const canAdjust = !!(d.permissions && d.permissions.canAdjust !== undefined ? d.permissions.canAdjust : expCanAdjust());
   const foot = `
     <button class="btn secondary" onclick="closeModal()">Close</button>
-    ${canEdit ? `<button class="btn secondary" onclick="expOpenEdit('${escapeAttr(b.batchId)}')">✏️ Edit Batch</button>` : ''}
+    ${canEdit ? `<button class="btn secondary" onclick="expOpenEdit('${escapeAttr(b.batchId)}')">✏️ Edit Expiration Date</button>` : ''}
     ${canAdjust ? `<button class="btn" onclick="expOpenAdjust('${escapeAttr(b.batchId)}')">± Record Adjustment</button>` : ''}`;
   openModal(`🗓️ Batch ${escapeHtml(b.batchNumber)} — ${escapeHtml(p.name || b.productName)} (${fmtSize(b.containerSize)})`, body, foot, 'wide');
 }
 
 /* ------------------------------------------------------------
-   EDIT BATCH (admin: full; staff: expiration date & notes)
+   EDIT EXPIRATION DATE (admin & staff: expiration date only)
    ------------------------------------------------------------ */
 let _expSavingEdit = false;
 
@@ -961,43 +955,13 @@ function expFindBatch(batchId) {
   return ((EXP.data && EXP.data.batches) || []).find(x => x.batchId === batchId) || (EXP.detail && EXP.detail.batch && EXP.detail.batch.batchId === batchId ? EXP.detail.batch : null);
 }
 
-function expEditSuppliers() {
-  const fromApi = (EXP.data && Array.isArray(EXP.data.supplierOptions) && EXP.data.supplierOptions.length)
-    ? EXP.data.supplierOptions
-    : ((typeof db !== 'undefined' && Array.isArray(db.suppliers)) ? db.suppliers.map(s => ({ id: s.id, name: s.name })) : []);
-  return fromApi.slice().sort((a, c) => String(a.name).localeCompare(String(c.name)));
-}
-
-function expToggleBatchNumberUnlock(origVal) {
-  if (!expCanEditFull()) return;
-  const inp = document.getElementById('exp-e-number');
-  const btn = document.getElementById('exp-e-num-unlock');
-  if (!inp || !btn) return;
-  const isLocked = inp.readOnly;
-  if (isLocked) {
-    inp.readOnly = false;
-    inp.classList.remove('exp-readonly');
-    inp.focus();
-    inp.select();
-    btn.textContent = '🔒 Lock';
-    btn.title = 'Lock batch number and revert to original';
-  } else {
-    inp.value = origVal;
-    inp.readOnly = true;
-    inp.classList.add('exp-readonly');
-    btn.textContent = '🔓 Unlock';
-    btn.title = 'Allow authorized Admin to correct batch number';
-    const fe = document.getElementById('exp-e-err-number');
-    if (fe) fe.textContent = '';
-  }
-}
-
-function expEditCheckFifo(origDate) {
-  const inp = document.getElementById('exp-e-received');
-  const warn = document.getElementById('exp-e-fifo-warn');
-  if (!inp || !warn) return;
-  const val = (inp.value || '').trim();
-  warn.style.display = (val && origDate && val !== origDate) ? 'block' : 'none';
+function expClearExpirationInput() {
+  const inp = document.getElementById('exp-e-exp');
+  if (!inp) return;
+  inp.value = '';
+  const fe = document.getElementById('exp-e-err-exp');
+  if (fe) fe.textContent = '';
+  expEditPreviewExp();
 }
 
 function expEditPreviewExp() {
@@ -1006,7 +970,7 @@ function expEditPreviewExp() {
   if (!inp || !slot) return;
   const val = (inp.value || '').trim();
   if (!val) {
-    slot.innerHTML = expBadge('none') + ' <span class="muted small">No expiration tracking</span>';
+    slot.innerHTML = expBadge('none') + ' <span class="muted small">Not Specified (no expiration tracking)</span>';
     return;
   }
   const d = expParseDate(val);
@@ -1022,47 +986,30 @@ function expEditPreviewExp() {
   slot.innerHTML = `${expBadge(st)} <span class="muted small">${txt}</span>`;
 }
 
-function expEditNotesCount() {
-  const ta = document.getElementById('exp-e-notes');
-  const cnt = document.getElementById('exp-e-notes-cnt');
-  if (ta && cnt) cnt.textContent = `${ta.value.length} / 500`;
-}
-
 function expOpenEdit(batchId) {
-  if (!expCanEdit()) { showToast('You do not have permission to edit batch information.', 'error'); return; }
+  if (!expCanEdit()) { showToast('You do not have permission to edit expiration dates.', 'error'); return; }
   const b = expFindBatch(batchId);
   if (!b) { showToast('Batch not found.', 'error'); return; }
   _expSavingEdit = false;
-  const canFull = expCanEditFull();
-  const sups = expEditSuppliers();
-  const hasCurrent = sups.some(s => s.id === b.supplierId);
   const origRecv = String(b.dateReceived || '').slice(0, 10);
   const origExp = b.expirationDate ? String(b.expirationDate).slice(0, 10) : '';
   const origNotes = b.notes || '';
-  const lockTag = canFull ? '' : ' <span class="exp-lock-tag" title="Only Administrators can edit this field">🔒 Admin only</span>';
 
   const body = `
     <div class="exp-form-note">
-      ${canFull
-      ? 'Edit batch details below. <b>Original Quantity</b> and <b>Remaining Quantity</b> are read-only—use <b>Record Adjustment</b> to add or remove stock. Every change is logged in the Audit Log.'
-      : 'Inventory Staff may update the <b>Expiration Date</b> and <b>Restocking / Batch Notes</b>. Other fields are locked to Administrators.'}
+      Update the <b>Expiration Date</b> for this batch. Clear the date to mark it as <b>Not Specified</b>. All other batch and inventory details are read-only for reference. Every change is logged in the Audit Log.
     </div>
 
     <div class="exp-edit-section">
-      <div class="exp-edit-sec-title">1. Batch Identification &amp; Stock Quantities</div>
+      <div class="exp-edit-sec-title">1. Batch Reference Information</div>
       <div class="exp-form-grid">
         <div class="field">
           <label>Product &amp; Container Size <span class="exp-ro-tag">READ-ONLY</span></label>
           <input type="text" class="exp-readonly" value="${escapeAttr(b.productName + ' (' + (b.containerSize !== null ? fmtSize(b.containerSize) : '—') + ')')}" readonly tabindex="-1">
         </div>
         <div class="field">
-          <label for="exp-e-number">Batch Number * ${canFull ? '' : lockTag}</label>
-          <div class="exp-input-with-btn">
-            <input type="text" id="exp-e-number" class="exp-readonly" maxlength="100" value="${escapeAttr(b.batchNumber)}" readonly>
-            ${canFull ? `<button type="button" id="exp-e-num-unlock" class="btn secondary small" onclick="expToggleBatchNumberUnlock('${escapeAttr(b.batchNumber)}')" title="Allow authorized Admin to correct batch number">🔓 Unlock</button>` : ''}
-          </div>
-          <div class="exp-field-help">Protected identifier. ${canFull ? 'Unlock only to correct an entry typo.' : 'Only Administrators can modify batch numbers.'}</div>
-          <div id="exp-e-err-number" class="exp-field-err"></div>
+          <label>Batch Number <span class="exp-ro-tag">READ-ONLY</span></label>
+          <input type="text" class="exp-readonly" value="${escapeAttr(b.batchNumber)}" readonly tabindex="-1">
         </div>
         <div class="field">
           <label>Original Quantity Received <span class="exp-ro-tag">READ-ONLY</span></label>
@@ -1072,48 +1019,35 @@ function expOpenEdit(batchId) {
           <label>Current Remaining Quantity <span class="exp-ro-tag">READ-ONLY</span></label>
           <input type="text" class="exp-readonly" value="${b.remainingQty} unit(s)" readonly tabindex="-1">
         </div>
+        <div class="field">
+          <label>Supplier <span class="exp-ro-tag">READ-ONLY</span></label>
+          <input type="text" class="exp-readonly" value="${escapeAttr(b.supplierName || '—')}" readonly tabindex="-1">
+        </div>
+        <div class="field">
+          <label>Unit Cost <span class="exp-ro-tag">READ-ONLY</span></label>
+          <input type="text" class="exp-readonly" value="${escapeAttr(expCostText(b.unitCost))}" readonly tabindex="-1">
+        </div>
+        <div class="field">
+          <label>Date Received <span class="exp-ro-tag">READ-ONLY</span></label>
+          <input type="text" class="exp-readonly" value="${escapeAttr(expFmtDate(b.dateReceived))}" readonly tabindex="-1">
+        </div>
+      </div>
+      <div class="field" style="margin-top:10px;">
+        <label>Restocking / Batch Notes <span class="exp-ro-tag">READ-ONLY</span></label>
+        <textarea class="exp-readonly" rows="2" readonly tabindex="-1">${escapeHtml(origNotes || '—')}</textarea>
       </div>
     </div>
 
     <div class="exp-edit-section">
-      <div class="exp-edit-sec-title">2. Supplier, Cost &amp; Shelf-Life Dates</div>
-      <div class="exp-form-grid">
-        <div class="field">
-          <label for="exp-e-supplier">Supplier${lockTag}</label>
-          <select id="exp-e-supplier" ${canFull ? '' : 'disabled'}>
-            <option value="">— None —</option>
-            ${!hasCurrent && b.supplierName ? `<option value="__keep_unlinked__" selected>${escapeHtml(b.supplierName)} (unlinked)</option>` : ''}
-            ${sups.map(s => `<option value="${escapeAttr(s.id)}" ${s.id === b.supplierId ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}
-          </select>
-          <div class="exp-field-help">Only existing suppliers are listed; does not alter PO records.</div>
-          <div id="exp-e-err-supplier" class="exp-field-err"></div>
-        </div>
-        <div class="field">
-          <label for="exp-e-cost">Unit Cost (₱ per unit)${lockTag}</label>
-          <input type="number" id="exp-e-cost" min="0" step="0.01" value="${b.unitCost !== null ? b.unitCost : ''}" placeholder="—" ${canFull ? '' : 'disabled'}>
-          <div class="exp-field-help">Does not alter selling price or historical transaction costs.</div>
-          <div id="exp-e-err-cost" class="exp-field-err"></div>
-        </div>
-        <div class="field">
-          <label for="exp-e-received">Date Received *${lockTag}</label>
-          <input type="date" id="exp-e-received" value="${escapeAttr(origRecv)}" max="${todayISO()}" ${canFull ? `oninput="expEditCheckFifo('${escapeAttr(origRecv)}')" onchange="expEditCheckFifo('${escapeAttr(origRecv)}')"` : 'disabled'}>
-          <div id="exp-e-fifo-warn" class="exp-field-warn" style="display:none;">⚠️ Changing Date Received may affect FIFO deduction order for future sales.</div>
-          <div id="exp-e-err-received" class="exp-field-err"></div>
-        </div>
-        <div class="field">
-          <label for="exp-e-exp">Expiration Date <span class="muted">(empty = Not Specified)</span></label>
-          <input type="date" id="exp-e-exp" value="${escapeAttr(origExp)}" oninput="expEditPreviewExp()" onchange="expEditPreviewExp()">
-          <div id="exp-e-exp-preview" class="exp-exp-preview"></div>
-          <div id="exp-e-err-exp" class="exp-field-err"></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="exp-edit-section">
-      <div class="exp-edit-sec-title">3. Notes &amp; Audit Reason</div>
+      <div class="exp-edit-sec-title">2. Expiration Date &amp; Audit Reason</div>
       <div class="field">
-        <div class="exp-label-row"><label for="exp-e-notes">Restocking / Batch Notes</label><span id="exp-e-notes-cnt" class="muted small">${origNotes.length} / 500</span></div>
-        <textarea id="exp-e-notes" rows="2" maxlength="500" oninput="expEditNotesCount()" placeholder="Supplier delivery remarks, storage conditions, product condition upon receiving, expiration or restocking remarks">${escapeHtml(origNotes)}</textarea>
+        <label for="exp-e-exp">Expiration Date <span class="muted">(empty = Not Specified)</span></label>
+        <div class="exp-input-with-btn">
+          <input type="date" id="exp-e-exp" value="${escapeAttr(origExp)}" ${origRecv ? `min="${escapeAttr(origRecv)}"` : ''} oninput="expEditPreviewExp()" onchange="expEditPreviewExp()">
+          <button type="button" class="btn secondary small" onclick="expClearExpirationInput()" title="Clear expiration date and mark as Not Specified">✕ Clear</button>
+        </div>
+        <div id="exp-e-exp-preview" class="exp-exp-preview"></div>
+        <div id="exp-e-err-exp" class="exp-field-err"></div>
       </div>
       <div class="field" style="margin-top:8px;">
         <label for="exp-e-reason">Reason for Change * <span class="muted">(required for Audit Log)</span></label>
@@ -1124,7 +1058,7 @@ function expOpenEdit(batchId) {
 
     <div id="exp-e-err" class="exp-form-err"></div>`;
 
-  openModal(`✏️ Edit Batch — ${escapeHtml(b.productName)} (${fmtSize(b.containerSize)})`, body,
+  openModal(`✏️ Edit Expiration Date — ${escapeHtml(b.productName)} (${fmtSize(b.containerSize)})`, body,
     `<button class="btn secondary" onclick="closeModal()">Cancel</button><button class="btn" id="exp-e-save" onclick="expSaveEdit('${escapeAttr(batchId)}')">Save Changes</button>`, 'wide');
   expEditPreviewExp();
 }
@@ -1136,19 +1070,16 @@ async function expSaveEdit(batchId) {
     const el = document.getElementById('exp-e-err-' + id);
     if (el) el.textContent = msg || '';
   };
-  ['number', 'supplier', 'cost', 'received', 'exp', 'reason'].forEach(k => setFieldErr(k, ''));
+  ['exp', 'reason'].forEach(k => setFieldErr(k, ''));
   if (err) err.textContent = '';
 
   const val = id => {
     const el = document.getElementById(id);
     return el ? el.value : '';
   };
-  const canFull = expCanEditFull();
-  const number = val('exp-e-number').trim();
-  const recv = val('exp-e-received').trim();
+  const b = expFindBatch(batchId);
+  const origRecv = b ? String(b.dateReceived || '').slice(0, 10) : '';
   const exp = val('exp-e-exp').trim();
-  const cost = val('exp-e-cost').trim();
-  const notes = val('exp-e-notes').trim();
   const reason = val('exp-e-reason').trim();
 
   let hasErr = false;
@@ -1158,11 +1089,7 @@ async function expSaveEdit(batchId) {
     hasErr = true;
   };
 
-  if (canFull && !number) fail('number', 'Batch number is required.');
-  if (canFull && !recv) fail('received', 'Date received is required.');
-  if (canFull && recv && recv > todayISO()) fail('received', 'Date received cannot be in the future.');
-  if (exp && recv && exp < recv) fail('exp', 'Expiration date cannot be earlier than the date received.');
-  if (canFull && cost !== '' && (isNaN(Number(cost)) || Number(cost) < 0)) fail('cost', 'Unit cost must be a non-negative number.');
+  if (exp && origRecv && exp < origRecv) fail('exp', 'Expiration date cannot be earlier than the date received.');
   if (!reason || reason.length < 5) fail('reason', 'Please enter a reason for change (at least 5 characters).');
   if (hasErr) return;
 
@@ -1170,24 +1097,18 @@ async function expSaveEdit(batchId) {
   const btn = document.getElementById('exp-e-save');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
 
-  const payload = { batchId, expirationDate: exp, notes, reason };
-  if (canFull) {
-    payload.batchNumber = number;
-    payload.supplierId = val('exp-e-supplier');
-    payload.dateReceived = recv;
-    payload.unitCost = cost === '' ? null : Number(cost);
-  }
+  const payload = { batchId, expirationDate: exp, reason };
 
   try {
     const res = await expApi('update_batch', { body: payload });
     closeModal();
-    showToast(res.unchanged ? 'No changes to save.' : '✓ Batch information updated.', res.unchanged ? 'info' : 'ok');
+    showToast(res.unchanged ? 'No changes to save.' : '✓ Expiration date updated.', res.unchanged ? 'info' : 'ok');
     EXP.summaryTs = 0;
     await expLoad(true);
     expRefreshSummary(true);
     if (typeof updateNavBadges === 'function') updateNavBadges();
   } catch (e) {
-    if (err) err.textContent = e.message || 'Could not update batch.';
+    if (err) err.textContent = e.message || 'Could not update expiration date.';
     if (btn) { btn.disabled = false; btn.textContent = 'Save Changes'; }
   } finally {
     _expSavingEdit = false;

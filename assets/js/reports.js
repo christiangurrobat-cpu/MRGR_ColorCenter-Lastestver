@@ -607,6 +607,23 @@ function openMixingDetailsModal(mixId) {
           </div>
         `}
       </div>
+      ${(() => {
+        if (!rec.receiptRef || typeof renderCustomColorMixReceiptBreakdownHtml !== 'function') return '';
+        const linkedSale = (db.sales || []).find(s => s.receiptNo === rec.receiptRef || (typeof getReceiptNo === 'function' && getReceiptNo(s) === rec.receiptRef));
+        if (!linkedSale || !Array.isArray(linkedSale.items)) return '';
+        const mixItem = linkedSale.items.find(it => it.type === 'colormix' && it.colorName && it.colorName.toLowerCase() === String(rec.colorName || '').toLowerCase())
+          || linkedSale.items.find(it => it.type === 'colormix');
+        if (!mixItem) return '';
+        const bdHtml = renderCustomColorMixReceiptBreakdownHtml(mixItem, { mode: 'compact' });
+        if (!bdHtml) return '';
+        return `
+          <div class="mixing-modal-section-title" style="margin-top:18px;">
+            <span>Transaction Pricing Breakdown</span>
+            <span class="muted small" style="font-weight:400; text-transform:none; margin-left:8px;">Permanent snapshot from Receipt ${escapeHtml(rec.receiptRef)}</span>
+          </div>
+          ${bdHtml}
+        `;
+      })()}
     </div>
   `;
 
@@ -2294,7 +2311,19 @@ function renderSalesHistoryTableRowsHtml(pagedSales) {
         <td><code style="color:var(--teal-text); font-weight:700;">${escapeHtml(getReceiptNo(s))}</code></td>
         <td>${formatDateTime(s.date)}</td>
         <td>${resolveStaffLabel(s.cashierName)}</td>
-        <td>${itemCount} item${itemCount === 1 ? '' : 's'}</td>
+        <td>
+          <div>${itemCount} item${itemCount === 1 ? '' : 's'}</div>
+          ${(() => {
+            const mixes = (s.items || []).filter(it => it && it.type === 'colormix');
+            if (!mixes.length) return '';
+            return mixes.slice(0, 2).map(mx => `
+              <div class="muted small" style="display:flex; align-items:center; gap:4px; font-size:11px; margin-top:2px;">
+                <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${escapeAttr(mx.hexColor || '#1F6F6B')}; border:1px solid rgba(0,0,0,0.2); flex-shrink:0;"></span>
+                <span>Mix: <b>${escapeHtml(mx.colorName || 'Custom')}</b> (${formatStock(mx.liters || mx.qty || 1)}L)</span>
+              </div>
+            `).join('') + (mixes.length > 2 ? `<div class="muted small" style="font-size:10.5px;">+${mixes.length - 2} more mix</div>` : '');
+          })()}
+        </td>
         <td class="center">${saleStatusBadge(status)}</td>
         <td class="right">
           ${isVoidOrCancel

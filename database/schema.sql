@@ -33,7 +33,9 @@ CREATE TABLE IF NOT EXISTS `products` (
     `category` VARCHAR(100) NULL,
     `color` VARCHAR(100) DEFAULT '-',
     `color_id` VARCHAR(50) NULL,
+    `color_classification` VARCHAR(80) NULL,
     `color_hex` VARCHAR(20) NULL DEFAULT '#FFFFFF',
+    `is_color_pigment` TINYINT(1) NOT NULL DEFAULT 0,
     `supplier_id` VARCHAR(50) NULL,
     `price` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     `recent_price` DECIMAL(10,2) NULL DEFAULT NULL,
@@ -168,6 +170,7 @@ CREATE TABLE IF NOT EXISTS `purchase_orders` (
     `order_date` DATETIME NOT NULL,
     `expected_date` DATE DEFAULT NULL,
     `status` VARCHAR(50) NOT NULL DEFAULT 'ordered',
+    `receiving_stage` VARCHAR(40) NOT NULL DEFAULT 'open',
     `total_amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     `items_json` LONGTEXT NOT NULL,
     `notes` TEXT,
@@ -311,6 +314,194 @@ CREATE TABLE IF NOT EXISTS `batch_movements` (
     KEY `idx_bm_movement` (`movement_id`),
     UNIQUE KEY `uk_bm_movement_batch` (`movement_id`, `batch_id`),
     CONSTRAINT `fk_bm_batch` FOREIGN KEY (`batch_id`) REFERENCES `inventory_batches` (`batch_id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- 7E. DAMAGED STOCK RECORDS TABLE (Quarantined / Excluded from Sellable Stock)
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `damaged_stock_records` (
+    `id` VARCHAR(50) NOT NULL PRIMARY KEY,
+    `po_id` VARCHAR(50) NULL,
+    `po_number` VARCHAR(50) NULL,
+    `supplier_id` VARCHAR(50) NULL,
+    `supplier_name` VARCHAR(200) NOT NULL DEFAULT '',
+    `product_id` VARCHAR(50) NOT NULL,
+    `product_name` VARCHAR(200) NOT NULL,
+    `size_id` VARCHAR(50) NULL,
+    `container_size` DECIMAL(10,2) NOT NULL DEFAULT 1.00,
+    `batch_id` VARCHAR(50) NULL,
+    `batch_number` VARCHAR(100) NULL,
+    `source` VARCHAR(30) NOT NULL DEFAULT 'receiving',
+    `delivered_qty` INT NOT NULL DEFAULT 0,
+    `accepted_qty` INT NOT NULL DEFAULT 0,
+    `damaged_qty` INT NOT NULL DEFAULT 0,
+    `returned_qty` INT NOT NULL DEFAULT 0,
+    `reason` VARCHAR(100) NOT NULL DEFAULT 'Other',
+    `inspection_notes` TEXT NULL,
+    `stock_deducted` TINYINT(1) NOT NULL DEFAULT 0,
+    `movement_id` VARCHAR(50) NULL,
+    `recorded_by` VARCHAR(150) NOT NULL DEFAULT 'Staff',
+    `recorded_role` VARCHAR(50) NOT NULL DEFAULT 'staff',
+    `recorded_at` DATETIME NOT NULL,
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    KEY `idx_dsr_po` (`po_id`),
+    KEY `idx_dsr_supplier` (`supplier_id`),
+    KEY `idx_dsr_product` (`product_id`),
+    KEY `idx_dsr_batch` (`batch_id`),
+    KEY `idx_dsr_recorded` (`recorded_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- 7F. SUPPLIER RETURNS TABLE
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `supplier_returns` (
+    `id` VARCHAR(50) NOT NULL PRIMARY KEY,
+    `return_ref` VARCHAR(50) NOT NULL UNIQUE,
+    `po_id` VARCHAR(50) NULL,
+    `po_number` VARCHAR(50) NULL,
+    `supplier_id` VARCHAR(50) NULL,
+    `supplier_name` VARCHAR(200) NOT NULL DEFAULT '',
+    `return_date` DATE NOT NULL,
+    `reason` VARCHAR(100) NOT NULL DEFAULT 'Other',
+    `notes` TEXT NULL,
+    `status` VARCHAR(50) NOT NULL DEFAULT 'Pending Return',
+    `resolution_type` VARCHAR(50) NOT NULL DEFAULT 'Replacement Stock',
+    `resolution_notes` TEXT NULL,
+    `credit_amount` DECIMAL(12,2) NULL,
+    `is_approved` TINYINT(1) NOT NULL DEFAULT 0,
+    `is_finalized` TINYINT(1) NOT NULL DEFAULT 0,
+    `created_by` VARCHAR(150) NOT NULL DEFAULT 'Staff',
+    `created_role` VARCHAR(50) NOT NULL DEFAULT 'staff',
+    `approved_by` VARCHAR(150) NULL,
+    `approved_at` DATETIME NULL,
+    `updated_by` VARCHAR(150) NULL,
+    `updated_at` DATETIME NULL,
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    KEY `idx_sr_po` (`po_id`),
+    KEY `idx_sr_supplier` (`supplier_id`),
+    KEY `idx_sr_status` (`status`),
+    KEY `idx_sr_date` (`return_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- 7G. SUPPLIER RETURN ITEMS TABLE
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `supplier_return_items` (
+    `id` VARCHAR(50) NOT NULL PRIMARY KEY,
+    `return_id` VARCHAR(50) NOT NULL,
+    `damaged_record_id` VARCHAR(50) NULL,
+    `product_id` VARCHAR(50) NOT NULL,
+    `product_name` VARCHAR(200) NOT NULL,
+    `size_id` VARCHAR(50) NULL,
+    `container_size` DECIMAL(10,2) NOT NULL DEFAULT 1.00,
+    `batch_id` VARCHAR(50) NULL,
+    `batch_number` VARCHAR(100) NULL,
+    `damaged_qty` INT NOT NULL DEFAULT 0,
+    `replacement_received_qty` INT NOT NULL DEFAULT 0,
+    `unit_cost` DECIMAL(10,2) NULL,
+    `reason` VARCHAR(100) NOT NULL DEFAULT 'Other',
+    `notes` TEXT NULL,
+    KEY `idx_sri_return` (`return_id`),
+    KEY `idx_sri_dmg` (`damaged_record_id`),
+    KEY `idx_sri_product` (`product_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- 7H. SUPPLIER REPLACEMENT REQUESTS TABLE (Linked to Original PO)
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `supplier_replacement_requests` (
+    `id` VARCHAR(50) NOT NULL PRIMARY KEY,
+    `request_ref` VARCHAR(50) NOT NULL UNIQUE,
+    `po_id` VARCHAR(50) NOT NULL,
+    `po_number` VARCHAR(50) NOT NULL,
+    `supplier_id` VARCHAR(50) NULL,
+    `supplier_name` VARCHAR(200) NOT NULL DEFAULT '',
+    `damaged_record_id` VARCHAR(50) NULL,
+    `parent_request_id` VARCHAR(50) NULL,
+    `product_id` VARCHAR(50) NOT NULL,
+    `product_name` VARCHAR(200) NOT NULL,
+    `size_id` VARCHAR(50) NULL,
+    `container_size` DECIMAL(10,2) NOT NULL DEFAULT 1.00,
+    `damaged_qty` INT NOT NULL DEFAULT 0,
+    `returned_qty` INT NOT NULL DEFAULT 0,
+    `requested_qty` INT NOT NULL DEFAULT 0,
+    `received_qty` INT NOT NULL DEFAULT 0,
+    `rejected_qty` INT NOT NULL DEFAULT 0,
+    `reason` VARCHAR(100) NOT NULL DEFAULT 'Other',
+    `request_date` DATE NOT NULL,
+    `expected_delivery_date` DATE NULL,
+    `supplier_confirmed` TINYINT(1) NOT NULL DEFAULT 0,
+    `supplier_confirmed_at` DATETIME NULL,
+    `confirmation_ref` VARCHAR(100) NULL,
+    `confirmation_date` DATE NULL,
+    `confirmed_by` VARCHAR(150) NULL,
+    `confirmation_receipt_path` VARCHAR(255) NULL,
+    `confirmation_receipt_name` VARCHAR(255) NULL,
+    `confirmation_receipt_mime` VARCHAR(80) NULL,
+    `supplier_confirmation_note` TEXT NULL,
+    `status` VARCHAR(50) NOT NULL DEFAULT 'Awaiting Supplier Confirmation',
+    `credit_issued` TINYINT(1) NOT NULL DEFAULT 0,
+    `credit_amount` DECIMAL(12,2) NULL,
+    `credit_type` VARCHAR(40) NULL,
+    `credit_notes` TEXT NULL,
+    `staff_responsible` VARCHAR(150) NOT NULL DEFAULT 'Staff',
+    `created_role` VARCHAR(50) NOT NULL DEFAULT 'staff',
+    `notes` TEXT NULL,
+    `updated_by` VARCHAR(150) NULL,
+    `updated_at` DATETIME NULL,
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    KEY `idx_srr_po` (`po_id`),
+    KEY `idx_srr_supplier` (`supplier_id`),
+    KEY `idx_srr_product` (`product_id`),
+    KEY `idx_srr_status` (`status`),
+    KEY `idx_srr_dmg` (`damaged_record_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- 7I. SUPPLIER REPLACEMENT DELIVERIES TABLE (Inspection & Idempotency)
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `supplier_replacement_deliveries` (
+    `id` VARCHAR(50) NOT NULL PRIMARY KEY,
+    `request_id` VARCHAR(50) NOT NULL,
+    `idempotency_key` VARCHAR(80) NULL UNIQUE,
+    `delivered_qty` INT NOT NULL DEFAULT 0,
+    `accepted_qty` INT NOT NULL DEFAULT 0,
+    `damaged_qty` INT NOT NULL DEFAULT 0,
+    `damage_reason` VARCHAR(100) NULL,
+    `inspection_notes` TEXT NULL,
+    `batch_id` VARCHAR(50) NULL,
+    `batch_number` VARCHAR(100) NULL,
+    `expiration_date` DATE NULL,
+    `movement_id` VARCHAR(50) NULL,
+    `inspected_by` VARCHAR(150) NOT NULL DEFAULT 'Staff',
+    `received_at` DATETIME NOT NULL,
+    KEY `idx_srd_req` (`request_id`),
+    KEY `idx_srd_batch` (`batch_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- 7J. SUPPLIER REPLACEMENT RECEIPTS TABLE (Immutable POS-Style Snapshots)
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `supplier_replacement_receipts` (
+    `id` VARCHAR(50) NOT NULL PRIMARY KEY,
+    `receipt_number` VARCHAR(50) NOT NULL UNIQUE,
+    `receipt_type` VARCHAR(40) NOT NULL DEFAULT 'confirmation',
+    `request_id` VARCHAR(50) NOT NULL,
+    `request_ref` VARCHAR(50) NOT NULL,
+    `delivery_id` VARCHAR(50) NOT NULL DEFAULT '',
+    `po_id` VARCHAR(50) NOT NULL,
+    `po_number` VARCHAR(50) NOT NULL,
+    `supplier_id` VARCHAR(50) NULL,
+    `supplier_name` VARCHAR(200) NOT NULL DEFAULT '',
+    `snapshot_json` LONGTEXT NOT NULL,
+    `confirmed_by` VARCHAR(150) NOT NULL DEFAULT 'Staff',
+    `issued_at` DATETIME NOT NULL,
+    `reprint_count` INT NOT NULL DEFAULT 0,
+    `last_reprinted_at` DATETIME NULL,
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY `uk_srr_receipt_once` (`request_id`, `receipt_type`, `delivery_id`),
+    KEY `idx_srcpt_req` (`request_id`),
+    KEY `idx_srcpt_po` (`po_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -931,15 +1122,41 @@ CREATE TABLE IF NOT EXISTS `color_library` (
     `color_family` VARCHAR(60) NOT NULL DEFAULT '',
     `variation` VARCHAR(30) NOT NULL DEFAULT 'Base',
     `parent_color_id` VARCHAR(50) NULL,
+    `linked_product_id` VARCHAR(50) NULL,
     `is_custom` TINYINT(1) NOT NULL DEFAULT 0,
+    `is_archived` TINYINT(1) NOT NULL DEFAULT 0,
+    `archived_at` DATETIME NULL,
+    `archived_by` VARCHAR(150) NULL,
     `notes` TEXT NULL,
     `created_by` VARCHAR(150) NULL,
     `updated_by` VARCHAR(150) NULL,
     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY `uk_color_lib_name` (`name`),
+    UNIQUE KEY `uk_color_lib_linked_product` (`linked_product_id`),
     KEY `idx_color_lib_hex` (`hex`),
-    KEY `idx_color_lib_cat` (`category`)
+    KEY `idx_color_lib_cat` (`category`),
+    KEY `idx_color_lib_archived` (`is_archived`),
+    CONSTRAINT `fk_color_lib_linked_product` FOREIGN KEY (`linked_product_id`) REFERENCES `products` (`id`) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- 14B. COLOR <-> INVENTORY SYNCHRONIZATION MAPPING TABLE
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `color_inventory_sync_map` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `color_id` VARCHAR(50) NOT NULL,
+    `product_id` VARCHAR(50) NOT NULL,
+    `sync_origin` ENUM('inventory', 'color_library', 'auto_link') NOT NULL DEFAULT 'auto_link',
+    `is_primary` TINYINT(1) NOT NULL DEFAULT 1,
+    `created_by` VARCHAR(150) NULL,
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY `uk_cism_color_product` (`color_id`, `product_id`),
+    UNIQUE KEY `uk_cism_product` (`product_id`),
+    KEY `idx_cism_color` (`color_id`),
+    CONSTRAINT `fk_cism_color` FOREIGN KEY (`color_id`) REFERENCES `color_library` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT `fk_cism_product` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ------------------------------------------------------------

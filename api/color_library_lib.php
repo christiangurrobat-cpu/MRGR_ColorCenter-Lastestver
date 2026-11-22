@@ -378,9 +378,10 @@ function colorLibraryEnsureSchema(mysqli $conn): void {
     @file_put_contents($flagFile, date('c'));
 }
 
-function colorLibraryFetchAll(mysqli $conn): array {
+function colorLibraryFetchAll(mysqli $conn, bool $includeArchived = false): array {
     $colors = [];
-    $res = $conn->query("SELECT * FROM color_library ORDER BY is_custom ASC, classification ASC, color_family ASC, name ASC");
+    $whereArchived = $includeArchived ? '' : 'WHERE COALESCE(is_archived, 0) = 0';
+    $res = $conn->query("SELECT * FROM color_library {$whereArchived} ORDER BY is_custom ASC, classification ASC, color_family ASC, name ASC");
     if ($res) {
         while ($r = $res->fetch_assoc()) {
             $colors[] = [
@@ -392,7 +393,11 @@ function colorLibraryFetchAll(mysqli $conn): array {
                 'colorFamily' => $r['color_family'] ?: $r['category'],
                 'variation' => $r['variation'] ?: 'Base',
                 'parentColorId' => $r['parent_color_id'] ?? null,
+                'linkedProductId' => $r['linked_product_id'] ?? null,
                 'isCustom' => (bool)$r['is_custom'],
+                'isArchived' => !empty($r['is_archived']),
+                'archivedAt' => $r['archived_at'] ?? null,
+                'archivedBy' => $r['archived_by'] ?? null,
                 'notes' => $r['notes'] ?? '',
                 'createdBy' => $r['created_by'] ?? 'System',
                 'updatedBy' => $r['updated_by'] ?? null,
@@ -448,10 +453,12 @@ function colorLibraryAuditLog(mysqli $conn, array $actor, string $action, string
     }
 }
 
-function colorLibrarySaveColor(mysqli $conn, array $input, array $actor): array {
+function colorLibrarySaveColor(mysqli $conn, array $input, array $actor, array $syncOptions = []): array {
     if (($actor['role'] ?? '') !== 'admin') {
         return ['status' => 403, 'success' => false, 'error' => 'Access denied: Only Admin users can add or edit custom colors.'];
     }
+
+    require_once __DIR__ . '/color_inventory_sync.php';
 
     $id = trim((string)($input['id'] ?? ''));
     $name = trim((string)($input['name'] ?? ''));
@@ -462,6 +469,8 @@ function colorLibrarySaveColor(mysqli $conn, array $input, array $actor): array 
     $parentColorId = trim((string)($input['parentColorId'] ?? '')) ?: null;
     $category = trim((string)($input['category'] ?? ''));
     $notes = trim((string)($input['notes'] ?? ''));
+    $productCategory = trim((string)($input['productCategory'] ?? ''));
+    $linkedProductId = trim((string)($input['linkedProductId'] ?? ''));
 
     if (!in_array($classification, colorLibraryAllowedClassifications(), true)) {
         $classification = 'Custom Colors';
@@ -525,54 +534,99 @@ function colorLibrarySaveColor(mysqli $conn, array $input, array $actor): array 
     }
 
     $actorName = (string)($actor['name'] ?? 'Admin');
+    $syncResult = ['synced' => false, 'action' => 'skipped', 'productId' => null, 'product' => null];
 
-    if ($isEdit) {
-        $stmt = $conn->prepare("UPDATE color_library SET name = ?, hex = ?, category = ?, classification = ?, color_family = ?, variation = ?, parent_color_id = ?, notes = ?, updated_by = ? WHERE id = ? AND is_custom = 1");
-        $stmt->bind_param('ssssssssss', $name, $hex, $category, $classification, $colorFamily, $variation, $parentColorId, $notes, $actorName, $id);
-        $stmt->execute();
-        $stmt->close();
+    $conn->begin_transaction();
+    try {
+        if ($isEdit) {
+            $stmt = $conn->prepare("UPDATE color_library SET name = ?, hex = ?, category = ?, classification = ?, color_family = ?, variation = ?, parent_color_id = ?, notes = ?, updated_by = ? WHERE id = ? AND is_custom = 1");
+            if (!$stmt) {
+                throw new Exception('Failed to prepare color_library update: ' . $conn->error);
+            }
+            $stmt->bind_param('ssssssssss', $name, $hex, $category, $classification, $colorFamily, $variation, $parentColorId, $notes, $actorName, $id);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new Exception('Failed to update custom color: ' . $err);
+            }
+            $stmt->close();
 
-        // Propagate updated color name & HEX to linked products and formulas for consistency
-        $pStmt = $conn->prepare("UPDATE products SET color = ?, color_hex = ? WHERE color_id = ?");
-        if ($pStmt) {
-            $pStmt->bind_param('sss', $name, $hex, $id);
-            $pStmt->execute();
-            $pStmt->close();
+            // Synchronize updated Color Name, HEX, Classification, and Product Category to linked Inventory products
+            $savedColorRow = [
+                'id' => $id,
+                'name' => $name,
+                'hex' => $hex,
+                'category' => $category,
+                'classification' => $classification,
+                'is_custom' => 1,
+                'linked_product_id' => $existingRow['linked_product_id'] ?? null,
+            ];
+            $syncOpts = array_merge($syncOptions, [
+                'productCategory' => $productCategory,
+                'linkedProductId' => $linkedProductId,
+            ]);
+            $syncResult = colorSyncToInventoryProduct($conn, $savedColorRow, $existingRow, $actor, $syncOpts);
+
+            colorLibraryAuditLog(
+                $conn,
+                $actor,
+                'Update Custom Color',
+                $name,
+                'color_library',
+                "{$existingRow['name']} ({$existingRow['hex']}, {$existingRow['classification']})",
+                "{$name} ({$hex}, {$classification} · {$colorFamily} · {$variation})",
+                "Updated custom color '{$name}' ({$hex}) in '{$classification}' ({$colorFamily}, {$variation})."
+            );
+        } else {
+            $id = 'clr_cust_' . bin2hex(random_bytes(5));
+            $stmt = $conn->prepare("INSERT INTO color_library (id, name, hex, category, classification, color_family, variation, parent_color_id, is_custom, is_archived, notes, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)");
+            if (!$stmt) {
+                throw new Exception('Failed to prepare color_library insert: ' . $conn->error);
+            }
+            $stmt->bind_param('sssssssssss', $id, $name, $hex, $category, $classification, $colorFamily, $variation, $parentColorId, $notes, $actorName, $actorName);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new Exception('Failed to insert custom color: ' . $err);
+            }
+            $stmt->close();
+
+            // Automatically create or link corresponding Inventory pigment product (initialized to 0 stock)
+            $savedColorRow = [
+                'id' => $id,
+                'name' => $name,
+                'hex' => $hex,
+                'category' => $category,
+                'classification' => $classification,
+                'is_custom' => 1,
+                'linked_product_id' => null,
+            ];
+            $syncOpts = array_merge($syncOptions, [
+                'productCategory' => $productCategory ?: colorSyncDefaultProductCategory(),
+                'linkedProductId' => $linkedProductId,
+            ]);
+            $syncResult = colorSyncToInventoryProduct($conn, $savedColorRow, null, $actor, $syncOpts);
+
+            colorLibraryAuditLog(
+                $conn,
+                $actor,
+                'Add Custom Color',
+                $name,
+                'color_library',
+                '',
+                "{$name} ({$hex}, {$classification} · {$colorFamily} · {$variation})",
+                "Added custom color '{$name}' ({$hex}) to '{$classification}' ({$colorFamily}, {$variation})."
+            );
         }
-        $fStmt = $conn->prepare("UPDATE color_formulas SET hex_reference = ? WHERE color_id = ?");
-        if ($fStmt) {
-            $fStmt->bind_param('ss', $hex, $id);
-            $fStmt->execute();
-            $fStmt->close();
-        }
 
-        colorLibraryAuditLog(
-            $conn,
-            $actor,
-            'Update Custom Color',
-            $name,
-            'color_library',
-            "{$existingRow['name']} ({$existingRow['hex']}, {$existingRow['classification']})",
-            "{$name} ({$hex}, {$classification} · {$colorFamily} · {$variation})",
-            "Updated custom color '{$name}' ({$hex}) in '{$classification}' ({$colorFamily}, {$variation})."
-        );
-    } else {
-        $id = 'clr_cust_' . bin2hex(random_bytes(5));
-        $stmt = $conn->prepare("INSERT INTO color_library (id, name, hex, category, classification, color_family, variation, parent_color_id, is_custom, notes, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)");
-        $stmt->bind_param('sssssssssss', $id, $name, $hex, $category, $classification, $colorFamily, $variation, $parentColorId, $notes, $actorName, $actorName);
-        $stmt->execute();
-        $stmt->close();
-
-        colorLibraryAuditLog(
-            $conn,
-            $actor,
-            'Add Custom Color',
-            $name,
-            'color_library',
-            '',
-            "{$name} ({$hex}, {$classification} · {$colorFamily} · {$variation})",
-            "Added custom color '{$name}' ({$hex}) to '{$classification}' ({$colorFamily}, {$variation})."
-        );
+        $conn->commit();
+    } catch (Throwable $e) {
+        $conn->rollback();
+        return [
+            'status' => 500,
+            'success' => false,
+            'error' => 'Synchronization failed and was rolled back: ' . $e->getMessage(),
+        ];
     }
 
     $all = colorLibraryFetchAll($conn);
@@ -589,15 +643,19 @@ function colorLibrarySaveColor(mysqli $conn, array $input, array $actor): array 
         'success' => true,
         'color' => $saved,
         'colorLibrary' => $all['colors'],
+        'syncedProduct' => $syncResult['product'] ?? null,
+        'syncedProductId' => $syncResult['productId'] ?? null,
+        'syncAction' => $syncResult['action'] ?? 'skipped',
     ];
 }
 
-function colorLibraryDeleteColor(mysqli $conn, string $id, array $actor, string $reassignToId = ''): array {
+function colorLibraryDeleteColor(mysqli $conn, string $id, array $actor, string $reassignToId = '', string $mode = 'delete'): array {
     if (($actor['role'] ?? '') !== 'admin') {
-        return ['status' => 403, 'success' => false, 'error' => 'Access denied: Only Admin users can delete custom colors.'];
+        return ['status' => 403, 'success' => false, 'error' => 'Access denied: Only Admin users can delete or archive custom colors.'];
     }
     $id = trim($id);
     $reassignToId = trim($reassignToId);
+    $mode = in_array($mode, ['delete', 'archive', 'unlink'], true) ? $mode : 'delete';
     if ($id === '') {
         return ['status' => 400, 'success' => false, 'error' => 'Color ID is required.'];
     }
@@ -612,7 +670,61 @@ function colorLibraryDeleteColor(mysqli $conn, string $id, array $actor, string 
         return ['status' => 404, 'success' => false, 'error' => 'Color not found.'];
     }
     if ((int)$existing['is_custom'] !== 1) {
-        return ['status' => 403, 'success' => false, 'error' => 'Built-in library colors cannot be deleted.'];
+        return ['status' => 403, 'success' => false, 'error' => 'Built-in library colors cannot be deleted or archived.'];
+    }
+
+    $actorName = (string)($actor['name'] ?? 'Admin');
+
+    // Mode 1: Archive (never deletes inventory products, sales, movements, or formulas)
+    if ($mode === 'archive') {
+        $conn->begin_transaction();
+        try {
+            $now = date('Y-m-d H:i:s');
+            $arch = $conn->prepare("UPDATE color_library SET is_archived = 1, archived_at = ?, archived_by = ?, linked_product_id = NULL, updated_by = ? WHERE id = ? AND is_custom = 1");
+            $arch->bind_param('ssss', $now, $actorName, $actorName, $id);
+            $arch->execute();
+            $arch->close();
+
+            $delMap = $conn->prepare("DELETE FROM color_inventory_sync_map WHERE color_id = ?");
+            if ($delMap) {
+                $delMap->bind_param('s', $id);
+                $delMap->execute();
+                $delMap->close();
+            }
+
+            // Unlink active products' color_id while preserving their color name & HEX display text and stock
+            $uProd = $conn->prepare("UPDATE products SET color_id = NULL WHERE color_id = ?");
+            if ($uProd) {
+                $uProd->bind_param('s', $id);
+                $uProd->execute();
+                $uProd->close();
+            }
+
+            colorLibraryAuditLog(
+                $conn,
+                $actor,
+                'Archive Custom Color',
+                $existing['name'],
+                'color_library',
+                "{$existing['name']} ({$existing['hex']}, Active)",
+                'Archived (Inventory products preserved & unlinked)',
+                "Archived custom color '{$existing['name']}' ({$existing['hex']}). Linked inventory products and historical records were preserved."
+            );
+
+            $conn->commit();
+        } catch (Throwable $e) {
+            $conn->rollback();
+            return ['status' => 500, 'success' => false, 'error' => 'Failed to archive color: ' . $e->getMessage()];
+        }
+
+        $all = colorLibraryFetchAll($conn);
+        return [
+            'status' => 200,
+            'success' => true,
+            'mode' => 'archive',
+            'colorLibrary' => $all['colors'],
+            'colorFormulas' => $all['formulas'],
+        ];
     }
 
     // Check active products and saved formulas referencing this color
@@ -635,75 +747,110 @@ function colorLibraryDeleteColor(mysqli $conn, string $id, array $actor, string 
     }
 
     $reassignedToName = '';
-    if ($prodCount > 0 || $formCount > 0) {
-        if ($reassignToId === '' || $reassignToId === $id) {
-            return [
-                'status' => 409,
-                'success' => false,
-                'requiresReassignment' => true,
-                'referencedProducts' => $prodCount,
-                'referencedFormulas' => $formCount,
-                'error' => "Cannot delete '{$existing['name']}': it is currently referenced by {$prodCount} active product(s) and {$formCount} saved formula(s). Please reassign them to another color first."
-            ];
-        }
-
-        $tChk = $conn->prepare("SELECT id, name, hex FROM color_library WHERE id = ? LIMIT 1");
-        $tChk->bind_param('s', $reassignToId);
-        $tChk->execute();
-        $target = $tChk->get_result()->fetch_assoc();
-        $tChk->close();
-        if (!$target) {
-            return ['status' => 400, 'success' => false, 'error' => 'Selected replacement color was not found in the Color Library.'];
-        }
-
-        $reassignedToName = $target['name'];
-        $uProd = $conn->prepare("UPDATE products SET color_id = ?, color = ?, color_hex = ? WHERE color_id = ?");
-        if ($uProd) {
-            $uProd->bind_param('ssss', $target['id'], $target['name'], $target['hex'], $id);
-            $uProd->execute();
-            $uProd->close();
-        }
-        $uForm = $conn->prepare("UPDATE color_formulas SET color_id = ?, hex_reference = ? WHERE color_id = ?");
-        if ($uForm) {
-            $uForm->bind_param('sss', $target['id'], $target['hex'], $id);
-            $uForm->execute();
-            $uForm->close();
-        }
-    } else {
-        // Clear any discontinued product links cleanly
-        $uProd = $conn->prepare("UPDATE products SET color_id = NULL WHERE color_id = ?");
-        if ($uProd) {
-            $uProd->bind_param('s', $id);
-            $uProd->execute();
-            $uProd->close();
-        }
+    if ($mode === 'delete' && ($prodCount > 0 || $formCount > 0) && ($reassignToId === '' || $reassignToId === $id)) {
+        return [
+            'status' => 409,
+            'success' => false,
+            'requiresReassignment' => true,
+            'referencedProducts' => $prodCount,
+            'referencedFormulas' => $formCount,
+            'error' => "Cannot delete '{$existing['name']}': it is currently referenced by {$prodCount} active product(s) and {$formCount} saved formula(s). Reassign them, unlink, or archive this color instead. Inventory products will never be deleted."
+        ];
     }
 
-    $del = $conn->prepare("DELETE FROM color_library WHERE id = ? AND is_custom = 1");
-    $del->bind_param('s', $id);
-    $del->execute();
-    $del->close();
+    $conn->begin_transaction();
+    try {
+        if ($mode === 'unlink') {
+            // Unlink products and formulas without deleting any inventory product or formula
+            $uProd = $conn->prepare("UPDATE products SET color_id = NULL WHERE color_id = ?");
+            if ($uProd) {
+                $uProd->bind_param('s', $id);
+                $uProd->execute();
+                $uProd->close();
+            }
+            $uForm = $conn->prepare("UPDATE color_formulas SET color_id = NULL WHERE color_id = ?");
+            if ($uForm) {
+                $uForm->bind_param('s', $id);
+                $uForm->execute();
+                $uForm->close();
+            }
+        } elseif ($prodCount > 0 || $formCount > 0) {
+            $tChk = $conn->prepare("SELECT id, name, hex, classification FROM color_library WHERE id = ? AND COALESCE(is_archived, 0) = 0 LIMIT 1");
+            $tChk->bind_param('s', $reassignToId);
+            $tChk->execute();
+            $target = $tChk->get_result()->fetch_assoc();
+            $tChk->close();
+            if (!$target) {
+                $conn->rollback();
+                return ['status' => 400, 'success' => false, 'error' => 'Selected replacement color was not found in the Color Library.'];
+            }
 
-    $detailMsg = "Deleted custom color '{$existing['name']}' ({$existing['hex']}).";
-    if ($reassignedToName !== '') {
-        $detailMsg .= " Reassigned {$prodCount} product(s) and {$formCount} formula(s) to '{$reassignedToName}'.";
+            $reassignedToName = $target['name'];
+            $targetCls = $target['classification'] ?: 'Neutral Colors';
+            $uProd = $conn->prepare("UPDATE products SET color_id = ?, color = ?, color_hex = ?, color_classification = ? WHERE color_id = ?");
+            if ($uProd) {
+                $uProd->bind_param('sssss', $target['id'], $target['name'], $target['hex'], $targetCls, $id);
+                $uProd->execute();
+                $uProd->close();
+            }
+            $uForm = $conn->prepare("UPDATE color_formulas SET color_id = ?, hex_reference = ? WHERE color_id = ?");
+            if ($uForm) {
+                $uForm->bind_param('sss', $target['id'], $target['hex'], $id);
+                $uForm->execute();
+                $uForm->close();
+            }
+        } else {
+            // Clear any discontinued product links cleanly (never delete products)
+            $uProd = $conn->prepare("UPDATE products SET color_id = NULL WHERE color_id = ?");
+            if ($uProd) {
+                $uProd->bind_param('s', $id);
+                $uProd->execute();
+                $uProd->close();
+            }
+        }
+
+        // Remove mapping and delete only the color_library row (NEVER deletes inventory products)
+        $delMap = $conn->prepare("DELETE FROM color_inventory_sync_map WHERE color_id = ?");
+        if ($delMap) {
+            $delMap->bind_param('s', $id);
+            $delMap->execute();
+            $delMap->close();
+        }
+
+        $del = $conn->prepare("DELETE FROM color_library WHERE id = ? AND is_custom = 1");
+        $del->bind_param('s', $id);
+        $del->execute();
+        $del->close();
+
+        $detailMsg = "Deleted custom color '{$existing['name']}' ({$existing['hex']}). Inventory products were preserved.";
+        if ($mode === 'unlink') {
+            $detailMsg = "Unlinked and deleted custom color '{$existing['name']}' ({$existing['hex']}). {$prodCount} inventory product(s) and {$formCount} formula(s) were preserved.";
+        } elseif ($reassignedToName !== '') {
+            $detailMsg .= " Reassigned {$prodCount} product(s) and {$formCount} formula(s) to '{$reassignedToName}'.";
+        }
+
+        colorLibraryAuditLog(
+            $conn,
+            $actor,
+            $mode === 'unlink' ? 'Unlink & Delete Custom Color' : 'Delete Custom Color',
+            $existing['name'],
+            'color_library',
+            "{$existing['name']} ({$existing['hex']}, {$existing['category']})",
+            $reassignedToName !== '' ? "Deleted (Reassigned to {$reassignedToName})" : ($mode === 'unlink' ? 'Unlinked & Deleted (Products Preserved)' : 'Deleted'),
+            $detailMsg
+        );
+
+        $conn->commit();
+    } catch (Throwable $e) {
+        $conn->rollback();
+        return ['status' => 500, 'success' => false, 'error' => 'Failed to delete color: ' . $e->getMessage()];
     }
-
-    colorLibraryAuditLog(
-        $conn,
-        $actor,
-        'Delete Custom Color',
-        $existing['name'],
-        'color_library',
-        "{$existing['name']} ({$existing['hex']}, {$existing['category']})",
-        $reassignedToName !== '' ? "Deleted (Reassigned to {$reassignedToName})" : 'Deleted',
-        $detailMsg
-    );
 
     $all = colorLibraryFetchAll($conn);
     return [
         'status' => 200,
         'success' => true,
+        'mode' => $mode,
         'colorLibrary' => $all['colors'],
         'colorFormulas' => $all['formulas'],
         'reassignedTo' => $reassignedToName ?: null,
@@ -727,12 +874,24 @@ function colorLibrarySaveFormula(mysqli $conn, array $input, array $actor): arra
     if ($hexRef === '') {
         return ['status' => 400, 'success' => false, 'error' => 'Valid HEX reference is required.'];
     }
-    if (!is_array($pigmentFormula) || count($pigmentFormula) === 0) {
-        return ['status' => 400, 'success' => false, 'error' => 'Pigment formula components are required.'];
+    if (!is_array($pigmentFormula) || count($pigmentFormula) < 2) {
+        return ['status' => 400, 'success' => false, 'error' => 'At least 2 pigment formula components are required.'];
+    }
+    $pctSum = 0.0;
+    foreach ($pigmentFormula as $comp) {
+        $pVal = is_array($comp) ? (float)($comp['percentage'] ?? $comp['pct'] ?? 0) : 0.0;
+        if ($pVal <= 0) {
+            return ['status' => 400, 'success' => false, 'error' => 'Every pigment component must have a percentage greater than 0%.'];
+        }
+        $pctSum += $pVal;
+    }
+    if (abs($pctSum - 100.0) > 0.5) {
+        return ['status' => 400, 'success' => false, 'error' => 'Pigment formula percentages must total exactly 100% (currently ' . round($pctSum, 2) . '%).'];
     }
 
     $pigmentJson = json_encode(array_values($pigmentFormula), JSON_UNESCAPED_UNICODE);
     $actorName = (string)($actor['name'] ?? 'User');
+    $isAdminActor = (($actor['role'] ?? '') === 'admin');
 
     // Update if same custom formula name exists or id provided
     $existingId = '';
@@ -751,6 +910,9 @@ function colorLibrarySaveFormula(mysqli $conn, array $input, array $actor): arra
     }
 
     if ($existingId !== '') {
+        if (!$isAdminActor) {
+            return ['status' => 403, 'success' => false, 'error' => 'Access denied: Only Administrators can modify existing Mixed Color Catalog formulas. Save under a new custom name instead.'];
+        }
         $stmt = $conn->prepare("UPDATE color_formulas SET color_id = ?, name = ?, hex_reference = ?, detected_name = ?, base_type = ?, sheen = ?, notes = ?, pigment_formula = ? WHERE id = ?");
         $stmt->bind_param('sssssssss', $colorId, $name, $hexRef, $detectedName, $baseType, $sheen, $notes, $pigmentJson, $existingId);
         $stmt->execute();

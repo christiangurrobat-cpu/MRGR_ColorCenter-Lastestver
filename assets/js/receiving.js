@@ -10,6 +10,17 @@ let bulkAdjBatchNote = '';
 let receivingPOId = '';
 let receivingPOSearchQuery = '';
 let receivingPOStatusFilter = 'open'; // 'open' (default: pending + partial), 'all', 'pending', 'partial', 'received'
+let receivingPOSortBy = 'date-desc'; // 'date-desc' (default), 'date-asc', 'po-asc', 'po-desc', 'supplier-asc', 'supplier-desc', 'amount-desc', 'amount-asc'
+const RECEIVING_PO_SORT_OPTIONS = [
+  'date-desc',
+  'date-asc',
+  'po-asc',
+  'po-desc',
+  'supplier-asc',
+  'supplier-desc',
+  'amount-desc',
+  'amount-asc'
+];
 let receivingPOVisibleLimit = 6;
 let currentMovementType = 'receiving';
 let adjActiveView = 'entry'; // 'entry' or 'requests'
@@ -150,6 +161,7 @@ function initBulkAdjustmentRows() {
 }
 
 function receivingPage() {
+  if (currentMovementType === 'returns') currentMovementType = 'receiving';
   initBulkAdjustmentRows();
   const supplierOptions = db.suppliers
     .filter(s => s.status === 'active')
@@ -160,7 +172,7 @@ function receivingPage() {
     .join('');
 
   // Drop a stale selection if that PO is no longer open
-  const openPOs = openPOsForReceiving();
+  const openPOs = sortReceivingPOs(openPOsForReceiving(), receivingPOSortBy);
   if (receivingPOId && !openPOs.some(o => o.id === receivingPOId)) receivingPOId = '';
   if (!receivingPOId && openPOs.length > 0) receivingPOId = openPOs[0].id;
 
@@ -173,6 +185,7 @@ function receivingPage() {
 
   setTimeout(() => {
     toggleMovementFields();
+    if (typeof loadSupplierReturns === 'function') loadSupplierReturns(false);
   }, 0);
 
   const recentStockMoves = groupStockMovements(db.movements).slice(0, 15);
@@ -209,9 +222,10 @@ function receivingPage() {
         <div id="mv-fields-receiving">
           <div id="rcv-po-container"></div>
           <div class="rcv-submit-bar">
-            <span class="rcv-submit-hint">Confirming updates sealed stock and creates expiration tracking batches automatically.</span>
-            <button id="btn-submit-rcv" class="btn rcv-submit-btn" type="submit" disabled>✓ Confirm Delivery Received</button>
+            <span class="rcv-submit-hint">Physical inspection required first — only accepted quantities enter sellable stock &amp; FIFO expiration batches.</span>
+            <button id="btn-submit-rcv" class="btn rcv-submit-btn" type="submit" disabled>🔍 Review &amp; Confirm Delivery</button>
           </div>
+          <div id="rcv-active-replacements-panel"></div>
         </div>
 
     <!-- Stock Adjustment -->
@@ -251,9 +265,12 @@ function receivingPage() {
 <div class="panel-head row wrap" style="gap:10px;">
   <div>
     <h3 style="margin:0;">Recent Stock Movements</h3>
-    <span class="muted small">Latest 15 orders &amp; stock batches</span>
+    <span class="muted small">Latest 15 orders, damaged/rejected records &amp; authorized adjustments</span>
   </div>
   <div class="spacer"></div>
+  <button type="button" class="btn secondary small" onclick="openSupplierReturnsHistoryModal()" title="View &amp; manage Supplier Returns and Damaged Stock history">
+    ↩ Supplier Returns &amp; Damaged History <span id="rcv-sr-history-count" class="rcv-tab-count" style="display:none; margin-left:4px;">0</span>
+  </button>
   <button class="btn secondary small audit-historical-btn" onclick="goTo('reports'); if (typeof setReportTab==='function') setReportTab('transactions');" title="Open complete Transaction History in Reports">🏛️ All Historical Transactions &rarr;</button>
 </div>
 <div class="panel-body tight table-scroll">
@@ -266,6 +283,16 @@ function openPOsForReceiving() {
   return (db.purchaseOrders || [])
     .filter(o => o.status === 'ordered' || o.status === 'partial')
     .sort((a, b) => new Date(a.orderDate) - new Date(b.orderDate));
+}
+
+function hasPOReplacementPending(po) {
+  if (!po) return false;
+  if (po.receivingStage === 'awaiting_replacement') return true;
+  if (typeof getPOReplacementSummary === 'function') {
+    const rs = getPOReplacementSummary(po.id);
+    if (rs && rs.activeCount > 0) return true;
+  }
+  return false;
 }
 
 function openedStockShelfHtml() {
@@ -417,8 +444,9 @@ function selectReceivingPO(poId) {
 function getPOStatusCategory(po) {
   if (!po) return 'pending';
   const stats = getPOQtyStats(po);
+  if (hasPOReplacementPending(po)) return 'partial';
   if (po.status === 'received' || stats.pendingItems <= 0) return 'received';
-  if (po.status === 'partial' || stats.receivedItems > 0) return 'partial';
+  if (po.status === 'partial' || stats.receivedItems > 0 || stats.damagedItems > 0) return 'partial';
   return 'pending';
 }
 
@@ -444,6 +472,78 @@ function getReceivingPOStatusCounts() {
   };
 }
 
+function getReceivingPOTimestamp(po) {
+  if (!po) return 0;
+  const raw = po.orderDate || po.createdAt || po.receivedAt || '';
+  if (!raw) return 0;
+  const ts = Date.parse(raw);
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function compareReceivingPONumber(a, b) {
+  const poA = String((a && a.poNumber) || '').trim();
+  const poB = String((b && b.poNumber) || '').trim();
+  return poA.localeCompare(poB, undefined, { numeric: true, sensitivity: 'base' });
+}
+
+function sortReceivingPOs(list, sortBy = receivingPOSortBy) {
+  const mode = RECEIVING_PO_SORT_OPTIONS.includes(sortBy) ? sortBy : 'date-desc';
+  return (list || []).slice().sort((a, b) => {
+    let diff = 0;
+    switch (mode) {
+      case 'date-asc':
+        diff = getReceivingPOTimestamp(a) - getReceivingPOTimestamp(b);
+        if (diff !== 0) return diff;
+        return compareReceivingPONumber(a, b);
+      case 'po-asc':
+        diff = compareReceivingPONumber(a, b);
+        if (diff !== 0) return diff;
+        return getReceivingPOTimestamp(b) - getReceivingPOTimestamp(a);
+      case 'po-desc':
+        diff = compareReceivingPONumber(b, a);
+        if (diff !== 0) return diff;
+        return getReceivingPOTimestamp(b) - getReceivingPOTimestamp(a);
+      case 'supplier-asc': {
+        const supA = String((a && a.supplierName) || '').trim();
+        const supB = String((b && b.supplierName) || '').trim();
+        diff = supA.localeCompare(supB, undefined, { sensitivity: 'base' });
+        if (diff !== 0) return diff;
+        diff = getReceivingPOTimestamp(b) - getReceivingPOTimestamp(a);
+        return diff !== 0 ? diff : compareReceivingPONumber(b, a);
+      }
+      case 'supplier-desc': {
+        const supA = String((a && a.supplierName) || '').trim();
+        const supB = String((b && b.supplierName) || '').trim();
+        diff = supB.localeCompare(supA, undefined, { sensitivity: 'base' });
+        if (diff !== 0) return diff;
+        diff = getReceivingPOTimestamp(b) - getReceivingPOTimestamp(a);
+        return diff !== 0 ? diff : compareReceivingPONumber(b, a);
+      }
+      case 'amount-desc': {
+        const amtA = Number(a && a.totalAmount) || 0;
+        const amtB = Number(b && b.totalAmount) || 0;
+        diff = amtB - amtA;
+        if (diff !== 0) return diff;
+        diff = getReceivingPOTimestamp(b) - getReceivingPOTimestamp(a);
+        return diff !== 0 ? diff : compareReceivingPONumber(b, a);
+      }
+      case 'amount-asc': {
+        const amtA = Number(a && a.totalAmount) || 0;
+        const amtB = Number(b && b.totalAmount) || 0;
+        diff = amtA - amtB;
+        if (diff !== 0) return diff;
+        diff = getReceivingPOTimestamp(b) - getReceivingPOTimestamp(a);
+        return diff !== 0 ? diff : compareReceivingPONumber(b, a);
+      }
+      case 'date-desc':
+      default:
+        diff = getReceivingPOTimestamp(b) - getReceivingPOTimestamp(a);
+        if (diff !== 0) return diff;
+        return compareReceivingPONumber(b, a);
+    }
+  });
+}
+
 function getReceivingPOPickerList() {
   const all = (db.purchaseOrders || []).filter(o =>
     o.status === 'ordered' || o.status === 'partial' || o.status === 'received'
@@ -464,29 +564,36 @@ function getReceivingPOPickerList() {
       (o.supplierName || '').toLowerCase().includes(q)
     );
   }
-  const open = filtered
-    .filter(o => getPOStatusCategory(o) !== 'received')
-    .sort((a, b) => new Date(a.orderDate) - new Date(b.orderDate));
-  const done = filtered
-    .filter(o => getPOStatusCategory(o) === 'received')
-    .sort((a, b) => new Date(b.receivedAt || b.orderDate) - new Date(a.receivedAt || a.orderDate));
-  return open.concat(done);
+  return sortReceivingPOs(filtered, receivingPOSortBy);
 }
 
 function getPOQtyStats(po) {
   const items = getPOItems(po);
   let totalQty = 0;
   let receivedQty = 0;
+  let damagedQty = 0;
+  let itemRepPending = 0;
   items.forEach(it => {
     const ord = Number(it.qty || 0);
     const rec = Number(it.receivedQty !== undefined ? it.receivedQty : (po.status === 'received' ? ord : 0));
+    const dmg = Number(it.damagedQty || 0);
+    const rPend = Math.max(0, Number(it.replacementRequestedQty || 0) - Number(it.replacementReceivedQty || 0));
     totalQty += ord;
     receivedQty += Math.min(ord, rec);
+    damagedQty += dmg;
+    itemRepPending += Math.min(Math.max(0, ord - rec), rPend);
   });
+  const repSum = typeof getPOReplacementSummary === 'function' ? getPOReplacementSummary(po.id) : { activeCount: 0, pendingQty: 0 };
   const pendingQty = Math.max(0, Number((totalQty - receivedQty).toFixed(2)));
+  const replacementPendingItems = Math.min(pendingQty, Math.max(itemRepPending, Number(repSum.pendingQty || 0)));
+  const undeliveredItems = Math.max(0, Number((pendingQty - replacementPendingItems).toFixed(2)));
   return {
     totalItems: totalQty,
     receivedItems: Number(receivedQty.toFixed(2)),
+    acceptedItems: Number(receivedQty.toFixed(2)),
+    damagedItems: Number(damagedQty.toFixed(2)),
+    replacementPendingItems: Number(replacementPendingItems.toFixed(2)),
+    undeliveredItems: undeliveredItems,
     pendingItems: pendingQty,
     lineCount: items.length
   };
@@ -501,13 +608,16 @@ function renderReceivingPOCardsHtml(poList, selectedId) {
     const stats = getPOQtyStats(o);
     const cat = getPOStatusCategory(o);
     const isFullyReceived = cat === 'received';
+    const isReplPending = !isFullyReceived && hasPOReplacementPending(o);
     const isPartial = cat === 'partial';
     const isSelected = !isFullyReceived && o.id === selectedId;
     const statusBadge = isFullyReceived
       ? `<span class="rcv-po-badge received">✓ Fully Received</span>`
-      : (isPartial
-        ? `<span class="rcv-po-badge partial">◐ Partially Received</span>`
-        : `<span class="rcv-po-badge pending">⏳ Pending</span>`);
+      : (isReplPending
+        ? `<span class="rcv-po-badge partial">🔄 Partially Received – Replacement Pending</span>`
+        : (isPartial
+          ? `<span class="rcv-po-badge partial">◐ Partially Received</span>`
+          : `<span class="rcv-po-badge pending">⏳ Pending</span>`));
     const dateStr = o.orderDate ? formatDateShort(o.orderDate) : '—';
 
     return `
@@ -526,10 +636,12 @@ function renderReceivingPOCardsHtml(poList, selectedId) {
           <span class="rcv-po-amount">${peso(o.totalAmount)}</span>
           <span class="rcv-po-date">📅 ${escapeHtml(dateStr)}</span>
         </div>
-        <div class="rcv-po-counts">
-          <span>Total: <b>${formatStock(stats.totalItems)}</b></span>
-          <span>Received: <b>${formatStock(stats.receivedItems)}</b></span>
-          <span class="${stats.pendingItems > 0 ? 'rcv-po-pending-txt' : ''}">Pending: <b>${formatStock(stats.pendingItems)}</b></span>
+        <div class="rcv-po-counts" style="flex-wrap:wrap; row-gap:4px;">
+          <span>Ordered: <b>${formatStock(stats.totalItems)}</b></span>
+          <span>Accepted: <b>${formatStock(stats.acceptedItems)}</b></span>
+          ${stats.damagedItems > 0 ? `<span class="rcv-po-pending-txt">Damaged: <b>${formatStock(stats.damagedItems)}</b></span>` : ''}
+          ${stats.replacementPendingItems > 0 ? `<span style="color:var(--teal-text);">Repl. Pending: <b>${formatStock(stats.replacementPendingItems)}</b></span>` : ''}
+          <span class="${stats.undeliveredItems > 0 ? 'rcv-po-pending-txt' : ''}">Undelivered: <b>${formatStock(stats.undeliveredItems)}</b></span>
         </div>
       </button>
     `;
@@ -581,6 +693,12 @@ function onReceivingPOSearchInput(val) {
   updateReceivingPOGridOnly();
 }
 
+function onReceivingPOSortChange(val) {
+  receivingPOSortBy = RECEIVING_PO_SORT_OPTIONS.includes(val) ? val : 'date-desc';
+  receivingPOVisibleLimit = 6;
+  updateReceivingPOGridOnly();
+}
+
 /* Batch / expiration details typed on the receiving form (per PO line index) — feeds Expiration Tracking */
 let rcvBatchDraft = {};
 function rcvBatchDraftSet(idx, field, value) {
@@ -593,7 +711,7 @@ function renderReceivingPOPreview() {
   const submitBtn = document.getElementById('btn-submit-rcv');
   if (!container) return;
 
-  const openPOs = openPOsForReceiving();
+  const openPOs = sortReceivingPOs(openPOsForReceiving(), receivingPOSortBy);
   const statusCounts = getReceivingPOStatusCounts();
   const pickerList = getReceivingPOPickerList();
   const shownCount = Math.min(pickerList.length, receivingPOVisibleLimit);
@@ -607,6 +725,19 @@ function renderReceivingPOPreview() {
         <div class="rcv-po-search-wrap">
           <span class="rcv-po-search-icon">🔍</span>
           <input type="text" id="rcv-po-search" class="rcv-po-search" placeholder="Search by PO Number or Supplier Name..." value="${escapeAttr(receivingPOSearchQuery)}" oninput="onReceivingPOSearchInput(this.value)">
+        </div>
+        <div class="rcv-po-sort-wrap">
+          <label for="rcv-po-sort" class="rcv-po-sort-label">Sort:</label>
+          <select id="rcv-po-sort" class="rcv-po-sort-select" aria-label="Sort Purchase Orders" title="Sort Purchase Orders" onchange="onReceivingPOSortChange(this.value)">
+            <option value="date-desc" ${receivingPOSortBy === 'date-desc' ? 'selected' : ''}>Newest Date First</option>
+            <option value="date-asc" ${receivingPOSortBy === 'date-asc' ? 'selected' : ''}>Oldest Date First</option>
+            <option value="po-asc" ${receivingPOSortBy === 'po-asc' ? 'selected' : ''}>PO Number (Ascending)</option>
+            <option value="po-desc" ${receivingPOSortBy === 'po-desc' ? 'selected' : ''}>PO Number (Descending)</option>
+            <option value="supplier-asc" ${receivingPOSortBy === 'supplier-asc' ? 'selected' : ''}>Supplier Name (A–Z)</option>
+            <option value="supplier-desc" ${receivingPOSortBy === 'supplier-desc' ? 'selected' : ''}>Supplier Name (Z–A)</option>
+            <option value="amount-desc" ${receivingPOSortBy === 'amount-desc' ? 'selected' : ''}>Highest Amount First</option>
+            <option value="amount-asc" ${receivingPOSortBy === 'amount-asc' ? 'selected' : ''}>Lowest Amount First</option>
+          </select>
         </div>
         <div class="rcv-po-picker-stats">
           <span class="simple-stat-pill" id="rcv-po-match-count">Showing <b>${shownCount}</b> of <b>${pickerList.length}</b> order${pickerList.length === 1 ? '' : 's'}</span>
@@ -659,7 +790,8 @@ function renderReceivingPOPreview() {
     const currentStock = product ? Number(product.stock) || 0 : 0;
     const ordered = Number(item.qty || 0);
     const alreadyReceived = Number(item.receivedQty !== undefined ? item.receivedQty : (po.status === 'received' ? ordered : 0));
-    const remaining = Math.max(0, Number((ordered - alreadyReceived).toFixed(2)));
+    const activeRepPending = Math.max(0, Number(item.replacementRequestedQty || 0) - Number(item.replacementReceivedQty || 0));
+    const remaining = Math.max(0, Number((ordered - alreadyReceived - activeRepPending).toFixed(2)));
     const size = Number(item.size) || 1;
     const curCans = product ? productCanCount(product, size) : 0;
     const newCans = curCans + remaining;
@@ -699,17 +831,37 @@ function renderReceivingPOPreview() {
           </div>
         </div>
 
-        <!-- Right: Quantity Stepper + Expected Stock -->
+        <!-- Right: Ordered / Actual Delivered / Accepted / Damaged Inspection + Stock Preview -->
         <div class="rcv-item-actions">
-          <div class="rcv-stepper-wrap">
-            <div class="rcv-stepper-compact">
-              <button type="button" class="rcv-stepper-btn" onclick="stepReceivingQty(${i}, -1)" ${isDone ? 'disabled' : ''} aria-label="Decrease quantity">−</button>
-              <input type="number" id="rcv-qty-input-${i}" class="rcv-stepper-input" min="0" max="${remaining}" step="1" value="${remaining}"
-                ${isDone ? 'disabled' : ''}
-                oninput="onReceivingQtyChange(${i}, ${currentStock}, ${size}, ${curCans})">
-              <button type="button" class="rcv-stepper-btn" onclick="stepReceivingQty(${i}, 1)" ${isDone ? 'disabled' : ''} aria-label="Increase quantity">+</button>
+          <div class="rcv-inspect-nums">
+            <div class="rcv-inspect-col">
+              <span class="rcv-inspect-lbl">Ordered</span>
+              <div class="rcv-ordered-pill" title="Ordered: ${formatStock(ordered)} · Remaining: ${formatStock(remaining)}">${formatStock(ordered)}</div>
             </div>
-            ${remaining > 0 ? `<button type="button" class="rcv-all-btn" onclick="setReceivingQtyMax(${i})" title="Set to all ${formatStock(remaining)} remaining">All</button>` : ''}
+            <div class="rcv-inspect-col">
+              <span class="rcv-inspect-lbl">Actual Delivered</span>
+              <div class="rcv-stepper-wrap">
+                <div class="rcv-stepper-compact">
+                  <button type="button" class="rcv-stepper-btn" onclick="stepReceivingQty(${i}, -1)" ${isDone ? 'disabled' : ''} aria-label="Decrease delivered quantity">−</button>
+                  <input type="number" id="rcv-qty-input-${i}" class="rcv-stepper-input" min="0" max="${remaining}" step="1" value="${remaining}"
+                    ${isDone ? 'disabled' : ''}
+                    oninput="onReceivingQtyChange(${i}, ${currentStock}, ${size}, ${curCans})">
+                  <button type="button" class="rcv-stepper-btn" onclick="stepReceivingQty(${i}, 1)" ${isDone ? 'disabled' : ''} aria-label="Increase delivered quantity">+</button>
+                </div>
+                ${remaining > 0 ? `<button type="button" class="rcv-all-btn" onclick="setReceivingQtyMax(${i})" title="Set to all ${formatStock(remaining)} remaining">All</button>` : ''}
+              </div>
+            </div>
+            ${isDone ? '' : `
+            <div class="rcv-inspect-col">
+              <span class="rcv-inspect-lbl good">Accepted</span>
+              <input type="number" id="rcv-accepted-input-${i}" class="rcv-inspect-input good" min="0" max="${remaining}" step="1" value="${remaining}"
+                oninput="onReceivingAcceptedChange(${i}, ${currentStock}, ${size}, ${curCans})">
+            </div>
+            <div class="rcv-inspect-col">
+              <span class="rcv-inspect-lbl damaged">Damaged / Rej.</span>
+              <input type="number" id="rcv-damaged-input-${i}" class="rcv-inspect-input damaged" min="0" max="${remaining}" step="1" value="0"
+                oninput="onReceivingDamagedChange(${i}, ${currentStock}, ${size}, ${curCans})">
+            </div>`}
           </div>
           <div id="rcv-stock-preview-${i}" class="rcv-item-pill ${remaining > 0 ? 'add' : 'done'}">
             ${product && remaining > 0
@@ -719,6 +871,33 @@ function renderReceivingPOPreview() {
         </div>
       </div>
       ${isDone ? '' : `
+      <div id="rcv-damage-box-${i}" class="rcv-damage-box hidden">
+        <div class="rcv-damage-head">
+          <span>⚠️ Damaged / Rejected Stock Inspection <b id="rcv-damage-badge-${i}"></b></span>
+          <span class="hint">Rejected units are NOT counted as accepted stock and NEVER enter sellable inventory</span>
+        </div>
+        <div class="rcv-dmg-grid">
+          <label>
+            <span>Damage / Rejection Reason *</span>
+            <select id="rcv-dmg-reason-${i}" class="rcv-dmg-select">
+              <option value="">— Select Reason (Required) —</option>
+              ${(typeof SR_DAMAGE_REASONS !== 'undefined' ? SR_DAMAGE_REASONS : ['Leaking Paint', 'Broken / Damaged Container', 'Missing Product', 'Incorrect Product Delivered', 'Expired Product', 'Contaminated Paint', 'Other'])
+          .map(r => `<option value="${escapeAttr(r)}">${escapeHtml(r)}</option>`).join('')}
+            </select>
+          </label>
+          <label>
+            <span>Handling / Disposition *</span>
+            <select id="rcv-dmg-handling-${i}" class="rcv-dmg-select">
+              <option value="returned_to_driver" selected>Return Directly to Delivery Personnel (Auto-Log Return)</option>
+              <option value="quarantine">Quarantine at Store (Pending Supplier Return)</option>
+            </select>
+          </label>
+          <label class="rcv-dmg-notes-col">
+            <span>Inspection Notes / Evidence</span>
+            <input type="text" id="rcv-dmg-note-${i}" maxlength="255" placeholder="Describe damage condition, leak, dent, or rejection details">
+          </label>
+        </div>
+      </div>
       <div class="rcv-batch-fields" title="Expiration and restocking details (Batch/Lot No. is auto-generated)">
         <div class="rcv-batch-header">
           <div class="rcv-batch-title">
@@ -741,6 +920,11 @@ function renderReceivingPOPreview() {
     </div>`;
   }).join('');
 
+  if (submitBtn) submitBtn.disabled = (totalRemainingCans <= 0);
+
+  const poStats = getPOQtyStats(po);
+  const initialProcessedAwaitingRepl = (totalRemainingCans <= 0 && hasPOReplacementPending(po));
+
   container.innerHTML = `
     ${pickerHtml}
     <input type="hidden" id="mv-po" value="${escapeAttr(po.id)}">
@@ -750,18 +934,33 @@ function renderReceivingPOPreview() {
       <div class="rcv-toolbar-left">
         <span class="rcv-toolbar-label">Receiving Order:</span>
         <span class="rcv-selected-po-title">${escapeHtml(po.poNumber)} — ${escapeHtml(po.supplierName)} (${peso(po.totalAmount)})</span>
-        <span class="rcv-pending-badge">${totalRemainingCans} unit${totalRemainingCans === 1 ? '' : 's'} pending</span>
+        ${initialProcessedAwaitingRepl
+          ? `<span class="rcv-po-badge partial">🔄 Partially Received – Replacement Pending (${formatStock(poStats.replacementPendingItems)} unit${poStats.replacementPendingItems === 1 ? '' : 's'})</span>`
+          : `<span class="rcv-pending-badge">${totalRemainingCans} unit${totalRemainingCans === 1 ? '' : 's'} undelivered</span>`}
       </div>
+      ${initialProcessedAwaitingRepl ? '' : `
       <div class="rcv-toolbar-actions">
         <button type="button" class="btn ghost small" onclick="fillReceivingPageQtys(true)">⚡ Receive All</button>
         <button type="button" class="btn ghost small" onclick="fillReceivingPageQtys(false)">Reset</button>
-      </div>
+      </div>`}
     </div>
+
+    ${initialProcessedAwaitingRepl ? `
+      <div class="sr-modal-notice warn" style="margin-bottom:10px;">
+        🔄 <b>Partially Received – Replacement Pending:</b> Initial delivery for <b>${escapeHtml(po.poNumber)}</b> has been processed (Ordered: <b>${formatStock(poStats.totalItems)}</b> · Accepted: <b>${formatStock(poStats.acceptedItems)}</b> · Damaged: <b>${formatStock(poStats.damagedItems)}</b> · Replacement Pending: <b>${formatStock(poStats.replacementPendingItems)}</b> · Undelivered: <b>0</b>). This PO remains open until all replacement stock is physically inspected and received in <b>Active Replacement Tracking</b> below.
+      </div>
+    ` : `
+      <!-- Physical Inspection Guidance Banner -->
+      <div class="rcv-inspect-banner">
+        <span>🔎 <b>Physical Inspection First:</b> Count and inspect delivered containers before confirming. <b>Actual Delivered = Accepted + Damaged/Rejected</b>. Only accepted units are added to sellable inventory &amp; FIFO batches.</span>
+      </div>
+    `}
 
     <!-- Product Receiving Cards -->
     <div class="rcv-minimal-list">
       ${rowsHtml}
     </div>
+    ${typeof renderPOReplacementSummaryBannerHtml === 'function' ? renderPOReplacementSummaryBannerHtml(po) : ''}
   `;
 }
 
@@ -782,26 +981,94 @@ function setReceivingQtyMax(idx) {
   input.dispatchEvent(new Event('input'));
 }
 
-function onReceivingQtyChange(idx, currentStock, size = 1, curCans = 0) {
-  const input = document.getElementById(`rcv-qty-input-${idx}`);
+function updateReceivingInspectionPreview(idx, size = 1, curCans = 0) {
+  const delEl = document.getElementById(`rcv-qty-input-${idx}`);
+  const accEl = document.getElementById(`rcv-accepted-input-${idx}`);
+  const dmgEl = document.getElementById(`rcv-damaged-input-${idx}`);
   const preview = document.getElementById(`rcv-stock-preview-${idx}`);
-  if (!input || !preview) return;
-  const max = parseFloat(input.max) || 0;
-  let val = Math.max(0, parseFloat(input.value) || 0);
-  if (val > max) {
-    val = max;
-    input.value = max;
-    showToast(`Cannot receive more than remaining (${max} × ${size}L).`, 'error');
+  const dmgBox = document.getElementById(`rcv-damage-box-${idx}`);
+  const dmgBadge = document.getElementById(`rcv-damage-badge-${idx}`);
+  if (!delEl || !preview) return;
+
+  const delivered = Math.max(0, Math.floor(parseFloat(delEl.value) || 0));
+  const accepted = accEl ? Math.max(0, Math.floor(parseFloat(accEl.value) || 0)) : delivered;
+  const damaged = dmgEl ? Math.max(0, Math.floor(parseFloat(dmgEl.value) || 0)) : 0;
+
+  if (dmgBox) {
+    dmgBox.classList.toggle('hidden', damaged <= 0);
   }
-  const addedLiters = Number((val * size).toFixed(2));
-  const newCans = curCans + val;
-  if (val > 0) {
+  if (dmgBadge) {
+    dmgBadge.textContent = damaged > 0 ? `(${damaged} × ${size}L quarantined)` : '';
+  }
+
+  const addedLiters = Number((accepted * size).toFixed(2));
+  const newCans = curCans + accepted;
+  if (accepted > 0 && damaged > 0) {
+    preview.className = 'rcv-item-pill warn';
+    preview.innerHTML = `➔ ${newCans} good (+${formatLiters(addedLiters)}) · ⚠ ${damaged} damaged`;
+  } else if (accepted > 0) {
     preview.className = 'rcv-item-pill add';
     preview.innerHTML = `➔ ${newCans} units (+${formatLiters(addedLiters)})`;
+  } else if (damaged > 0) {
+    preview.className = 'rcv-item-pill warn';
+    preview.innerHTML = `⚠ ${damaged} damaged (0 added to stock)`;
   } else {
     preview.className = 'rcv-item-pill done';
     preview.innerHTML = `No change (0 units)`;
   }
+}
+
+function onReceivingQtyChange(idx, currentStock, size = 1, curCans = 0) {
+  const input = document.getElementById(`rcv-qty-input-${idx}`);
+  const accEl = document.getElementById(`rcv-accepted-input-${idx}`);
+  const dmgEl = document.getElementById(`rcv-damaged-input-${idx}`);
+  if (!input) return;
+  const max = parseFloat(input.max) || 0;
+  let val = Math.max(0, Math.floor(parseFloat(input.value) || 0));
+  if (val > max) {
+    val = Math.floor(max);
+    input.value = val;
+    showToast(`Cannot receive more than remaining (${val} × ${size}L).`, 'error');
+  }
+  if (accEl && dmgEl) {
+    let dmg = Math.min(val, Math.max(0, Math.floor(parseFloat(dmgEl.value) || 0)));
+    dmgEl.max = val;
+    dmgEl.value = dmg;
+    accEl.max = val;
+    accEl.value = val - dmg;
+  }
+  updateReceivingInspectionPreview(idx, size, curCans);
+}
+
+function onReceivingAcceptedChange(idx, currentStock, size = 1, curCans = 0) {
+  const delEl = document.getElementById(`rcv-qty-input-${idx}`);
+  const accEl = document.getElementById(`rcv-accepted-input-${idx}`);
+  const dmgEl = document.getElementById(`rcv-damaged-input-${idx}`);
+  if (!delEl || !accEl || !dmgEl) return;
+  const delivered = Math.max(0, Math.floor(parseFloat(delEl.value) || 0));
+  let acc = Math.max(0, Math.floor(parseFloat(accEl.value) || 0));
+  if (acc > delivered) {
+    acc = delivered;
+    accEl.value = acc;
+  }
+  dmgEl.value = delivered - acc;
+  updateReceivingInspectionPreview(idx, size, curCans);
+}
+
+function onReceivingDamagedChange(idx, currentStock, size = 1, curCans = 0) {
+  const delEl = document.getElementById(`rcv-qty-input-${idx}`);
+  const accEl = document.getElementById(`rcv-accepted-input-${idx}`);
+  const dmgEl = document.getElementById(`rcv-damaged-input-${idx}`);
+  if (!delEl || !accEl || !dmgEl) return;
+  const delivered = Math.max(0, Math.floor(parseFloat(delEl.value) || 0));
+  let dmg = Math.max(0, Math.floor(parseFloat(dmgEl.value) || 0));
+  if (dmg > delivered) {
+    dmg = delivered;
+    dmgEl.value = dmg;
+    showToast(`Damaged quantity cannot exceed Delivered Quantity (${delivered}).`, 'error');
+  }
+  accEl.value = delivered - dmg;
+  updateReceivingInspectionPreview(idx, size, curCans);
 }
 
 function fillReceivingPageQtys(isMax) {
@@ -810,7 +1077,9 @@ function fillReceivingPageQtys(isMax) {
   const items = getPOItems(po);
   items.forEach((item, i) => {
     const input = document.getElementById(`rcv-qty-input-${i}`);
+    const dmgEl = document.getElementById(`rcv-damaged-input-${i}`);
     if (input && !input.disabled) {
+      if (dmgEl) dmgEl.value = 0;
       input.value = isMax ? input.max : 0;
       const product = productById(item.productId);
       const size = Number(item.size) || 1;
@@ -1501,14 +1770,15 @@ function clearBulkAdjRows() {
 const renderBulkAdjustmentTable = renderBulkAdjustmentView;
 
 function selectMovementType(type) {
-  currentMovementType = type;
+  const safeType = ['receiving', 'adjustment', 'colormix'].includes(type) ? type : 'receiving';
+  currentMovementType = safeType;
   const hidden = document.getElementById('mv-type');
-  if (hidden) hidden.value = type;
+  if (hidden) hidden.value = safeType;
 
   ['receiving', 'adjustment', 'colormix'].forEach(t => {
     const card = document.getElementById('mv-card-' + t);
     if (card) {
-      const isSelected = (t === type);
+      const isSelected = (t === safeType);
       card.classList.toggle('active', isSelected);
       card.setAttribute('aria-checked', isSelected ? 'true' : 'false');
     }
@@ -1520,7 +1790,8 @@ function selectMovementType(type) {
 
 function toggleMovementFields() {
   const hidden = document.getElementById('mv-type');
-  const type = hidden ? hidden.value : (currentMovementType || 'receiving');
+  const rawType = hidden ? hidden.value : (currentMovementType || 'receiving');
+  const type = ['receiving', 'adjustment', 'colormix'].includes(rawType) ? rawType : 'receiving';
   ['receiving', 'adjustment', 'colormix'].forEach(t => {
     const el = document.getElementById('mv-fields-' + t);
     if (el) el.classList.toggle('hidden', t !== type);
@@ -1529,6 +1800,7 @@ function toggleMovementFields() {
     renderBulkAdjustmentView();
   } else if (type === 'receiving') {
     renderReceivingPOPreview();
+    if (typeof renderActiveReplacementTrackingPanel === 'function') renderActiveReplacementTrackingPanel();
   }
 }
 
@@ -1991,7 +2263,7 @@ function viewAdjRequestDetails(reqId) {
         <div>
           <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
             <span style="font-weight:700; color:var(--ink);">${escapeHtml(p ? p.name : 'Unknown Product')}</span>
-            <span style="font-weight:normal; font-size:12px; color:var(--ink-soft);">${p ? `(${p.brand})` : ''}</span>
+            <span style="font-weight:normal; font-size:12px; color:var(--ink-soft);">${p ? `(${escapeHtml(p.brand)})` : ''}</span>
           </div>
           <div class="muted small" style="margin-top:2px;">Reason: <b>${escapeHtml(r.reason)}</b>${r.note ? ` — "${escapeHtml(r.note)}"` : ''}</div>
         </div>
@@ -2166,6 +2438,168 @@ function renderAdjRequestsViewHtml() {
   `;
 }
 
+let _pendingReceivingPayload = null;
+
+function openReceivingFinalConfirmModal(po, items, batchQtys, batchMeta, damageMeta) {
+  let totalOrdered = 0;
+  let totalDelivered = 0;
+  let totalAccepted = 0;
+  let totalDamaged = 0;
+  let totalRemainingAfter = 0;
+
+  const lineRowsHtml = items.map((item, i) => {
+    const ordered = Number(item.qty || 0);
+    const alreadyAccepted = Number(item.receivedQty !== undefined ? item.receivedQty : (po.status === 'received' ? ordered : 0));
+    const dm = damageMeta[i] || { deliveredQty: 0, acceptedQty: 0, damagedQty: 0, reason: '', handling: 'returned_to_driver', inspectionNotes: '' };
+    const delivered = Number(dm.deliveredQty || 0);
+    const accepted = Number(dm.acceptedQty || 0);
+    const damaged = Number(dm.damagedQty || 0);
+    const remAfter = Math.max(0, Number((ordered - (alreadyAccepted + accepted)).toFixed(2)));
+    const size = Number(item.size) || 1;
+
+    totalOrdered += ordered;
+    totalDelivered += delivered;
+    totalAccepted += accepted;
+    totalDamaged += damaged;
+    totalRemainingAfter += remAfter;
+
+    const handlingLabel = damaged > 0
+      ? (dm.handling === 'returned_to_driver' ? 'Returned to Driver' : 'Quarantined')
+      : '—';
+
+    return `
+      <tr>
+        <td><b>${escapeHtml(item.productName || 'Item')}</b> <span class="sr-size-pill">${size}L</span></td>
+        <td class="right">${formatStock(ordered)}</td>
+        <td class="right"><b>${formatStock(delivered)}</b></td>
+        <td class="right" style="color:var(--success); font-weight:700;">${formatStock(accepted)}</td>
+        <td class="right" style="color:${damaged > 0 ? 'var(--danger)' : 'var(--ink-soft)'}; font-weight:700;">${formatStock(damaged)}</td>
+        <td class="right">${formatStock(remAfter)}</td>
+        <td>
+          ${damaged > 0
+            ? `<div style="font-size:11.5px; font-weight:600; color:var(--danger-text);">${escapeHtml(dm.reason)}</div><div class="muted small">${escapeHtml(handlingLabel)}${dm.inspectionNotes ? ' · ' + escapeHtml(dm.inspectionNotes) : ''}</div>`
+            : (batchMeta[i] && batchMeta[i].notes ? `<span class="muted small">${escapeHtml(batchMeta[i].notes)}</span>` : '<span class="muted small">Passed</span>')}
+        </td>
+      </tr>`;
+  }).join('');
+
+  const receivingTxKey = `rcvtx_${po.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  _pendingReceivingPayload = { po, batchQtys, batchMeta, damageMeta, receivingTxKey };
+
+  const bodyHtml = `
+    <div style="margin-bottom:10px;">
+      <div style="font-weight:700; font-size:15px; color:var(--ink); font-family:'Space Grotesk',monospace;">${escapeHtml(po.poNumber)} — ${escapeHtml(po.supplierName)}</div>
+      <div class="muted small">Review the physical inspection counts below before posting accepted quantities to sellable inventory.</div>
+    </div>
+
+    <div class="rcv-confirm-kpi-grid">
+      <div class="rcv-confirm-kpi">
+        <span class="lbl">Total Ordered</span>
+        <span class="val">${formatStock(totalOrdered)}</span>
+      </div>
+      <div class="rcv-confirm-kpi">
+        <span class="lbl">Total Delivered</span>
+        <span class="val">${formatStock(totalDelivered)}</span>
+      </div>
+      <div class="rcv-confirm-kpi good">
+        <span class="lbl">Total Accepted</span>
+        <span class="val">${formatStock(totalAccepted)}</span>
+      </div>
+      <div class="rcv-confirm-kpi ${totalDamaged > 0 ? 'damaged' : ''}">
+        <span class="lbl">Damaged / Rej.</span>
+        <span class="val">${formatStock(totalDamaged)}</span>
+      </div>
+      <div class="rcv-confirm-kpi">
+        <span class="lbl">Remaining / Pending</span>
+        <span class="val">${formatStock(totalRemainingAfter)}</span>
+      </div>
+    </div>
+
+    <div class="table-scroll" style="margin:12px 0; border:1px solid var(--line); border-radius:var(--radius-sm); max-height:240px; overflow-y:auto;">
+      <table class="sr-table">
+        <thead>
+          <tr>
+            <th>Product</th>
+            <th class="right">Ordered</th>
+            <th class="right">Delivered</th>
+            <th class="right">Accepted</th>
+            <th class="right">Damaged</th>
+            <th class="right">Pending</th>
+            <th>Inspection / Handling</th>
+          </tr>
+        </thead>
+        <tbody>${lineRowsHtml}</tbody>
+      </table>
+    </div>
+
+    <label class="rcv-inspect-attest">
+      <input type="checkbox" id="rcv-confirm-inspect-cb" onchange="toggleReceivingFinalConfirmBtn()">
+      <span>I confirm that <b>physical inspection and counting have been completed</b>${totalDamaged > 0 ? `, all <b>${formatStock(totalDamaged)} damaged/rejected unit(s)</b> are physically returned or documented for return (a linked Supplier Replacement Request will be auto-generated as <b>Awaiting Supplier Confirmation</b>)` : ''}, and only <b>${formatStock(totalAccepted)} accepted unit(s)</b> should be posted to sellable inventory &amp; FIFO batches.</span>
+    </label>
+  `;
+
+  const footHtml = `
+    <button type="button" class="btn secondary" onclick="_pendingReceivingPayload = null; closeModal();">Cancel</button>
+    <button type="button" class="btn" id="rcv-final-confirm-btn" disabled onclick="executeConfirmedPOReceiving()">✓ Confirm &amp; Post to Inventory</button>
+  `;
+
+  openModal('Final Receiving Inspection Confirmation', bodyHtml, footHtml);
+}
+
+function toggleReceivingFinalConfirmBtn() {
+  const cb = document.getElementById('rcv-confirm-inspect-cb');
+  const btn = document.getElementById('rcv-final-confirm-btn');
+  if (btn) btn.disabled = !(cb && cb.checked);
+}
+
+async function executeConfirmedPOReceiving() {
+  if (window._isSubmittingReceiving || !_pendingReceivingPayload) return;
+  const cb = document.getElementById('rcv-confirm-inspect-cb');
+  if (!cb || !cb.checked) {
+    showToast('Please confirm that physical inspection has been completed.', 'error');
+    return;
+  }
+
+  const { po, batchQtys, batchMeta, damageMeta, receivingTxKey } = _pendingReceivingPayload;
+  _pendingReceivingPayload = null; // Prevent duplicate execution immediately
+  window._isSubmittingReceiving = true;
+
+  const confirmBtn = document.getElementById('rcv-final-confirm-btn');
+  const rcvBtn = document.getElementById('btn-submit-rcv');
+  if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = 'Posting…'; }
+  if (rcvBtn) rcvBtn.disabled = true;
+
+  try {
+    const result = await completePOReceiving(po, '', batchQtys, batchMeta, damageMeta, receivingTxKey);
+    rcvBatchDraft = {};
+    closeModal();
+
+    const parts = [];
+    if (result.totalAcceptedUnits > 0) parts.push(`${result.totalAcceptedUnits} accepted added to stock`);
+    if (result.totalDamagedUnits > 0) parts.push(`${result.totalDamagedUnits} damaged/rejected excluded`);
+    if (result.autoReplacementRefs && result.autoReplacementRefs.length) {
+      parts.push(`Replacement Request ${result.autoReplacementRefs.join(', ')} auto-generated`);
+    }
+    if (result.autoReturnRef) parts.push(`Return ${result.autoReturnRef} logged`);
+    const summarySuffix = parts.length ? ` (${parts.join(', ')})` : '';
+
+    const updatedPO = (db.purchaseOrders || []).find(o => o.id === po.id);
+    const replPending = !!(updatedPO && hasPOReplacementPending(updatedPO));
+    if (result.allCompleted) {
+      receivingPOId = '';
+      showToast(`PO ${po.poNumber} confirmed as fully received${summarySuffix}.`, 'ok');
+    } else if (replPending) {
+      showToast(`PO ${po.poNumber} is Partially Received – Replacement Pending${summarySuffix}.`, 'ok');
+    } else {
+      showToast(`PO ${po.poNumber} inspection posted${summarySuffix}. Remaining undelivered units stay Pending.`, 'ok');
+    }
+    renderPage();
+  } finally {
+    window._isSubmittingReceiving = false;
+    if (rcvBtn) rcvBtn.disabled = false;
+  }
+}
+
 async function submitMovement(e) {
   e.preventDefault();
   const type = document.getElementById('mv-type').value;
@@ -2183,22 +2617,78 @@ async function submitMovement(e) {
     const items = getPOItems(po);
     const batchQtys = {};
     const batchMeta = {};
+    const damageMeta = {};
     let totalToReceive = 0;
 
     for (let i = 0; i < items.length; i++) {
       const input = document.getElementById(`rcv-qty-input-${i}`);
-      const rawVal = input ? Math.max(0, parseFloat(input.value) || 0) : 0;
-      if (rawVal > 0 && !Number.isInteger(rawVal)) {
-        showToast(`Receiving quantity for "${items[i].productName || 'Item'}" must be a whole number of containers.`, 'error');
+      const accEl = document.getElementById(`rcv-accepted-input-${i}`);
+      const dmgEl = document.getElementById(`rcv-damaged-input-${i}`);
+      const rawDelivered = input ? Math.max(0, parseFloat(input.value) || 0) : 0;
+      const rawAccepted = accEl ? Math.max(0, parseFloat(accEl.value) || 0) : rawDelivered;
+      const rawDamaged = dmgEl ? Math.max(0, parseFloat(dmgEl.value) || 0) : 0;
+
+      if ((rawDelivered > 0 && !Number.isInteger(rawDelivered)) ||
+        (rawAccepted > 0 && !Number.isInteger(rawAccepted)) ||
+        (rawDamaged > 0 && !Number.isInteger(rawDamaged))) {
+        showToast(`Quantities for "${items[i].productName || 'Item'}" must be whole numbers of containers.`, 'error');
         return false;
       }
-      const val = Math.floor(rawVal);
-      batchQtys[i] = val;
-      totalToReceive += val;
+      const valDelivered = Math.floor(rawDelivered);
+      const valAccepted = Math.floor(rawAccepted);
+      const valDamaged = Math.floor(rawDamaged);
+
+      if (valDelivered !== (valAccepted + valDamaged)) {
+        showToast(`Validation failed for "${items[i].productName || 'Item'}": Delivered (${valDelivered}) must equal Accepted (${valAccepted}) + Damaged (${valDamaged}).`, 'error');
+        return false;
+      }
+
+      batchQtys[i] = valDelivered;
+      totalToReceive += valDelivered;
+
+      const dmgReasonEl = document.getElementById(`rcv-dmg-reason-${i}`);
+      const dmgHandlingEl = document.getElementById(`rcv-dmg-handling-${i}`);
+      const dmgNoteEl = document.getElementById(`rcv-dmg-note-${i}`);
+      const dmgReason = dmgReasonEl ? dmgReasonEl.value : '';
+      const dmgHandling = dmgHandlingEl ? dmgHandlingEl.value : 'returned_to_driver';
+      const dmgNote = dmgNoteEl ? dmgNoteEl.value.trim() : '';
+      const ordered = Number(items[i].qty || 0);
+      const alreadyAccepted = Number(items[i].receivedQty !== undefined ? items[i].receivedQty : (po.status === 'received' ? ordered : 0));
+      const activeRepPending = (typeof getPOItemActiveReplacementPending === 'function')
+        ? Number(getPOItemActiveReplacementPending(po.id, items[i]) || 0)
+        : Number(items[i].replacementPendingQty || 0);
+      const remaining = Math.max(0, Number((ordered - alreadyAccepted - activeRepPending).toFixed(2)));
+
+      if (valDelivered > remaining) {
+        showToast(`Actual Delivered (${valDelivered}) for "${items[i].productName || 'Item'}" cannot exceed remaining PO quantity (${remaining}).`, 'error');
+        return false;
+      }
+      if (valAccepted > valDelivered) {
+        showToast(`Accepted quantity (${valAccepted}) cannot exceed Actual Delivered (${valDelivered}).`, 'error');
+        return false;
+      }
+      if (valDamaged > valDelivered) {
+        showToast(`Damaged / Rejected quantity (${valDamaged}) cannot exceed Actual Delivered (${valDelivered}).`, 'error');
+        return false;
+      }
+      if (valDamaged > 0 && !dmgReason) {
+        showToast(`Please select a Damage / Rejection Reason for "${items[i].productName || 'Item'}".`, 'error');
+        if (dmgReasonEl) dmgReasonEl.focus();
+        return false;
+      }
+      damageMeta[i] = {
+        damagedQty: valDamaged,
+        acceptedQty: valAccepted,
+        deliveredQty: valDelivered,
+        reason: dmgReason,
+        handling: dmgHandling,
+        inspectionNotes: dmgNote
+      };
+
       const exEl = document.getElementById(`rcv-exp-input-${i}`);
       const ntEl = document.getElementById(`rcv-note-input-${i}`);
       const expVal = exEl ? exEl.value : '';
-      if (val > 0 && expVal && expVal < todayISO()) {
+      if (valAccepted > 0 && expVal && expVal < todayISO()) {
         const ok = await showConfirmDialog({
           title: 'Expiration date is in the past',
           message: `<b>${escapeHtml(items[i].productName || 'Item')}</b> is being received with an expiration date of <b>${escapeHtml(expVal)}</b>, which has already passed. It will be tracked as <b>Expired</b>. Continue?`,
@@ -2214,28 +2704,12 @@ async function submitMovement(e) {
     }
 
     if (totalToReceive <= 0) {
-      showToast('Please enter at least one quantity greater than 0 to receive.', 'error');
+      showToast('Please enter at least one Actual Delivered quantity greater than 0.', 'error');
       return false;
     }
 
-    window._isSubmittingReceiving = true;
-    const rcvBtn = document.getElementById('btn-submit-rcv');
-    if (rcvBtn) rcvBtn.disabled = true;
-    try {
-      const result = await completePOReceiving(po, '', batchQtys, batchMeta);
-      rcvBatchDraft = {};
-
-      if (result.allCompleted) {
-        receivingPOId = '';
-        showToast(`PO ${po.poNumber} confirmed as fully received — all stock updated.`, 'ok');
-      } else {
-        showToast(`PO ${po.poNumber} partial delivery recorded (${result.receivedItemCount} items updated). PO status is Partial.`, 'ok');
-      }
-      renderPage();
-    } finally {
-      window._isSubmittingReceiving = false;
-      if (rcvBtn) rcvBtn.disabled = false;
-    }
+    // Open Final Inspection Confirmation Modal before posting to inventory
+    openReceivingFinalConfirmModal(po, items, batchQtys, batchMeta, damageMeta);
     return false;
   }
   else if (type === 'adjustment') {

@@ -505,7 +505,7 @@ function getNavStateKey(userId) {
   return NAV_STATE_STORAGE_PREFIX + uidStr;
 }
 
-const DEFAULT_PRODUCT_CATEGORIES = ['House Paint', 'Automotive Paint', 'Specialty Paint'];
+const DEFAULT_PRODUCT_CATEGORIES = ['House Paint', 'Automotive Paint', 'Specialty Paint', 'Pigment / Colorant'];
 
 function getProductCategories() {
   const result = [];
@@ -3210,11 +3210,22 @@ function groupStockMovements(movesList) {
   return grouped;
 }
 
-function movementTypeBadge(type) {
+function isDamagedMovementRecord(moveObj) {
+  if (!moveObj) return false;
+  if (moveObj.type === 'damaged') return true;
+  const noteStr = String(moveObj.note || (moveObj.lines && moveObj.lines[0] && moveObj.lines[0].note) || '');
+  const prodStr = String(moveObj.productName || (moveObj.lines && moveObj.lines[0] && moveObj.lines[0].productName) || '');
+  return /\[Damaged\s*\/|Damaged Stock Quarantined|Rejected & Returned to Delivery Personnel|Post-Receiving Damaged Stock/i.test(noteStr + ' ' + prodStr);
+}
+
+function movementTypeBadge(type, moveObj = null) {
+  if (type === 'damaged' || isDamagedMovementRecord(moveObj)) {
+    return `<span class="badge danger">Damaged / Rejected</span>`;
+  }
   const map = {
     sale: ['role-cashier', 'Sale'],
-    receiving: ['ok', 'Receiving'],
-    adjustment: ['mid', 'Adjustment'],
+    receiving: ['ok', 'Accepted Receiving'],
+    adjustment: ['mid', 'Authorized Adjustment'],
     colormix: ['role-staff', 'Color Mix'],
     return: ['role-admin', 'Return / Exchange'],
     exchange: ['role-cashier', 'Exchange'],
@@ -3299,6 +3310,10 @@ function movementLineDeltaBadge(l) {
   if (l.openedLiters > 0) {
     return `<span class="movement-delta delta-opened"><span class="delta-units">-${formatStock(l.openedLiters)} L</span><span class="delta-liters">(Opened${l.openedCanSize ? ' ' + l.openedCanSize + 'L' : ''})</span></span>`;
   }
+  if (qty === 0 && /Damaged\/Rejected:\s*(\d+)/i.test(String(l.note || ''))) {
+    const dm = String(l.note || '').match(/Damaged\/Rejected:\s*(\d+)/i);
+    return `<span class="movement-delta delta-neg"><span class="delta-units">⚠ ${dm[1]} rejected</span><span class="delta-liters">(Excluded · 0 L)</span></span>`;
+  }
   return `<span class="movement-delta ${signClass}"><span class="delta-units">${sign}${formatStock(Math.abs(qty))} L</span></span>`;
 }
 
@@ -3308,6 +3323,7 @@ function movementNoteFormatted(m) {
   if (!rawNote) return '<span class="muted">—</span>';
 
   // Extract reference number
+  const sretMatch = rawNote.match(/\b(SRET-[\dA-Za-z-]+)\b/);
   const orMatch = rawNote.match(/\b(OR-[\dA-Za-z-]+)\b/);
   const poMatch = rawNote.match(/\b(PO-[\dA-Za-z-]+)\b/);
   const recMatch = rawNote.match(/Receipt:\s*(\S+)/i);
@@ -3315,7 +3331,10 @@ function movementNoteFormatted(m) {
 
   let ref = null;
   let refType = null;
-  if (orMatch) {
+  if (sretMatch) {
+    ref = sretMatch[1];
+    refType = 'po';
+  } else if (orMatch) {
     ref = orMatch[1];
     refType = 'or';
   } else if (poMatch) {
@@ -3463,7 +3482,7 @@ function renderStockMovementsTable(moves, options = {}) {
       <tr class="movement-row ${isBatch ? 'movement-row-batch' : ''}">
         <td class="movement-date-td">${formatDateTimeStacked(m.date)}</td>
         <td class="movement-type-td">
-          ${movementTypeBadge(m.type)}
+          ${movementTypeBadge(m.type, m)}
           ${isBatch ? `<div class="movement-batch-count">${lines.length} items</div>` : ''}
         </td>
         ${itemsTdHtml}

@@ -1503,16 +1503,17 @@ async function deleteCustomMixedColor(formulaId) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: formulaId })
     });
-    const data = await resp.json();
-    if (resp.ok && data && data.success && Array.isArray(data.colorFormulas) && typeof db !== 'undefined' && db) {
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data || !data.success) {
+      showToast((data && data.error) || `Failed to delete custom mixed color (HTTP ${resp.status}).`, 'error');
+      return;
+    }
+    if (Array.isArray(data.colorFormulas) && typeof db !== 'undefined' && db) {
       db.colorFormulas = data.colorFormulas;
-    } else if (typeof db !== 'undefined' && db && Array.isArray(db.colorFormulas)) {
-      db.colorFormulas = db.colorFormulas.filter(f => String(f.id) !== String(formulaId));
     }
   } catch (e) {
-    if (typeof db !== 'undefined' && db && Array.isArray(db.colorFormulas)) {
-      db.colorFormulas = db.colorFormulas.filter(f => String(f.id) !== String(formulaId));
-    }
+    showToast('Could not connect to server to delete custom mixed color.', 'error');
+    return;
   }
   closeModal();
   refreshColorLibraryAfterMixedChange();
@@ -1698,6 +1699,9 @@ function renderColorLibrarySectionsHtml() {
 
 function renderColorSwatchCardHtml(c, isAdmin) {
   const parent = c.parentColorId ? findColorLibraryEntry(c.parentColorId) : null;
+  const linkedProd = (c.linkedProductId && typeof db !== 'undefined' && db && Array.isArray(db.products))
+    ? db.products.find(p => String(p.id) === String(c.linkedProductId))
+    : null;
   return `
     <div class="cl-card">
       <div class="cl-swatch-banner" style="background-color:${escapeAttr(c.hex)};" onclick="openColorDetailsModal('${escapeAttr(c.id)}')" title="Click to view color details">
@@ -1710,6 +1714,7 @@ function renderColorSwatchCardHtml(c, isAdmin) {
           <span>${escapeHtml(c.colorFamily || c.category)}</span>
           <span class="cl-variation-tag">${escapeHtml(c.variation || 'Base')}</span>
         </div>
+        ${linkedProd ? `<div class="cl-parent-line" title="Linked Inventory Product: ${escapeAttr(linkedProd.id)} (${escapeAttr(linkedProd.category || linkedProd.type)})">🔗 ${escapeHtml(linkedProd.id)} · ${escapeHtml(linkedProd.category || linkedProd.type || 'Pigment / Colorant')}</div>` : ''}
         ${parent ? `<div class="cl-parent-line" title="Parent: ${escapeAttr(parent.name)}">Parent: ${escapeHtml(parent.name)}</div>` : ''}
       </div>
       <div class="cl-card-actions">
@@ -1935,6 +1940,10 @@ function openColorLibraryModal(colorId = null) {
   const initParent = existing ? (existing.parentColorId || '') : '';
   const initCat = existing ? (existing.category || 'Specialty Colors') : 'Specialty Colors';
   const initNotes = existing ? (existing.notes || '') : '';
+  const existingLinkedProd = (existing && existing.linkedProductId && typeof db !== 'undefined' && db && Array.isArray(db.products))
+    ? db.products.find(p => String(p.id) === String(existing.linkedProductId))
+    : null;
+  const initProductCategory = existingLinkedProd ? (existingLinkedProd.category || existingLinkedProd.type || 'Pigment / Colorant') : 'Pigment / Colorant';
 
   const parentOptions = getColorLibraryList().filter(c => c.id !== colorId);
 
@@ -1951,7 +1960,11 @@ function openColorLibraryModal(colorId = null) {
           ${escapeHtml(initHex)} · ${hexToRgbLabel(initHex)} · ${escapeHtml(initCls)}
         </div>
         <div class="muted" style="font-size:10.5px; margin-top:4px;">
-          Digital HEX reference only — does not auto-generate physical pigment formulas.
+          ${existing
+      ? (existingLinkedProd
+        ? `🔗 Synced with Inventory product <b>${escapeHtml(existingLinkedProd.id)}</b> (${escapeHtml(initProductCategory)}). Stock remains managed solely in Inventory.`
+        : 'Updates color name, HEX, and classification across all linked inventory products.')
+      : '🔄 Automatically creates or links a Pigment / Colorant product in Inventory initialized to 0.00 L stock (ready for Stock Receiving).'}
         </div>
       </div>
     </div>
@@ -1988,6 +2001,15 @@ function openColorLibraryModal(colorId = null) {
         <label for="cl-form-category">Base Category <span class="muted small">(POS/Filter)</span></label>
         <select id="cl-form-category">
           ${COLOR_LIBRARY_CATEGORIES.map(cat => `<option value="${escapeAttr(cat)}" ${initCat === cat ? 'selected' : ''}>${escapeHtml(cat)}</option>`).join('')}
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="cl-form-product-category">Inventory Product Category</label>
+        <select id="cl-form-product-category">
+          <option value="Pigment / Colorant" ${initProductCategory === 'Pigment / Colorant' ? 'selected' : ''}>Pigment / Colorant</option>
+          <option value="Tinting Color" ${initProductCategory === 'Tinting Color' ? 'selected' : ''}>Tinting Color</option>
+          <option value="Base Pigment" ${initProductCategory === 'Base Pigment' ? 'selected' : ''}>Base Pigment</option>
         </select>
       </div>
 
@@ -2096,6 +2118,7 @@ async function saveCustomColorFromModal(existingId) {
   const colorFamily = (document.getElementById('cl-form-family')?.value || '').trim() || 'Admin Custom';
   const variation = document.getElementById('cl-form-variation')?.value || 'Base';
   const category = document.getElementById('cl-form-category')?.value || 'Specialty Colors';
+  const productCategory = document.getElementById('cl-form-product-category')?.value || 'Pigment / Colorant';
   const parentColorId = document.getElementById('cl-form-parent')?.value || '';
   const notes = (document.getElementById('cl-form-notes')?.value || '').trim();
   const errEl = document.getElementById('cl-form-error');
@@ -2129,7 +2152,7 @@ async function saveCustomColorFromModal(existingId) {
     const resp = await fetch('api/db.php?action=color_library_save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: existingId, name, hex, category, classification, colorFamily, variation, parentColorId, notes })
+      body: JSON.stringify({ id: existingId, name, hex, category, classification, colorFamily, variation, parentColorId, notes, productCategory })
     });
     const data = await resp.json();
     if (!resp.ok || !data.success) {
@@ -2139,6 +2162,23 @@ async function saveCustomColorFromModal(existingId) {
 
     if (typeof db !== 'undefined' && db) {
       db.colorLibrary = data.colorLibrary || db.colorLibrary;
+      // Merge synchronized Inventory product directly in memory (NO saveDB() call to prevent sync loops)
+      if (data.syncedProduct && typeof data.syncedProduct === 'object' && Array.isArray(db.products)) {
+        const sp = data.syncedProduct;
+        const idx = db.products.findIndex(p => String(p.id) === String(sp.id));
+        if (idx >= 0) {
+          db.products[idx] = { ...db.products[idx], ...sp };
+        } else {
+          db.products.push(sp);
+        }
+        if (Array.isArray(sp.sizesData) && Array.isArray(db.productSizes)) {
+          sp.sizesData.forEach(sv => {
+            const sIdx = db.productSizes.findIndex(x => String(x.sizeId) === String(sv.sizeId));
+            if (sIdx >= 0) db.productSizes[sIdx] = { ...db.productSizes[sIdx], ...sv };
+            else db.productSizes.push(sv);
+          });
+        }
+      }
       // Keep saved colorFormulas synchronized when a linked Color Library entry is edited
       if (existingId && Array.isArray(db.colorFormulas)) {
         const updatedEntry = findColorLibraryEntry(existingId);
@@ -2167,8 +2207,16 @@ async function saveCustomColorFromModal(existingId) {
     }
 
     closeModal();
-    showToast(existingId ? `Updated "${name}" (${hex})` : `Added "${name}" (${hex}) to Color Library`, 'success');
-    if (currentPage === 'colorLibrary') renderPage();
+    let toastMsg = existingId ? `Updated "${name}" (${hex})` : `Added "${name}" (${hex}) to Color Library`;
+    if (data.syncAction === 'created_product' && data.syncedProductId) {
+      toastMsg = `Added "${name}" (${hex}) & auto-created Inventory product ${data.syncedProductId} (0.00 L)`;
+    } else if (data.syncAction === 'linked_product' && data.syncedProductId) {
+      toastMsg = `Added "${name}" (${hex}) & linked to existing Inventory product ${data.syncedProductId}`;
+    } else if (data.syncAction === 'updated_product' && data.syncedProductId) {
+      toastMsg = `Updated "${name}" (${hex}) & synced to Inventory product ${data.syncedProductId}`;
+    }
+    showToast(toastMsg, 'success');
+    if (currentPage === 'colorLibrary' || currentPage === 'inventory') renderPage();
   } catch (err) {
     if (btn) { btn.disabled = false; btn.textContent = existingId ? 'Save Changes' : 'Save Color'; }
     showErr('Network/database error saving custom color.');
@@ -2221,18 +2269,20 @@ function confirmDeleteCustomColor(colorId) {
     </div>
     <p style="margin:0; font-size:13px;">
       ${hasRefs
-      ? 'You must reassign active references before deleting this custom color.'
-      : 'Are you sure you want to permanently delete this custom color from the Color Library?'}
+      ? 'Linked inventory products and historical records are protected and will <b>never</b> be deleted. You can Archive this color, Unlink it, or Reassign references before deleting.'
+      : 'Are you sure you want to archive or remove this custom color from the Color Library? Inventory products will never be deleted.'}
     </p>
     ${reassignSection}
   `;
   const footHtml = `
     <button type="button" class="btn secondary" onclick="closeModal()">Cancel</button>
-    <button type="button" class="btn danger" id="cl-del-btn" ${hasRefs ? 'disabled' : ''} onclick="executeDeleteCustomColor('${escapeAttr(colorId)}')">
+    <button type="button" class="btn secondary" id="cl-archive-btn" onclick="executeDeleteCustomColor('${escapeAttr(colorId)}', 'archive')">Archive Color</button>
+    ${hasRefs ? `<button type="button" class="btn secondary" id="cl-unlink-btn" onclick="executeDeleteCustomColor('${escapeAttr(colorId)}', 'unlink')">Unlink &amp; Remove</button>` : ''}
+    <button type="button" class="btn danger" id="cl-del-btn" ${hasRefs ? 'disabled' : ''} onclick="executeDeleteCustomColor('${escapeAttr(colorId)}', 'delete')">
       ${hasRefs ? 'Reassign & Delete Color' : 'Delete Color'}
     </button>
   `;
-  openModal('Delete Custom Color', html, footHtml, 'modal-md');
+  openModal('Manage / Delete Custom Color', html, footHtml, 'modal-md');
 }
 
 function onColorDeleteReassignChange(val) {
@@ -2240,17 +2290,17 @@ function onColorDeleteReassignChange(val) {
   if (btn) btn.disabled = !val;
 }
 
-async function executeDeleteCustomColor(colorId) {
+async function executeDeleteCustomColor(colorId, mode = 'delete') {
   const reassignEl = document.getElementById('cl-reassign-select');
-  const reassignToColorId = reassignEl ? reassignEl.value : '';
-  const btn = document.getElementById('cl-del-btn');
+  const reassignToColorId = mode === 'delete' && reassignEl ? reassignEl.value : '';
+  const btn = document.getElementById(mode === 'archive' ? 'cl-archive-btn' : (mode === 'unlink' ? 'cl-unlink-btn' : 'cl-del-btn'));
   if (btn) { btn.disabled = true; btn.textContent = 'Processing...'; }
 
   try {
     const resp = await fetch('api/db.php?action=color_library_delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: colorId, reassignToColorId })
+      body: JSON.stringify({ id: colorId, reassignToColorId, mode })
     });
     const data = await resp.json();
     if (!resp.ok || !data.success) {

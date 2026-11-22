@@ -536,15 +536,18 @@ function renderAdminRecentTransactionsPanel(recent) {
 
     const itemsDetailHtml = itemsList.length ? itemsList.map((rawIt, idx) => {
       const item = formatAdminTxnProductItem(rawIt);
+      const mixBreakdownHtml = (item.isBlend && typeof renderCustomColorMixReceiptBreakdownHtml === 'function')
+        ? renderCustomColorMixReceiptBreakdownHtml(rawIt, { mode: 'compact' })
+        : '';
       return `
-                <tr style="border-bottom:1px solid var(--line-light);">
+                <tr style="border-bottom:${mixBreakdownHtml ? 'none' : '1px solid var(--line-light)'};">
                   <td style="padding:7px 10px; color:var(--ink-soft); font-size:11.5px; text-align:center;">${idx + 1}</td>
                   <td style="padding:7px 10px;">
                     <div style="font-weight:600; color:var(--ink); display:flex; align-items:center; gap:6px;">
                       ${item.isBlend && item.hex ? `<span class="cm-color-dot" style="background:${escapeHtml(item.hex)}; width:12px; height:12px; border-radius:50%; display:inline-block; border:1px solid rgba(0,0,0,0.15);"></span>` : ''}
                       ${escapeHtml(item.name)}
                     </div>
-                    ${item.components.length ? `
+                    ${(!mixBreakdownHtml && item.components.length) ? `
                       <div class="muted small" style="font-size:11px; margin-top:2px; color:var(--ink-soft);">
                         Formula: ${item.components.map(cp => `${cp.percentage}% ${escapeHtml(cp.name)}`).join(' + ')}
                       </div>
@@ -564,6 +567,13 @@ function renderAdminRecentTransactionsPanel(recent) {
                   <td style="padding:7px 10px; text-align:right;">${peso(item.unitPrice)}</td>
                   <td style="padding:7px 10px; text-align:right; font-weight:700; color:var(--ink);">${peso(item.lineTotal)}</td>
                 </tr>
+                ${mixBreakdownHtml ? `
+                  <tr style="border-bottom:1px solid var(--line-light);">
+                    <td colspan="8" style="padding:2px 10px 10px 36px; background:var(--surface);">
+                      ${mixBreakdownHtml}
+                    </td>
+                  </tr>
+                ` : ''}
               `;
     }).join('') : `<tr><td colspan="8" class="empty-state" style="padding:14px; text-align:center;">No line items found.</td></tr>`;
 
@@ -840,11 +850,11 @@ function adminDashboard() {
       </div>
     </div>
 
-    <!-- Card 5: Low-Stock Items -->
-    <div class="stat-card ${summary.needsPOSizes ? 'danger' : (summary.onOrderSizes ? 'mustard' : 'sage')} clickable" onclick="goTo('alerts')" title="Click to view low-stock alerts">
+    <!-- Card 5: Low-Stock Items (strictly excludes 0-stock Out-of-Stock items) -->
+    <div class="stat-card ${summary.lowOnlyProducts ? 'mustard' : 'sage'} clickable" onclick="goTo('alerts')" title="Click to view low-stock alerts">
       <div class="label">⚠️ Low-Stock Items</div>
-      <div class="value">${summary.totalLowProducts} Products</div>
-      <div class="sub"><b>${summary.totalLowSizes}</b> variants low (<b>${summary.needsPOSizes}</b> need PO · <b>${summary.onOrderSizes}</b> on order)</div>
+      <div class="value">${summary.lowOnlyProducts} Products</div>
+      <div class="sub"><b>${summary.lowOnlySizes}</b> variants low (excludes <b>${summary.criticalOutSizes}</b> out-of-stock)</div>
       <div class="stat-card-footer">
         <span class="stat-action-link">View Low-Stock Alerts &rarr;</span>
       </div>

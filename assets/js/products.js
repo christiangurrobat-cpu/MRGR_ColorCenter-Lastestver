@@ -458,6 +458,10 @@ function openProductModal(id) {
   }
   const activeColorId = resolvedLibEntry ? resolvedLibEntry.id : (initialColorId || '');
   const currentColorHex = initialColorHex || '#FFFFFF';
+  const initialColorCls = (prop && prop.colorClassification !== undefined)
+    ? prop.colorClassification
+    : (resolvedLibEntry ? (resolvedLibEntry.classification || 'Custom Colors') : (p ? (p.colorClassification || p.color_classification || 'Custom Colors') : 'Custom Colors'));
+  const isInitialPigment = isPigmentProductType(initialType) || Boolean(p && (p.isColorPigment || p.is_color_pigment));
 
   const currentSuppliers = p ? (typeof suppliersForProduct === 'function' ? suppliersForProduct(p.id) : []) : [];
   const initialSupplierId = (prop && prop.supplierId !== undefined)
@@ -611,8 +615,23 @@ function openProductModal(id) {
     </div>
     <div class="field">
       <label>Product Type / Category</label>
-      <select id="pf-type">
+      <select id="pf-type" onchange="onProductTypeChange(this.value)">
         ${allTypes.map(t => `<option ${initialType === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+      </select>
+      <div id="pf-pigment-sync-note" style="margin-top:4px; font-size:11px;">
+        ${isInitialPigment
+      ? `<span class="badge" style="background:var(--teal-tint); color:var(--teal-dark); border:1px solid var(--teal-tint-border); font-size:10.5px;">🔄 Auto-Syncs with Color Library (creates/links color automatically)</span>`
+      : `<span class="muted" style="font-size:10.5px;">Regular paint / non-pigment item (does not auto-create Color Library entries)</span>`}
+      </div>
+    </div>
+    <div class="field" id="pf-color-cls-field" style="${isInitialPigment ? '' : 'display:none;'}">
+      <label for="pf-color-classification">Color Classification <span class="muted small">(Color Library Sync)</span></label>
+      <select id="pf-color-classification">
+        ${(typeof COLOR_CLASSIFICATIONS !== 'undefined' ? COLOR_CLASSIFICATIONS : [
+      { name: 'Primary Colors' }, { name: 'Secondary Colors' }, { name: 'Tertiary Colors' },
+      { name: 'Neutral Colors' }, { name: 'Earth Tones' }, { name: 'Pastel Colors' },
+      { name: 'Warm Colors' }, { name: 'Cool Colors' }, { name: 'Specialty Colors' }, { name: 'Custom Colors' }
+    ]).map(c => `<option value="${escapeAttr(c.name)}" ${initialColorCls === c.name ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('')}
       </select>
     </div>
     <div class="field">
@@ -817,6 +836,29 @@ function onProductPriceInput(val, origPrice, savedRecentPrice) {
   }
 }
 
+function isPigmentProductType(typeVal) {
+  const norm = String(typeVal || '').trim().toLowerCase();
+  if (!norm) return false;
+  if (/\b(accessor\w*|tools?|hardware|equipment|suppl\w*|thinner\w*|solvent\w*|primer\w*|putt\w*|sandpaper|brush\w*|roller\w*|tape\w*|adhesive\w*|sealant\w*|varnish\w*|clear\s*coat|top\s*coat)\b/i.test(norm)) {
+    return false;
+  }
+  return /\b(pigment|colorant|tinting\s*color)\b/i.test(norm);
+}
+
+function onProductTypeChange(typeVal) {
+  const isPigment = isPigmentProductType(typeVal);
+  const noteEl = document.getElementById('pf-pigment-sync-note');
+  const clsField = document.getElementById('pf-color-cls-field');
+  if (noteEl) {
+    noteEl.innerHTML = isPigment
+      ? `<span class="badge" style="background:var(--teal-tint); color:var(--teal-dark); border:1px solid var(--teal-tint-border); font-size:10.5px;">🔄 Auto-Syncs with Color Library (creates/links color automatically)</span>`
+      : `<span class="muted" style="font-size:10.5px;">Regular paint / non-pigment item (does not auto-create Color Library entries)</span>`;
+  }
+  if (clsField) {
+    clsField.style.display = isPigment ? '' : 'none';
+  }
+}
+
 function openProductColorLibraryPicker() {
   if (typeof openColorLibraryPickerModal !== 'function') {
     showToast('Color Library is not loaded.', 'error');
@@ -1015,17 +1057,25 @@ async function submitProduct(e, id) {
     const colorId = colorIdInput ? (colorIdInput.value.trim() || null) : null;
     const taxClassEl = document.getElementById('pf-tax-class');
     const taxClassification = taxClassEl ? taxClassEl.value : 'vatable';
+    const chosenType = document.getElementById('pf-type').value;
+    const isColorPigment = isPigmentProductType(chosenType);
+    const colorClsEl = document.getElementById('pf-color-classification');
+    const colorClassification = isColorPigment && colorClsEl ? colorClsEl.value : (colorId && typeof findColorLibraryEntry === 'function' ? ((findColorLibraryEntry(colorId) || {}).classification || null) : null);
     const data = {
       name: document.getElementById('pf-name').value.trim(),
       brand: document.getElementById('pf-brand').value.trim(),
-      type: document.getElementById('pf-type').value,
+      type: chosenType,
       taxClassification: taxClassification,
       tax_classification: taxClassification,
       color: colorName,
       colorId: colorId,
       color_id: colorId,
+      colorClassification: colorClassification,
+      color_classification: colorClassification,
       colorHex: colorHex,
       color_hex: colorHex,
+      isColorPigment: isColorPigment,
+      is_color_pigment: isColorPigment ? 1 : 0,
       price: Number(priceRaw.toFixed(2)),
       threshold: Number(document.getElementById('pf-threshold').value),
       thresholdBySize: thresholdBySize,
@@ -1292,8 +1342,12 @@ async function submitProduct(e, id) {
         existing.color = data.color;
         existing.colorId = data.colorId;
         existing.color_id = data.colorId;
+        existing.colorClassification = data.colorClassification;
+        existing.color_classification = data.colorClassification;
         existing.colorHex = data.colorHex;
         existing.color_hex = data.colorHex;
+        existing.isColorPigment = data.isColorPigment;
+        existing.is_color_pigment = data.is_color_pigment;
         existing.sizes = data.sizes;
         existing.threshold = data.threshold;
         existing.thresholdBySize = data.thresholdBySize;
@@ -1578,6 +1632,8 @@ async function submitProduct(e, id) {
         if (rollbackProductSnapshot && id) {
           const idx = (db.products || []).findIndex(p => p.id === id);
           if (idx !== -1) db.products[idx] = rollbackProductSnapshot;
+        } else if (!id && Array.isArray(db.products)) {
+          db.products = db.products.filter(p => p.id !== newPid);
         }
         if (rollbackSuppliersSnapshot && Array.isArray(db.suppliers)) {
           rollbackSuppliersSnapshot.forEach(rs => {

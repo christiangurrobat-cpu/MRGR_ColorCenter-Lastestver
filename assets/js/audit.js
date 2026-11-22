@@ -158,6 +158,20 @@ const AUDIT_ACTION_LABELS = {
   ADJ_APPROVE: 'Adjustment Approved',
   ADJ_REJECT: 'Adjustment Rejected',
   ADJ_BATCH_APPROVE: 'Batch Adjustments Approved',
+  DAMAGED_STOCK_RECORD: 'Damaged Stock Recorded (Receiving)',
+  DAMAGED_STOCK_QUARANTINE: 'Damaged Stock Quarantined',
+  SUPPLIER_RETURN_CREATE: 'Supplier Return Created',
+  SUPPLIER_RETURN_APPROVE: 'Supplier Return Approved',
+  SUPPLIER_RETURN_STATUS: 'Supplier Return Status Updated',
+  SUPPLIER_RETURN_REPLACEMENT: 'Replacement Stock Received',
+  REPLACEMENT_REQUEST_CREATE: 'Replacement Request Created',
+  REPLACEMENT_REQUEST_STATUS: 'Replacement Request Updated',
+  REPLACEMENT_REQUEST_CANCEL: 'Replacement Request Cancelled',
+  REPLACEMENT_DELIVERY_RECEIVE: 'Replacement Delivery Inspected',
+  REPLACEMENT_CREDIT_RECORDED: 'Supplier Credit / Refund Recorded',
+  REPLACEMENT_SUPPLIER_CONFIRM: 'Supplier Replacement Confirmed',
+  REPLACEMENT_RECEIPT_UPDATE: 'Confirmation Receipt Updated',
+  REPLACEMENT_RECEIPT_REPRINT: 'Replacement Receipt Reprinted',
 
   // Purchase Orders
   PO_CREATE: 'Purchase Order Created',
@@ -212,6 +226,9 @@ const AUDIT_ACTIONS = [
   // Inventory
   'STOCK_RECEIVE', 'STOCK_ADJUST', 'STOCK_INCREASE', 'STOCK_DECREASE', 'STOCK_THRESHOLD_CHANGE', 'CONTAINER_SIZE_ADD', 'CONTAINER_SIZE_REMOVE', 'STOCK_DISPOSE',
   'ADJ_REQUEST', 'ADJ_APPROVE', 'ADJ_REJECT',
+  'DAMAGED_STOCK_RECORD', 'DAMAGED_STOCK_QUARANTINE',
+  'SUPPLIER_RETURN_CREATE', 'SUPPLIER_RETURN_APPROVE', 'SUPPLIER_RETURN_STATUS', 'SUPPLIER_RETURN_REPLACEMENT',
+  'REPLACEMENT_REQUEST_CREATE', 'REPLACEMENT_REQUEST_STATUS', 'REPLACEMENT_REQUEST_CANCEL', 'REPLACEMENT_DELIVERY_RECEIVE', 'REPLACEMENT_CREDIT_RECORDED', 'REPLACEMENT_SUPPLIER_CONFIRM', 'REPLACEMENT_RECEIPT_UPDATE',
   // Purchase Orders
   'PO_CREATE', 'PO_SUBMIT', 'PO_APPROVE', 'PO_REJECT', 'PO_RECEIVE', 'PO_CANCEL',
   // Sales & Refunds
@@ -260,6 +277,17 @@ function auditActClass(a) {
   if (act.startsWith('PO_')) {
     if (act === 'PO_CANCEL' || act === 'PO_REJECT') return 'cancel';
     if (act === 'PO_APPROVE' || act === 'PO_RECEIVE' || act === 'PO_BATCH_APPROVE') return 'approve';
+    return 'po';
+  }
+  if (act.startsWith('DAMAGED_STOCK_')) return 'cancel';
+  if (act.startsWith('REPLACEMENT_')) {
+    if (act === 'REPLACEMENT_REQUEST_CANCEL') return 'cancel';
+    if (act === 'REPLACEMENT_DELIVERY_RECEIVE' || act === 'REPLACEMENT_CREDIT_RECORDED') return 'approve';
+    return 'po';
+  }
+  if (act.startsWith('SUPPLIER_RETURN_')) {
+    if (act === 'SUPPLIER_RETURN_APPROVE' || act === 'SUPPLIER_RETURN_REPLACEMENT') return 'approve';
+    if (act === 'SUPPLIER_RETURN_STATUS') return 'status';
     return 'po';
   }
   if (act.startsWith('STOCK_') || act.startsWith('CONTAINER_SIZE_') || act.startsWith('ADJ_')) {

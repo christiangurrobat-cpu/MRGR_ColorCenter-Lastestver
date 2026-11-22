@@ -611,7 +611,19 @@ function salesHistoryTableHtml() {
           <td><code style="color:var(--teal-text); font-weight:700;">${escapeHtml(getReceiptNo(s))}</code></td>
           <td>${formatDateTime(s.date)}</td>
           <td>${escapeHtml(s.cashierName)}</td>
-          <td>${s.items.length} item${s.items.length === 1 ? '' : 's'}</td>
+          <td>
+            <div>${s.items.length} item${s.items.length === 1 ? '' : 's'}</div>
+            ${(() => {
+              const mixes = (s.items || []).filter(it => it && it.type === 'colormix');
+              if (!mixes.length) return '';
+              return mixes.slice(0, 2).map(mx => `
+                <div class="muted small" style="display:flex; align-items:center; gap:4px; font-size:11px; margin-top:2px;">
+                  <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${escapeAttr(mx.hexColor || '#1F6F6B')}; border:1px solid rgba(0,0,0,0.2); flex-shrink:0;"></span>
+                  <span>Mix: <b>${escapeHtml(mx.colorName || 'Custom')}</b> (${formatStock(mx.liters || mx.qty || 1)}L)</span>
+                </div>
+              `).join('') + (mixes.length > 2 ? `<div class="muted small" style="font-size:10.5px;">+${mixes.length - 2} more mix</div>` : '');
+            })()}
+          </td>
           <td class="center">${saleStatusBadge(status)}</td>
           <td class="right">
             ${(returnedVal > 0 || refundTotal > 0)

@@ -2040,6 +2040,422 @@ function posConfirmKeyHandler(e) {
   }
 }
 
+/**
+ * Single source of truth for Custom Color Mix receipt & breakdown data.
+ * Priority 1: Frozen permanent `item.mixSnapshot` saved at sale time (never touches live catalog/inventory).
+ * Priority 2: `item.priceBreakdown` (scales accurately if cart qty/liters changed before checkout).
+ * Priority 3: Legacy `item.components` reconstruction for historical sales recorded before snapshots existed.
+ */
+function getCustomColorMixReceiptData(item) {
+  if (!item || item.type !== 'colormix') return null;
+
+  const currLiters = Number(item.liters) || Number(item.qty) || 1;
+  const lineTotal = Number(item.lineTotal) || 0;
+  const containerSizeLabel = item.containerSizeLabel || (typeof fmtSize === 'function' ? `${fmtSize(currLiters)} Mix` : `${currLiters}L Mix`);
+  const hexColor = item.hexColor || item.colorHex || '#1F6F6B';
+  const colorName = item.colorName || item.detectedColorName || 'Custom Shade';
+  const isCustomizedFormula = Boolean(item.isCustomizedFormula);
+  const originalCatalogName = item.originalCatalogName || '';
+
+  // Priority 1: Permanent immutable snapshot frozen at transaction completion
+  if (item.mixSnapshot && (item.mixSnapshot.basePaint || (Array.isArray(item.mixSnapshot.ingredients) && item.mixSnapshot.ingredients.length))) {
+    const snap = item.mixSnapshot;
+    const basePct = snap.basePaint ? (Number(snap.basePaint.pct) || 0) : (Number(snap.basePct) || 0);
+    const totalColorantPct = snap.totalColorantPct != null
+      ? Number(snap.totalColorantPct)
+      : Math.round((snap.ingredients || []).reduce((s, ing) => s + (Number(ing.pct) || 0), 0) * 10) / 10;
+    const totalFormulaPct = snap.totalFormulaPct != null
+      ? Number(snap.totalFormulaPct)
+      : Math.round((basePct + totalColorantPct) * 10) / 10;
+
+    return {
+      colorName: snap.colorName || colorName,
+      detectedColorName: snap.detectedColorName || item.detectedColorName || '',
+      hexColor: snap.hexColor || hexColor,
+      baseType: snap.baseType || item.baseType || 'Base Paint',
+      containerSizeLabel: snap.containerSizeLabel || containerSizeLabel,
+      isCustomizedFormula: snap.isCustomizedFormula !== undefined ? Boolean(snap.isCustomizedFormula) : isCustomizedFormula,
+      originalCatalogName: snap.originalCatalogName || originalCatalogName,
+      basePaint: snap.basePaint ? { ...snap.basePaint } : null,
+      basePaintCost: Number(snap.basePaintCost) || 0,
+      basePct,
+      ingredients: (snap.ingredients || []).map(ing => ({ ...ing })),
+      totalColorantCost: Number(snap.totalColorantCost) || 0,
+      totalColorantLiters: Number(snap.totalColorantLiters) || 0,
+      totalColorantMl: Number(snap.totalColorantMl) || 0,
+      totalColorantPct,
+      totalFormulaPct,
+      materialCost: Number(snap.materialCost) || 0,
+      serviceFee: Number(snap.serviceFee) || 0,
+      otherCharges: Number(snap.otherCharges) || 0,
+      grandTotal: Number(snap.grandTotal) || lineTotal,
+      totalLiters: Number(snap.totalLiters) || currLiters
+    };
+  }
+
+  // Priority 2: Stored priceBreakdown (scales if cart qty/liters changed before sale completion)
+  const pb = item.priceBreakdown;
+  if (pb && (pb.basePaint || (Array.isArray(pb.ingredients) && pb.ingredients.length))) {
+    const baseL = Number(item.baseLiters) || Number(pb.totalLiters) || currLiters || 1;
+    const scale = baseL > 0 ? (currLiters / baseL) : 1;
+    const isScaled = Math.abs(scale - 1) > 1e-6;
+
+    const basePaint = pb.basePaint ? {
+      ...pb.basePaint,
+      liters: isScaled ? Number(((Number(pb.basePaint.liters) || 0) * scale).toFixed(4)) : Number(pb.basePaint.liters) || 0,
+      ml: isScaled ? Math.round((Number(pb.basePaint.liters) || 0) * scale * 1000) : (Number(pb.basePaint.ml) || Math.round((Number(pb.basePaint.liters) || 0) * 1000)),
+      cost: isScaled ? Number(((Number(pb.basePaint.cost) || 0) * scale).toFixed(2)) : Number(pb.basePaint.cost) || 0
+    } : null;
+
+    const ingredients = (pb.ingredients || []).map(ing => {
+      const scaledLiters = isScaled ? Number(((Number(ing.liters) || 0) * scale).toFixed(4)) : Number(ing.liters) || 0;
+      return {
+        ...ing,
+        liters: scaledLiters,
+        ml: isScaled ? Math.round(scaledLiters * 1000) : (Number(ing.ml) || Math.round(scaledLiters * 1000)),
+        cost: isScaled ? Number(((Number(ing.cost) || 0) * scale).toFixed(2)) : Number(ing.cost) || 0
+      };
+    });
+
+    const basePaintCost = basePaint ? basePaint.cost : Number(((Number(pb.basePaintCost) || 0) * scale).toFixed(2));
+    const basePct = basePaint ? (Number(basePaint.pct) || 0) : (Number(pb.basePct) || 0);
+    const totalColorantCost = ingredients.length
+      ? Number(ingredients.reduce((s, ing) => s + (Number(ing.cost) || 0), 0).toFixed(2))
+      : Number(((Number(pb.totalColorantCost) || 0) * scale).toFixed(2));
+    const totalColorantLiters = ingredients.length
+      ? Number(ingredients.reduce((s, ing) => s + (Number(ing.liters) || 0), 0).toFixed(4))
+      : Number(((Number(pb.totalColorantLiters) || 0) * scale).toFixed(4));
+    const totalColorantMl = Math.round(totalColorantLiters * 1000);
+    const totalColorantPct = pb.totalColorantPct != null
+      ? Number(pb.totalColorantPct)
+      : Math.round(ingredients.reduce((s, ing) => s + (Number(ing.pct) || 0), 0) * 10) / 10;
+    const totalFormulaPct = Math.round((basePct + totalColorantPct) * 10) / 10;
+
+    const materialCost = Number((basePaintCost + totalColorantCost).toFixed(2));
+    const serviceFee = Number(((Number(pb.serviceFee) || 0) * scale).toFixed(2));
+    const grandTotal = lineTotal > 0 ? lineTotal : Number(((Number(pb.grandTotal) || (materialCost + serviceFee)) * scale).toFixed(2));
+    const otherCharges = Number((grandTotal - materialCost - serviceFee).toFixed(2));
+
+    return {
+      colorName,
+      detectedColorName: item.detectedColorName || '',
+      hexColor,
+      baseType: item.baseType || (basePaint && basePaint.type) || 'Base Paint',
+      containerSizeLabel,
+      isCustomizedFormula,
+      originalCatalogName,
+      basePaint,
+      basePaintCost,
+      basePct,
+      ingredients,
+      totalColorantCost,
+      totalColorantLiters,
+      totalColorantMl,
+      totalColorantPct,
+      totalFormulaPct,
+      materialCost,
+      serviceFee,
+      otherCharges,
+      grandTotal,
+      totalLiters: currLiters
+    };
+  }
+
+  // Priority 3: Legacy fallback for older historical sales that only saved `item.components`
+  if (Array.isArray(item.components) && item.components.length) {
+    let basePaint = null;
+    let basePaintCost = 0;
+    let basePct = 0;
+    const ingredients = [];
+    let totalColorantCost = 0;
+    let totalColorantLiters = 0;
+    let totalColorantPct = 0;
+
+    item.components.forEach((c, idx) => {
+      const pct = Number(c.percentage ?? c.pctNum ?? c.pct) || 0;
+      const compLiters = Number(c.exactLiters) || Number((currLiters * (pct / 100)).toFixed(4));
+      const ml = Number(c.ml) || Math.round(compLiters * 1000);
+      const unitPrice = Number(c.price) || 0;
+      const cost = c.cost != null ? Number(c.cost) : Number((compLiters * unitPrice).toFixed(2));
+      const p = (!c.name || !c.colorName || !c.type) && c.productId && typeof productById === 'function' ? productById(c.productId) : null;
+      const entry = {
+        productId: c.productId || null,
+        name: c.name || (p ? p.name : `Ingredient ${idx + 1}`),
+        brand: c.brand || (p ? p.brand : ''),
+        type: c.type || (p ? (p.type || p.category) : '') || item.baseType || 'Paint',
+        colorName: c.colorName || c.color || (p && typeof getProductColorName === 'function' ? getProductColorName(p) : 'Color'),
+        hex: c.hex || c.colorHex || (p && typeof getProductDefaultColor === 'function' ? getProductDefaultColor(p) : '#8E24AA'),
+        liters: compLiters,
+        ml,
+        pct,
+        unitPrice,
+        cost
+      };
+      if (idx === 0 && !basePaint) {
+        basePaint = entry;
+        basePaintCost = cost;
+        basePct = pct;
+      } else {
+        ingredients.push(entry);
+        totalColorantCost += cost;
+        totalColorantLiters += compLiters;
+        totalColorantPct += pct;
+      }
+    });
+
+    basePaintCost = Number(basePaintCost.toFixed(2));
+    totalColorantCost = Number(totalColorantCost.toFixed(2));
+    totalColorantLiters = Number(totalColorantLiters.toFixed(4));
+    const totalColorantMl = Math.round(totalColorantLiters * 1000);
+    totalColorantPct = Math.round(totalColorantPct * 10) / 10;
+    const totalFormulaPct = Math.round((basePct + totalColorantPct) * 10) / 10;
+    const materialCost = Number((basePaintCost + totalColorantCost).toFixed(2));
+    const serviceFee = 50.00;
+    const grandTotal = lineTotal > 0 ? lineTotal : Number((materialCost + serviceFee).toFixed(2));
+    const otherCharges = Number((grandTotal - materialCost - serviceFee).toFixed(2));
+
+    return {
+      colorName,
+      detectedColorName: item.detectedColorName || '',
+      hexColor,
+      baseType: item.baseType || (basePaint && basePaint.type) || 'Base Paint',
+      containerSizeLabel,
+      isCustomizedFormula,
+      originalCatalogName,
+      basePaint,
+      basePaintCost,
+      basePct,
+      ingredients,
+      totalColorantCost,
+      totalColorantLiters,
+      totalColorantMl,
+      totalColorantPct,
+      totalFormulaPct,
+      materialCost,
+      serviceFee,
+      otherCharges,
+      grandTotal,
+      totalLiters: currLiters
+    };
+  }
+
+  return null;
+}
+const getPosConfirmMixBreakdown = getCustomColorMixReceiptData;
+
+/**
+ * Freeze a permanent, immutable Custom Color Mix snapshot on a sale item at checkout time.
+ * Stored inside `sales.items_json` so historical receipts never drift when catalog/inventory changes.
+ */
+function freezeColorMixReceiptSnapshot(item) {
+  if (!item || item.type !== 'colormix') return item;
+  const bd = getCustomColorMixReceiptData(item);
+  if (!bd) return item;
+
+  const frozenSnapshot = JSON.parse(JSON.stringify({
+    colorName: bd.colorName,
+    detectedColorName: bd.detectedColorName,
+    hexColor: bd.hexColor,
+    baseType: bd.baseType,
+    containerSizeLabel: bd.containerSizeLabel,
+    isCustomizedFormula: bd.isCustomizedFormula,
+    originalCatalogName: bd.originalCatalogName,
+    basePaint: bd.basePaint,
+    basePaintCost: bd.basePaintCost,
+    basePct: bd.basePct,
+    ingredients: bd.ingredients,
+    totalColorantCost: bd.totalColorantCost,
+    totalColorantLiters: bd.totalColorantLiters,
+    totalColorantMl: bd.totalColorantMl,
+    totalColorantPct: bd.totalColorantPct,
+    totalFormulaPct: bd.totalFormulaPct,
+    materialCost: bd.materialCost,
+    serviceFee: bd.serviceFee,
+    otherCharges: bd.otherCharges,
+    grandTotal: bd.grandTotal,
+    totalLiters: bd.totalLiters,
+    capturedAt: typeof nowISO === 'function' ? nowISO() : new Date().toISOString()
+  }));
+
+  item.containerSizeLabel = frozenSnapshot.containerSizeLabel;
+  item.priceBreakdown = JSON.parse(JSON.stringify(frozenSnapshot));
+  item.mixSnapshot = frozenSnapshot;
+  if (Array.isArray(item.components)) {
+    item.components = JSON.parse(JSON.stringify(item.components));
+  }
+  return item;
+}
+
+function renderPosConfirmMixBreakdownHtml(item, options = {}) {
+  const breakdown = getCustomColorMixReceiptData(item);
+  if (!breakdown) return '';
+
+  const mode = options.mode || 'confirm'; // 'confirm' | 'receipt' | 'compact'
+  const totalLiters = Number(breakdown.totalLiters) || Number(item.liters) || 1;
+  const ingredients = Array.isArray(breakdown.ingredients) ? breakdown.ingredients : [];
+  const otherCharges = Number(breakdown.otherCharges) || 0;
+  const grandTotal = Number(breakdown.grandTotal) || Number(item.lineTotal) || 0;
+  const totalFormulaPct = Number(breakdown.totalFormulaPct) || 100;
+  const isReceipt = mode === 'receipt';
+  const isCompact = mode === 'compact';
+
+  return `
+    <div class="pos-confirm-mix-breakdown ${isReceipt ? 'receipt-mode' : (isCompact ? 'compact-mode' : '')}">
+      <!-- Card Header -->
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid var(--line);">
+        <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+          <span style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; color:var(--teal-dark);">🎨 Color Formula / Ingredients &amp; Price Breakdown</span>
+          <span class="muted" style="font-size:10.5px; font-weight:600;">(${formatStock(totalLiters)} Liter${totalLiters === 1 ? '' : 's'})</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+          ${breakdown.isCustomizedFormula ? `
+            <span class="badge" style="background:var(--warning-bg); color:var(--warning-text); border:1px solid var(--warning-border); font-size:9.5px; padding:1px 6px; font-weight:700;">✏️ Customized Formula</span>
+          ` : ''}
+          <span class="badge ok" style="font-size:9.5px; padding:1.5px 7px; font-weight:700;">Formula Total: ${totalFormulaPct}%</span>
+        </div>
+      </div>
+
+      <!-- 1. BASE PAINT DETAILS -->
+      <div class="cm-breakdown-section" style="margin-bottom:8px; padding-bottom:7px; border-bottom:1px dashed var(--line);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px;">
+          <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+            <span style="display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--teal); flex-shrink:0;"></span>
+            <span style="font-weight:700; font-size:10.5px; color:var(--teal-dark); text-transform:uppercase; letter-spacing:0.04em;">Base Paint</span>
+            ${breakdown.basePaint ? `
+              <span class="badge" style="background:var(--teal-tint); color:var(--teal-dark); border:1px solid var(--teal-tint-border); font-size:9.5px; padding:1px 5px; font-weight:600;">
+                ${escapeHtml(breakdown.basePaint.type || breakdown.baseType || 'Base Paint')}
+              </span>
+            ` : ''}
+          </div>
+          <strong style="font-family:'Space Grotesk',monospace; font-size:12px; font-weight:700; color:var(--ink);">
+            ${peso(breakdown.basePaintCost)}
+          </strong>
+        </div>
+        ${breakdown.basePaint ? `
+          <div style="padding-left:12px; font-size:10.5px; color:var(--ink-soft); line-height:1.35;">
+            <div style="font-weight:600; color:var(--ink);">
+              ${escapeHtml(breakdown.basePaint.name)}
+              ${breakdown.basePaint.brand ? `<span class="muted" style="font-weight:400;">(${escapeHtml(breakdown.basePaint.brand)})</span>` : ''}
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:4px; margin-top:2px;">
+              <span class="muted">
+                Base Color: <b>${escapeHtml(breakdown.basePaint.colorName)}</b>
+                ${breakdown.basePaint.hex ? `<span style="display:inline-block; width:9px; height:9px; border-radius:50%; background:${breakdown.basePaint.hex}; border:1px solid rgba(0,0,0,0.18); vertical-align:middle; margin-left:3px;"></span>` : ''}
+                ${Number(breakdown.basePaint.unitPrice) > 0 ? ` · Rate: ${peso(breakdown.basePaint.unitPrice)}/L` : ''}
+              </span>
+              <span style="font-weight:700; font-family:'Space Grotesk',monospace; color:var(--ink);">
+                ${formatStock(breakdown.basePaint.liters)} L (${breakdown.basePaint.ml} mL) · ${breakdown.basePaint.pct}%
+              </span>
+            </div>
+          </div>
+        ` : `
+          <div style="padding-left:12px; font-size:10.5px; color:var(--ink-soft); font-style:italic;">No base paint component in formula.</div>
+        `}
+      </div>
+
+      <!-- 2. INDIVIDUAL COLORANTS / INGREDIENTS -->
+      <div class="cm-breakdown-section" style="margin-bottom:8px; padding-bottom:7px; border-bottom:1px dashed var(--line);">
+        <details open class="cm-ingredients-details">
+          <summary style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;">
+            <div style="display:flex; align-items:center; gap:5px;">
+              <span style="display:inline-block; width:7px; height:7px; border-radius:50%; background:#8E24AA; flex-shrink:0;"></span>
+              <span style="font-weight:700; font-size:10.5px; color:var(--purple-text); text-transform:uppercase; letter-spacing:0.04em;">Colorants / Ingredients</span>
+              <span class="badge" style="background:var(--purple-bg); color:var(--purple-text); border:1px solid var(--purple-border); font-size:9.5px; padding:1px 5px; font-weight:600;">
+                ${ingredients.length} item${ingredients.length === 1 ? '' : 's'}
+              </span>
+              <span class="muted no-print" style="font-size:9.5px; opacity:0.75;">▾</span>
+            </div>
+            <strong style="font-family:'Space Grotesk',monospace; font-size:12px; font-weight:700; color:var(--ink);">
+              ${peso(breakdown.totalColorantCost)}
+            </strong>
+          </summary>
+
+          ${ingredients.length > 0 ? `
+            <div style="padding-left:12px; display:flex; flex-direction:column; gap:4px; margin-top:5px;">
+              ${ingredients.map(ing => `
+                <div class="pos-mix-ing-card" style="background:var(--surface); border:1px solid var(--line); border-radius:5px; padding:4px 7px; font-size:10.5px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; gap:4px;">
+                    <div style="display:flex; align-items:center; gap:5px; min-width:0; overflow:hidden;">
+                      <span style="display:inline-block; width:9px; height:9px; border-radius:50%; background:${ing.hex || '#8E24AA'}; border:1px solid rgba(0,0,0,0.18); flex-shrink:0;"></span>
+                      <span style="font-weight:700; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(ing.name)}</span>
+                      ${ing.brand ? `<span class="muted" style="font-size:9.5px;">(${escapeHtml(ing.brand)})</span>` : ''}
+                    </div>
+                    <strong style="font-family:'Space Grotesk',monospace; font-weight:700; color:var(--ink); flex-shrink:0;">
+                      ${peso(ing.cost)}
+                    </strong>
+                  </div>
+                  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:4px; color:var(--ink-soft); font-size:10px; margin-top:1.5px;">
+                    <span>Type: <b>${escapeHtml(ing.colorName || 'Pigment')}</b>${ing.type ? ` (${escapeHtml(ing.type)})` : ''}${Number(ing.unitPrice) > 0 ? ` · Rate: ${peso(ing.unitPrice)}/L` : ''}</span>
+                    <span style="font-family:'Space Grotesk',monospace; font-weight:600; color:var(--ink);">
+                      ${formatStock(ing.liters)} L (${ing.ml} mL) · ${ing.pct}%
+                    </span>
+                  </div>
+                </div>
+              `).join('')}
+
+              <div class="pos-mix-colorant-summary" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:4px; font-size:10px; color:var(--purple-text); font-weight:600; padding:3px 6px; background:var(--purple-bg); border-radius:4px; margin-top:2px;">
+                <span>Total Colorants: <b>${formatStock(breakdown.totalColorantLiters)} L (${breakdown.totalColorantMl} mL) · ${breakdown.totalColorantPct}%</b></span>
+                <span>Total Colorant Cost: <b>${peso(breakdown.totalColorantCost)}</b></span>
+              </div>
+            </div>
+          ` : `
+            <div style="padding-left:12px; font-size:10.5px; color:var(--ink-soft); font-style:italic; margin-top:4px;">No additional colorants used in this formula.</div>
+          `}
+        </details>
+      </div>
+
+      <!-- 3. MATERIAL TOTAL & ADDITIONAL CHARGES -->
+      <div class="cm-breakdown-section" style="margin-bottom:6px; font-size:10.5px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:1.5px 0;">
+          <span style="display:flex; align-items:center; gap:5px; color:var(--ink);">
+            <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#2E7D32;"></span>
+            <span style="font-weight:600;">Total Material Cost:</span>
+            <span class="muted" style="font-size:9.5px;">(Base + Colorants)</span>
+          </span>
+          <strong style="font-family:'Space Grotesk',monospace; font-weight:700; color:var(--ink);">${peso(breakdown.materialCost)}</strong>
+        </div>
+
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:1.5px 0;">
+          <span style="display:flex; align-items:center; gap:5px; color:var(--ink);">
+            <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#E65100;"></span>
+            <span>Mixing Service Fee:</span>
+            <span class="muted" style="font-size:9.5px;">(Standard Fee)</span>
+          </span>
+          <strong style="font-family:'Space Grotesk',monospace; font-weight:700; color:var(--ink);">${peso(breakdown.serviceFee)}</strong>
+        </div>
+
+        ${(!isReceipt || otherCharges !== 0) ? `
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:1.5px 0;">
+            <span style="display:flex; align-items:center; gap:5px; color:var(--ink);">
+              <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#78909C;"></span>
+              <span>Other Charges:</span>
+              <span class="muted" style="font-size:9.5px;">
+                ${otherCharges > 0 ? '(Custom Adjustment)' : (otherCharges < 0 ? '(Custom Discount)' : '')}
+              </span>
+            </span>
+            <strong style="font-family:'Space Grotesk',monospace; font-weight:700; color:var(--ink);">${peso(otherCharges)}</strong>
+          </div>
+        ` : ''}
+      </div>
+
+      <!-- 4. MIX GRAND TOTAL -->
+      <div style="border-top:1.5px dashed var(--line); padding-top:6px; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+        <div>
+          <div style="font-size:10.5px; font-weight:800; color:var(--teal-dark); text-transform:uppercase; letter-spacing:0.04em;">${isReceipt ? 'Custom Mix Subtotal' : 'Grand Total'}</div>
+          <div class="muted small" style="font-size:9.5px;">
+            Materials: ${peso(breakdown.materialCost)} + Service: ${peso(breakdown.serviceFee)}${otherCharges !== 0 ? ` + Other: ${peso(otherCharges)}` : ''}
+          </div>
+        </div>
+        <div style="font-family:'Space Grotesk',sans-serif; font-size:${isReceipt || isCompact ? '15px' : '18px'}; font-weight:800; color:var(--teal-text); letter-spacing:-0.02em;">
+          ${peso(grandTotal)}
+        </div>
+      </div>
+    </div>
+  `;
+}
+window.getCustomColorMixReceiptData = getCustomColorMixReceiptData;
+window.renderCustomColorMixReceiptBreakdownHtml = renderPosConfirmMixBreakdownHtml;
+
 function promptCustomerPurchaseConfirmation(data) {
   return new Promise((resolve) => {
     if (typeof posConfirmPromiseResolve === 'function') {
@@ -2063,34 +2479,43 @@ function promptCustomerPurchaseConfirmation(data) {
     const itemsRowsHtml = items.map(i => {
       if (i.type === 'colormix') {
         const hex = i.hexColor || '#1F6F6B';
-        const formulaSummary = i.components && i.components.length
-          ? i.components.map(cp => `${cp.percentage}% ${escapeHtml(cp.name)}`).join(' + ')
-          : (i.note || '');
+        const breakdownHtml = renderPosConfirmMixBreakdownHtml(i, { mode: 'confirm' });
+        const containerLbl = i.containerSizeLabel || `${fmtSize(i.liters || 1)} Mix`;
         return `
-          <tr>
+          <tr class="${breakdownHtml ? 'pos-confirm-mix-row' : ''}">
             <td>
               <div style="display:flex; align-items:center; gap:8px;">
                 <span class="cm-color-dot" style="background:${hex}; width:16px; height:16px; border-radius:50%; flex-shrink:0; box-shadow:0 1px 3px rgba(0,0,0,0.2);" title="${hex}"></span>
                 <div>
-                  <div style="font-weight:600; color:var(--ink);">Custom Color Mix — ${escapeHtml(i.colorName || 'Special Blend')}</div>
+                  <div style="font-weight:600; color:var(--ink); display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+                    <span>Custom Color Mix — ${escapeHtml(i.colorName || 'Special Blend')}</span>
+                    <code style="font-family:'Space Grotesk',monospace; font-size:11px; font-weight:600; color:var(--teal-text);">(${escapeHtml(hex)})</code>
+                  </div>
                   <div class="muted small" style="font-size:11px; color:var(--ink-soft);">
-                    Formula: ${formulaSummary}
+                    ${escapeHtml(i.baseType || 'Custom Paint Mix')} · Total Volume: <b>${formatStock(i.liters || 1)} L</b>${i.isCustomizedFormula ? ' · <b>Customized Formula</b>' : ''}
                   </div>
                 </div>
               </div>
             </td>
             <td style="text-align:center;">
               <span class="badge" style="background:var(--surface-3); border:1px solid var(--line); font-size:11.5px; padding:2px 7px; font-weight:600;">
-                ${fmtSize(i.liters || 1)} Mix
+                ${escapeHtml(containerLbl)}
               </span>
             </td>
             <td style="text-align:center;">
-              <strong style="font-size:13px;">${i.qty || 1}</strong>
+              <strong style="font-size:13px;">${formatStock(i.qty || 1)}</strong>
               <div class="muted small" style="font-size:10.5px;">${formatStock(i.liters || 1)} L</div>
             </td>
             <td style="text-align:right; font-family:'Space Grotesk',monospace;">${peso(i.unitPrice)}</td>
             <td style="text-align:right; font-weight:700; font-family:'Space Grotesk',monospace; color:var(--ink);">${peso(i.lineTotal)}</td>
-          </tr>`;
+          </tr>
+          ${breakdownHtml ? `
+            <tr class="pos-confirm-breakdown-row">
+              <td colspan="5">
+                ${breakdownHtml}
+              </td>
+            </tr>
+          ` : ''}`;
       }
 
       const p = productById(i.productId);
@@ -2495,6 +2920,15 @@ async function completeSale() {
     const receiptNo = generateReceiptNo();
     const cashTendered = Number(confirmRes.cashTendered) || t.total;
     const changeAmount = Number(confirmRes.changeAmount) || 0;
+
+    // Freeze permanent immutable Custom Color Mix snapshots at the exact moment of sale
+    // so historical receipts never change when Color Library, catalog, or inventory changes later.
+    items.forEach(it => {
+      if (it && it.type === 'colormix') {
+        freezeColorMixReceiptSnapshot(it);
+      }
+    });
+
     const sale = {
       id: uid('sale'),
       receiptNo,
@@ -2747,6 +3181,7 @@ function showReceipt(sale) {
     }
     return;
   }
+  window._activeReceiptSale = sale;
   const receiptNo = getReceiptNo(sale);
   const returnedVal = typeof getSaleReturnedValue === 'function' ? getSaleReturnedValue(sale) : Number(sale.refundTotal || 0);
   const exchangeTotal = typeof getSaleExchangeTotal === 'function' ? getSaleExchangeTotal(sale) : 0;
@@ -2755,6 +3190,43 @@ function showReceipt(sale) {
   const status = sale.status || 'completed';
 
   const itemsHtml = (sale.items || []).map(i => {
+    if (i.type === 'colormix') {
+      const mixData = getCustomColorMixReceiptData(i);
+      const hex = (mixData && mixData.hexColor) || i.hexColor || '#1F6F6B';
+      const colorName = (mixData && mixData.colorName) || i.colorName || 'Special Blend';
+      const baseType = (mixData && mixData.baseType) || i.baseType || 'Custom Paint Mix';
+      const liters = (mixData && mixData.totalLiters) || Number(i.liters) || Number(i.qty) || 1;
+      const containerLbl = (mixData && mixData.containerSizeLabel) || i.containerSizeLabel || `${fmtSize(liters)} Mix`;
+      const isCustomized = Boolean((mixData && mixData.isCustomizedFormula) || i.isCustomizedFormula);
+      const breakdownHtml = renderPosConfirmMixBreakdownHtml(i, { mode: 'receipt' });
+
+      return `
+      <tr class="${breakdownHtml ? 'pos-receipt-mix-row' : ''}">
+        <td>
+          <div style="font-weight:700; color:var(--ink); display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            <span class="cm-color-dot" style="background:${hex}; width:12px; height:12px; border-radius:50%; display:inline-block; border:1px solid rgba(0,0,0,0.18); flex-shrink:0;" title="${escapeAttr(hex)}"></span>
+            <span>Custom Color Mix — ${escapeHtml(colorName)}</span>
+            <span style="font-family:'Space Grotesk',monospace; font-size:11px; font-weight:600; color:var(--teal-text);">(${escapeHtml(hex)})</span>
+          </div>
+          <div style="font-size:11px; color:var(--ink-soft); margin-top:2px;">
+            <span>${escapeHtml(baseType)} · Container: <b>${escapeHtml(containerLbl)}</b> · Total Volume: <b>${formatStock(liters)} L</b></span>
+            ${isCustomized ? ` · <span style="color:var(--warning-text); font-weight:700;">Customized Formula</span>` : ''}
+          </div>
+          ${i.returnedQty ? `<div style="margin-top:2px;"><span class="badge sale-refunded" style="font-size:10px; padding:1px 6px;">${formatStock(i.returnedQty)} returned / exchanged</span></div>` : ''}
+        </td>
+        <td class="right num">${formatStock(i.qty || 1)}<div style="font-size:10px; font-weight:500; color:var(--ink-soft);">${formatStock(liters)} L</div></td>
+        <td class="right num">${peso(i.unitPrice)}</td>
+        <td class="right num" style="font-weight:700;">${peso(i.lineTotal)}</td>
+      </tr>
+      ${breakdownHtml ? `
+        <tr class="pos-receipt-mix-breakdown-row">
+          <td colspan="4">
+            ${breakdownHtml}
+          </td>
+        </tr>
+      ` : ''}`;
+    }
+
     const p = i.productId ? productById(i.productId) : null;
     const size = Number(i.size) || (i.type === 'product' ? 1 : null);
     const sizeLabel = size ? ` · ${fmtSize(size)}` : '';
@@ -2777,11 +3249,6 @@ function showReceipt(sale) {
         ${(Number(i.nearExpiryDiscountPct) > 0) ? `
           <div style="font-size:10.5px; color:var(--success-text); margin-top:2px;">
             🏷️ Near-Expiry Discount: -${Number(i.nearExpiryDiscountPct)}% (Orig: ${peso(i.originalUnitPrice || i.unitPrice)}, Saved: ${peso(i.nearExpiryDiscountAmount || 0)})${i.nearExpiryBatchNumber ? ` · Batch ${escapeHtml(i.nearExpiryBatchNumber)}` : ''}
-          </div>
-        ` : ''}
-        ${i.components && i.components.length ? `
-          <div style="font-size:10.5px; color:var(--ink-soft); margin-top:2px;">
-            Blend Formula: ${i.components.map(cp => `${cp.percentage}% ${escapeHtml(cp.name)} (${formatStock(cp.liters)}L)`).join(', ')}
           </div>
         ` : ''}
         ${i.returnedQty ? `<div style="margin-top:2px;"><span class="badge sale-refunded" style="font-size:10px; padding:1px 6px;">${formatStock(i.returnedQty)} returned / exchanged</span></div>` : ''}
@@ -2932,17 +3399,208 @@ function showReceipt(sale) {
   </div>`;
 
   const footHtml = `
-    <button type="button" class="btn secondary" onclick="printReceiptSection()">🖨️ Print Receipt</button>
+    <button type="button" class="btn secondary" onclick="printReceiptSection('thermal')" title="Print 80mm thermal receipt">🧾 Thermal Print (80mm)</button>
+    <button type="button" class="btn secondary" onclick="printReceiptSection('standard')" title="Print standard receipt or Save as PDF">🖨️ Print / Save PDF</button>
     <button type="button" class="btn" onclick="closeModal()">Done</button>
   `;
 
   openModal('Official Sales Receipt', bodyHtml, footHtml);
 }
 
-function printReceiptSection() {
+function buildThermalReceiptHtml(sale) {
+  const receiptNo = getReceiptNo(sale);
+  const status = sale.status || 'completed';
+  const returnedVal = typeof getSaleReturnedValue === 'function' ? getSaleReturnedValue(sale) : Number(sale.refundTotal || 0);
+  const exchangeTotal = typeof getSaleExchangeTotal === 'function' ? getSaleExchangeTotal(sale) : 0;
+  const refundTotal = Number(sale.refundTotal || 0);
+  const netTotal = Number((sale.total - refundTotal).toFixed(2));
+  const custName = (sale.customerName || sale.customer_name || '').trim();
+
+  const itemsHtml = (sale.items || []).map(i => {
+    if (i.type === 'colormix') {
+      const bd = getCustomColorMixReceiptData(i);
+      const colorName = (bd && bd.colorName) || i.colorName || 'Special Blend';
+      const hex = (bd && bd.hexColor) || i.hexColor || '';
+      const liters = (bd && bd.totalLiters) || Number(i.liters) || Number(i.qty) || 1;
+      const containerLbl = (bd && bd.containerSizeLabel) || i.containerSizeLabel || `${fmtSize(liters)} Mix`;
+      const totalFormulaPct = (bd && bd.totalFormulaPct) || 100;
+      const isCustomized = Boolean((bd && bd.isCustomizedFormula) || i.isCustomizedFormula);
+
+      let formulaBlock = '';
+      if (bd) {
+        const baseLines = bd.basePaint ? `
+          <div class="th-sub-row"><span>BASE: ${escapeHtml(bd.basePaint.name)}</span><span>${peso(bd.basePaintCost)}</span></div>
+          <div class="th-meta-line">  ${escapeHtml(bd.basePaint.type || bd.baseType || 'Base')} | ${escapeHtml(bd.basePaint.colorName)}</div>
+          <div class="th-meta-line">  ${bd.basePaint.pct}% · ${formatStock(bd.basePaint.liters)}L (${bd.basePaint.ml}mL)${Number(bd.basePaint.unitPrice) > 0 ? ` @ ${peso(bd.basePaint.unitPrice)}/L` : ''}</div>
+        ` : '';
+
+        const ingLines = (bd.ingredients || []).map(ing => `
+          <div class="th-sub-row"><span>+ ${escapeHtml(ing.name)}</span><span>${peso(ing.cost)}</span></div>
+          <div class="th-meta-line">  ${escapeHtml(ing.colorName || 'Pigment')}${ing.type ? ` (${escapeHtml(ing.type)})` : ''} · ${ing.pct}% · ${formatStock(ing.liters)}L (${ing.ml}mL)</div>
+        `).join('');
+
+        const otherCharges = Number(bd.otherCharges) || 0;
+        formulaBlock = `
+          <div class="th-section-label">COLOR FORMULA / INGREDIENTS (${totalFormulaPct}%)${isCustomized ? ' [CUSTOM]' : ''}</div>
+          ${baseLines}
+          ${ingLines}
+          <div class="th-sub-row th-bold"><span>Total Colorants (${bd.totalColorantPct}%, ${bd.totalColorantMl}mL)</span><span>${peso(bd.totalColorantCost)}</span></div>
+          <div class="th-section-label">PRICING BREAKDOWN</div>
+          <div class="th-sub-row"><span>Material Cost (Base+Color)</span><span>${peso(bd.materialCost)}</span></div>
+          <div class="th-sub-row"><span>Mixing Service Fee</span><span>${peso(bd.serviceFee)}</span></div>
+          ${otherCharges !== 0 ? `<div class="th-sub-row"><span>Other Charges</span><span>${peso(otherCharges)}</span></div>` : ''}
+        `;
+      }
+
+      return `
+        <div class="th-item">
+          <div class="th-row th-bold">
+            <span>Custom Color Mix - ${escapeHtml(colorName)}${hex ? ` (${escapeHtml(hex)})` : ''}</span>
+            <span>${peso(i.lineTotal)}</span>
+          </div>
+          <div class="th-meta-line">Size: ${escapeHtml(containerLbl)} | Vol: ${formatStock(liters)}L | Qty: ${formatStock(i.qty || 1)} x ${peso(i.unitPrice)}</div>
+          ${formulaBlock}
+        </div>
+      `;
+    }
+
+    const p = i.productId ? productById(i.productId) : null;
+    const size = Number(i.size) || (i.type === 'product' ? 1 : null);
+    const colorLabel = i.colorName || (i.color && i.color !== '-' ? i.color : (p && p.color && p.color !== '-' ? p.color : ''));
+    return `
+      <div class="th-item">
+        <div class="th-row th-bold">
+          <span>${escapeHtml(i.name)}</span>
+          <span>${peso(i.lineTotal)}</span>
+        </div>
+        <div class="th-meta-line">${escapeHtml(i.brand || (p && p.brand) || '')}${colorLabel ? ` · ${escapeHtml(colorLabel)}` : ''}${size ? ` · ${fmtSize(size)}` : ''}</div>
+        <div class="th-meta-line">${formatStock(i.qty)} x ${peso(i.unitPrice)}${size ? ` (${(i.qty * size).toFixed(2)}L)` : ''}</div>
+      </div>
+    `;
+  }).join('');
+
+  const vatRate = sale.vatRate !== undefined ? Number(sale.vatRate) : (sale.vat_rate !== undefined ? Number(sale.vat_rate) : null);
+  const vatableSales = sale.vatableSales !== undefined ? Number(sale.vatableSales) : (sale.vatable_sales !== undefined ? Number(sale.vatable_sales) : 0);
+  const vatAmount = sale.vatAmount !== undefined ? Number(sale.vatAmount) : (sale.vat_amount !== undefined ? Number(sale.vat_amount) : null);
+  const vatExemptSales = sale.vatExemptSales !== undefined ? Number(sale.vatExemptSales) : (sale.vat_exempt_sales !== undefined ? Number(sale.vat_exempt_sales) : 0);
+  const zeroRatedSales = sale.zeroRatedSales !== undefined ? Number(sale.zeroRatedSales) : (sale.zero_rated_sales !== undefined ? Number(sale.zero_rated_sales) : 0);
+  const taxStatus = sale.taxStatus || sale.tax_status || (vatRate === 0 ? 'non_vat' : 'vat_registered');
+
+  let vatBlock = '';
+  if (vatAmount !== null && !isNaN(vatAmount)) {
+    if (taxStatus !== 'non_vat') {
+      vatBlock = `
+        <div class="th-divider"></div>
+        <div class="th-row"><span>VATable Sales:</span><span>${peso(vatableSales)}</span></div>
+        <div class="th-row th-bold"><span>VAT Amount (${vatRate || 12}%):</span><span>${peso(vatAmount)}</span></div>
+        <div class="th-row"><span>VAT-Exempt Sales:</span><span>${peso(vatExemptSales)}</span></div>
+        ${zeroRatedSales > 0 ? `<div class="th-row"><span>Zero-Rated Sales:</span><span>${peso(zeroRatedSales)}</span></div>` : ''}
+      `;
+    } else {
+      vatBlock = `
+        <div class="th-divider"></div>
+        <div class="th-row"><span>Tax Status:</span><span>Non-VAT Registered</span></div>
+      `;
+    }
+  }
+
+  return `
+    <div class="thermal-receipt">
+      <div class="th-center">
+        <div class="th-title">MRGR COLOR CENTER</div>
+        <div class="th-sub">Paint &amp; Color Formulation Specialists</div>
+        <div class="th-sub">Official Sales Receipt</div>
+        <div class="th-receipt-no">${escapeHtml(receiptNo)}</div>
+        ${status === 'voided' ? `<div class="th-void">*** TRANSACTION VOIDED ***</div>` : ''}
+      </div>
+      <div class="th-divider"></div>
+      <div class="th-meta-line">Date: ${formatDateTime(sale.date)}</div>
+      <div class="th-meta-line">Cashier: ${escapeHtml(sale.cashierName || 'Cashier')}</div>
+      ${custName ? `<div class="th-meta-line">Customer: ${escapeHtml(custName)}</div>` : ''}
+      <div class="th-divider"></div>
+      ${itemsHtml}
+      <div class="th-divider"></div>
+      <div class="th-row"><span>Subtotal:</span><span>${peso(sale.subtotal)}</span></div>
+      ${(Number(sale.discountAmount || sale.discount || 0) > 0) ? `
+        <div class="th-row"><span>Discount (${Number(sale.discountPct || sale.discountPercentage || 10)}%):</span><span>-${peso(Number(sale.discountAmount || sale.discount || 0))}</span></div>
+      ` : ''}
+      ${vatBlock}
+      <div class="th-divider-bold"></div>
+      <div class="th-row th-grand"><span>TOTAL AMOUNT DUE:</span><span>${peso(sale.total)}</span></div>
+      ${(returnedVal > 0 || refundTotal > 0) ? `
+        <div class="th-row"><span>Returned Credit:</span><span>-${peso(returnedVal || refundTotal)}</span></div>
+        ${exchangeTotal > 0 ? `<div class="th-row"><span>Replacement:</span><span>+${peso(exchangeTotal)}</span></div>` : ''}
+        <div class="th-row th-bold"><span>NET TOTAL:</span><span>${peso(netTotal)}</span></div>
+      ` : ''}
+      <div class="th-divider"></div>
+      <div class="th-row"><span>Payment Method:</span><span>${escapeHtml(sale.paymentMethod || sale.payment_method || 'Cash')}</span></div>
+      <div class="th-row"><span>Cash Tendered:</span><span>${peso(sale.cashTendered !== undefined ? sale.cashTendered : sale.total)}</span></div>
+      <div class="th-row th-bold"><span>Change Due:</span><span>${peso(sale.changeAmount !== undefined ? sale.changeAmount : 0)}</span></div>
+      <div class="th-divider"></div>
+      <div class="th-center th-footer">
+        <div>Thank you for your purchase!</div>
+        <div>Please retain this receipt for warranty &amp; aftersales support.</div>
+      </div>
+    </div>
+  `;
+}
+
+function printReceiptSection(mode = 'standard') {
+  if (mode === 'thermal') {
+    const sale = window._activeReceiptSale;
+    if (!sale) {
+      showToast('No active receipt found to print.', 'error');
+      return;
+    }
+    const printWin = window.open('', '_blank', 'width=360,height=720');
+    if (!printWin) {
+      showToast('Popup blocker prevented thermal receipt window from opening. Please allow popups.', 'error');
+      return;
+    }
+    printWin.document.write(`
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Thermal Receipt - ${escapeHtml(getReceiptNo(sale))}</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { font-family: 'Courier New', Courier, monospace; font-size: 11px; color: #000; background: #fff; margin: 0; padding: 6px; width: 80mm; }
+      .thermal-receipt { width: 100%; }
+      .th-center { text-align: center; }
+      .th-title { font-size: 14px; font-weight: 700; letter-spacing: 0.04em; }
+      .th-sub { font-size: 10px; }
+      .th-receipt-no { font-size: 12px; font-weight: 700; margin-top: 4px; border: 1px dashed #000; padding: 2px 6px; display: inline-block; }
+      .th-void { font-size: 11px; font-weight: 700; margin-top: 4px; border: 1px solid #000; padding: 2px 4px; }
+      .th-divider { border-top: 1px dashed #000; margin: 6px 0; }
+      .th-divider-bold { border-top: 2px solid #000; margin: 6px 0; }
+      .th-item { padding: 4px 0; border-bottom: 1px dotted #999; }
+      .th-item:last-of-type { border-bottom: none; }
+      .th-row, .th-sub-row { display: flex; justify-content: space-between; gap: 6px; line-height: 1.35; }
+      .th-sub-row { font-size: 10px; padding-left: 4px; }
+      .th-meta-line { font-size: 9.5px; line-height: 1.3; color: #111; }
+      .th-section-label { font-size: 9.5px; font-weight: 700; margin-top: 4px; border-top: 1px dotted #555; padding-top: 2px; }
+      .th-bold { font-weight: 700; }
+      .th-grand { font-size: 13px; font-weight: 700; padding: 2px 0; }
+      .th-footer { font-size: 9.5px; margin-top: 6px; line-height: 1.35; }
+      @media print {
+        @page { size: 80mm auto; margin: 2mm; }
+        body { padding: 0; width: 76mm; }
+      }
+    </style>
+  </head>
+  <body>
+    ${buildThermalReceiptHtml(sale)}
+    <script>window.onafterprint = function(){ window.close(); }; window.onload = function(){ setTimeout(function(){ window.print(); }, 150); }<\/script>
+  </body>
+</html>
+    `);
+    printWin.document.close();
+    return;
+  }
+
   const receiptEl = document.getElementById('printable-receipt');
   if (!receiptEl) return;
-  const printWin = window.open('', '_blank', 'width=680,height=780');
+  const printWin = window.open('', '_blank', 'width=720,height=820');
   if (!printWin) {
     showToast('Popup blocker prevented receipt window from opening. Please allow popups.', 'error');
     return;
@@ -2955,6 +3613,7 @@ function printReceiptSection() {
     <title>Receipt - MRGR Color Center</title>
     <style>
       :root { --surface: #FFFFFF; --surface-2: #FAF8F5; --surface-3: #F4EFE6; --ink: #26211C; --ink-soft: #6B6259; --line: #E2DACD; --line-light: #ECE6DB; --teal: #1F6F6B; --teal-dark: #17524F; --teal-text: #1F6F6B; --teal-tint: #EAF4F3; --teal-tint-border: #C4E2DF; --success: #3F8358; --success-text: #065F46; --success-bg: #EAF4EC; --success-border: #A7F3D0; --warning: #D97706; --warning-text: #92400E; --warning-bg: #FEF3C7; --warning-border: #FCD34D; --danger: #C1443D; --danger-text: #991B1B; --danger-bg: #FBEAE8; --danger-border: #FCA5A5; --info-text: #1B4F72; --info-bg: #EBF5FB; --info-border: #AED6F1; --purple-text: #6B21A8; --purple-bg: #F3E8FF; --purple-border: #DDD6FE; }
+      * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; box-sizing: border-box; }
       body { font-family: 'Inter', system-ui, -apple-system, sans-serif; font-size: 13px; color: #26211C; padding: 24px; line-height: 1.45; background: #fff; }
       .pos-receipt-card { border: none !important; box-shadow: none !important; max-width: 100% !important; padding: 0 !important; }
       .pos-receipt-header { text-align: center; border-bottom: 2px dashed #222; padding-bottom: 12px; margin-bottom: 14px; }
@@ -2965,9 +3624,17 @@ function printReceiptSection() {
       table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
       th { text-align: left; font-size: 11px; text-transform: uppercase; border-bottom: 1.5px solid #222; padding: 6px 4px; }
       td { padding: 7px 4px; border-bottom: 1px solid #eee; vertical-align: top; }
+      tr.pos-receipt-mix-row td { border-bottom: none; padding-bottom: 4px; }
+      tr.pos-receipt-mix-breakdown-row td { padding: 2px 4px 10px 4px; border-bottom: 1px solid #ddd; }
+      .pos-confirm-mix-breakdown { background: #FAF8F5; border: 1px solid #D9D0C3; border-radius: 6px; padding: 8px 10px; page-break-inside: avoid; break-inside: avoid; }
+      .cm-ingredients-details summary { list-style: none; }
+      .cm-ingredients-details summary::-webkit-details-marker { display: none; }
+      .badge { display: inline-block; border-radius: 4px; }
+      .muted { color: #6B6259; }
+      .no-print { display: none !important; }
       .right { text-align: right; }
       .num { font-family: monospace; font-weight: bold; }
-      .pos-receipt-totals { border-top: 2px dashed #222; margin-top: 14px; padding-top: 10px; }
+      .pos-receipt-totals { border-top: 2px dashed #222; margin-top: 14px; padding-top: 10px; page-break-inside: avoid; }
       .pos-receipt-total-row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12.5px; }
       .pos-receipt-total-row.grand { font-size: 15px; font-weight: bold; border-top: 1.5px solid #222; margin-top: 6px; padding-top: 6px; }
       .pos-receipt-total-row.grand .grand-val { font-size: 17px; }
@@ -2980,7 +3647,11 @@ function printReceiptSection() {
   </head>
   <body>
     ${receiptEl.outerHTML}
-    <script>window.onafterprint = function(){ window.close(); }; window.onload = function(){ setTimeout(function(){ window.print(); }, 150); }<\/script>
+    <script>
+      document.querySelectorAll('details').forEach(function(d){ d.setAttribute('open', 'open'); });
+      window.onafterprint = function(){ window.close(); };
+      window.onload = function(){ setTimeout(function(){ window.print(); }, 150); };
+    <\/script>
   </body>
 </html>
   `);

@@ -5,6 +5,8 @@ logs/*.log
 api/.schema_migrated
 api/.batch_schema_v1
 api/.color_library_v4
+api/.base_colors_synced_v1
+api/.color_sync_v1
 
 # Operating System Files
 Thumbs.db

@@ -634,7 +634,7 @@ function colorMixAvailableProducts(filterByType = true) {
 }
 
 function colorMixModalProducts() {
-  const all = activeProducts();
+  const all = activeProducts().filter(p => p && productMixAvailableStock(p) > 0);
   if (colorMixStudioState && colorMixStudioState.typeFilter && colorMixStudioState.typeFilter !== 'all') {
     const filtered = all.filter(p => (p.type || '').toLowerCase() === colorMixStudioState.typeFilter.toLowerCase());
     if (filtered.length > 0) return filtered;
@@ -741,6 +741,11 @@ function initColorMixStudioState() {
     presetSearch: '',
     recipeCategoryFilter: 'All',
     selectedPresetIndex: -1,
+    originalPresetIndex: -1,
+    originalCatalogName: '',
+    isCustomizingFormula: false,
+    isCustomizedFormula: false,
+    customizeSnapshot: null,
     selectedLibraryColorId: null,
     selectedLibraryColorName: '',
     selectedLibraryColorHex: '',
@@ -766,9 +771,12 @@ function initColorMixStudioState() {
         price: product ? product.price : 400,
         hex: product ? getProductDefaultColor(product) : (item.hex || '#FFFFFF'),
         pct: Number(item.pct) || 0,
-        preferredCanSize: 0
+        preferredCanSize: 0,
+        isOriginal: true
       }));
       colorMixStudioState.selectedPresetIndex = pickIdx;
+      colorMixStudioState.originalPresetIndex = pickIdx;
+      colorMixStudioState.originalCatalogName = cleanPresetColorName(p.name);
       colorMixStudioState.colorName = cleanPresetColorName(p.name);
       const firstType = check.resolvedItems[0] && check.resolvedItems[0].product && check.resolvedItems[0].product.type;
       if (firstType) colorMixStudioState.baseType = firstType;
@@ -1607,6 +1615,8 @@ function getColorMixProductIndex() {
     return {
       product: prod,
       idStr: String(prod.id),
+      colorId: cid ? String(cid) : '',
+      isColorPigment: Boolean(prod.isColorPigment || prod.is_color_pigment || /pigment|colorant/i.test(String(prod.category || prod.type || ''))),
       hex,
       searchText: `${pColor} ${pColorName} ${pName} ${libText}`,
       usableStock: typeof productMixAvailableStock === 'function' ? productMixAvailableStock(prod) : (Number(prod.stock) || 0),
@@ -1622,6 +1632,7 @@ function getColorMixProductIndex() {
 
 function findMatchingProductForRecipeItem(item, reqLiters = 0, excludeProductIds = new Set(), preferredType = '') {
   const index = getColorMixProductIndex();
+  const prefLower = String(preferredType || '').toLowerCase();
 
   // 1. Exact productId match first (for saved custom mixes)
   if (item.productId && !excludeProductIds.has(String(item.productId))) {
@@ -1631,10 +1642,33 @@ function findMatchingProductForRecipeItem(item, reqLiters = 0, excludeProductIds
     if (rawProd && rawProd.status === 'active') return { product: rawProd, reason: null };
   }
 
+  // 1b. Exact Color Library ID match (identifies linked pigment products & color-linked paints)
+  if (item.colorId) {
+    const targetCid = String(item.colorId);
+    const cidCandidates = index.filter(e => !excludeProductIds.has(e.idStr) && e.colorId === targetCid);
+    if (cidCandidates.length > 0) {
+      cidCandidates.sort((a, b) => {
+        const aSufficient = reqLiters > 0 ? (a.usableStock >= reqLiters ? 1 : 0) : (a.usableStock > 0 ? 1 : 0);
+        const bSufficient = reqLiters > 0 ? (b.usableStock >= reqLiters ? 1 : 0) : (b.usableStock > 0 ? 1 : 0);
+        if (aSufficient !== bSufficient) return bSufficient - aSufficient;
+
+        const aTypeMatch = prefLower && a.typeLower === prefLower ? 1 : 0;
+        const bTypeMatch = prefLower && b.typeLower === prefLower ? 1 : 0;
+        if (aTypeMatch !== bTypeMatch) return bTypeMatch - aTypeMatch;
+
+        const aPigment = a.isColorPigment ? 1 : 0;
+        const bPigment = b.isColorPigment ? 1 : 0;
+        if (aPigment !== bPigment) return bPigment - aPigment;
+
+        return b.usableStock - a.usableStock;
+      });
+      return { product: cidCandidates[0].product, reason: null };
+    }
+  }
+
   // 2. Match by colorHint or name using pre-indexed searchText (O(N) string check, zero library scans)
   const hint = String(item.colorHint || item.name || '').trim().toLowerCase();
   if (hint) {
-    const prefLower = String(preferredType || '').toLowerCase();
     const candidates = [];
     for (let i = 0; i < index.length; i++) {
       const e = index[i];
@@ -2083,11 +2117,18 @@ function applyRecipePreset(presetIndex, preCheck = null) {
     price: product.price,
     hex: getProductDefaultColor(product),
     pct: item.pct,
-    preferredCanSize: 0
+    preferredCanSize: 0,
+    isOriginal: true
   }));
 
   colorMixStudioState.components = newComponents;
   colorMixStudioState.selectedPresetIndex = presetIndex;
+  colorMixStudioState.originalPresetIndex = presetIndex;
+  colorMixStudioState.originalCatalogName = cleanPresetColorName(p.name);
+  colorMixStudioState.isCustomizingFormula = false;
+  colorMixStudioState.isCustomizedFormula = false;
+  colorMixStudioState.customizeSnapshot = null;
+  colorMixStudioState.openPickerIdx = -1;
   colorMixStudioState.selectedLibraryColorId = p.colorId || null;
   const invTypes = getInventoryBasePaintTypes();
   const firstProdType = (check.resolvedItems[0] && check.resolvedItems[0].product && check.resolvedItems[0].product.type)
@@ -2267,21 +2308,64 @@ function colorMixStudioHtml() {
     <div id="cm-preset-shortage-alert" style="display:none; margin-top:8px;"></div>
   </div>
 
-  <!-- B. Selected Color Formula (Read-Only Percentages) -->
+  <!-- B. Selected Color Formula (Read-Only / Customizable) -->
   <div class="cm-card">
-    <div class="cm-card-title" style="flex-wrap:wrap; gap:8px;">
+    <div class="cm-card-title" style="flex-wrap:wrap; gap:8px; justify-content:space-between;">
       <div class="cm-title-group">
         <span>🧪 Selected Color Formula</span>
-        <span class="badge" style="background:var(--surface-3); color:var(--ink-soft); border:1px solid var(--line); font-size:10px; padding:2px 7px;">🔒 Read-Only</span>
+        ${s.isCustomizingFormula
+          ? `<span class="cm-formula-status-pill is-editing">✏️ Editing Formula</span>`
+          : (s.isCustomizedFormula
+            ? `<span class="cm-formula-status-pill is-custom">✨ Customized Formula</span>`
+            : `<span class="cm-formula-status-pill is-readonly">🔒 Read-Only</span>`)}
+      </div>
+      <div class="cm-formula-header-actions">
+        ${s.isCustomizingFormula ? `
+          <button type="button" id="cm-cancel-custom-formula-btn" class="cm-customize-cancel-btn" onclick="cancelCustomizeColorMixFormula()">Cancel</button>
+          <button type="button" id="cm-save-custom-formula-btn" class="cm-customize-save-btn" onclick="saveCustomizeColorMixFormula()" ${(!isPctBalanced || !hasMinTwoIngredients || hasDuplicateProducts || s.components.some(c => !c.productId || Number(c.pct) <= 0)) ? 'disabled' : ''}>✓ Save Custom Formula</button>
+        ` : `
+          ${s.isCustomizedFormula && Number(s.originalPresetIndex) >= 0 ? `
+            <button type="button" id="cm-reset-original-formula-btn" class="cm-customize-cancel-btn" onclick="resetCustomFormulaToOriginal()" title="Restore untouched catalog formula">↺ Original</button>
+          ` : ''}
+          <button type="button" id="cm-customize-formula-btn" class="cm-customize-btn" onclick="startCustomizeColorMixFormula()">✏️ Customize Formula</button>
+        `}
       </div>
     </div>
 
-    ${activeRecipe ? `
+    ${(activeRecipe || s.originalCatalogName) ? `
       <div class="cm-selected-recipe-banner">
-        <span class="cm-color-dot" style="background:${escapeAttr(mixed.hex)}; width:14px; height:14px;"></span>
-        <span><b>${escapeHtml(activeRecipe.cleanName || activeRecipe.name)}</b> · <code>${escapeHtml(mixed.hex)}</code> · ${s.components.length} Ingredients (${totalPctRounded}%)</span>
+        <span id="cm-banner-color-dot" class="cm-color-dot" style="background:${escapeAttr(mixed.hex)}; width:14px; height:14px;"></span>
+        <span id="cm-banner-formula-meta">
+          <b>${escapeHtml(s.isCustomizedFormula ? (s.colorName || ((s.originalCatalogName || (activeRecipe && (activeRecipe.cleanName || activeRecipe.name)) || 'Custom Mix') + ' (Custom)')) : ((activeRecipe && (activeRecipe.cleanName || activeRecipe.name)) || s.originalCatalogName || s.colorName))}</b>
+          ${s.isCustomizedFormula && s.originalCatalogName ? `<span class="muted" style="font-size:10.5px;">(Based on: ${escapeHtml(s.originalCatalogName)})</span>` : ''}
+          · <code>${escapeHtml(mixed.hex)}</code> · ${s.components.length} Ingredients (${totalPctRounded}%)
+        </span>
       </div>
     ` : ''}
+
+    ${s.isCustomizingFormula ? (() => {
+      const hasInvalidZero = s.components.some(c => !c.productId || isNaN(Number(c.pct)) || Number(c.pct) <= 0);
+      const isToolbarValid = isPctBalanced && !hasInvalidZero && !hasDuplicateProducts && hasMinTwoIngredients;
+      const diff = Math.round(Math.abs(100 - totalPctRounded) * 10) / 10;
+      let valMsg = '✓ Total: 100% — Ready to save custom formula';
+      if (hasDuplicateProducts) {
+        valMsg = '⚠️ Duplicate ingredient detected — each pigment must be unique';
+      } else if (hasInvalidZero) {
+        valMsg = '⚠️ Every ingredient must have a percentage greater than 0%';
+      } else if (!isPctBalanced) {
+        valMsg = totalPctRounded < 100
+          ? `⚠️ Total: ${totalPctRounded}% — Add ${diff}% more to reach 100%`
+          : `⚠️ Total: ${totalPctRounded}% — Reduce by ${diff}% to reach 100%`;
+      }
+      return `
+      <div id="cm-customize-toolbar" class="cm-customize-toolbar ${isToolbarValid ? 'is-valid' : 'is-invalid'}">
+        <div id="cm-customize-validation-msg" class="cm-customize-validation-msg">${valMsg}</div>
+        <div class="cm-customize-toolbar-btns">
+          <button type="button" class="cm-customize-cancel-btn" onclick="balanceColorMixTo100()" title="Scale percentages proportionally to 100%">⚖️ Auto-Balance</button>
+          <button type="button" id="cm-add-ingredient-btn" class="cm-customize-btn" onclick="openAddCustomIngredientPicker()">+ Add Ingredient</button>
+        </div>
+      </div>`;
+    })() : ''}
 
     <!-- Segmented Visual Recipe Bar -->
     <div id="cm-recipe-bar" class="cm-recipe-bar" title="Recipe Color Breakdown" style="margin-bottom:10px;">
@@ -2292,7 +2376,7 @@ function colorMixStudioHtml() {
       `).join('')}
     </div>
 
-    <!-- Read-Only Ingredient Breakdown List -->
+    <!-- Ingredient Breakdown List (Original Protected + Custom Added) -->
     <div id="cm-ingredients-list" class="cm-ingredients-grid">
       ${s.components.map((c, idx) => {
     const reqLiters = Number(((s.totalLiters * (c.pct / 100)) || 0).toFixed(2));
@@ -2305,6 +2389,7 @@ function colorMixStudioHtml() {
     const hasStock = prodObj ? availStock + 1e-6 >= reqLiters : c.stock >= reqLiters;
     const isDup = duplicateSlots.has(idx + 1);
     const isBase = isBasePaintComponent(c, idx, s.components);
+    const isOrig = c.isOriginal !== false;
     return `
         <div class="cm-ingredient-item ${!hasStock ? 'is-low-stock' : ''}" id="cm-ing-item-${idx}" style="padding:10px 12px; margin-bottom:0; ${isDup ? 'border:1.5px solid var(--danger-border); background:var(--danger-bg);' : ''}">
           <div class="cm-ing-grid" style="grid-template-columns: auto 1fr auto;">
@@ -2313,12 +2398,15 @@ function colorMixStudioHtml() {
               <span class="cm-swatch-shine"></span>
             </div>
 
-            <!-- Read-Only Ingredient Info -->
+            <!-- Ingredient Info -->
             <div style="min-width:0; flex:1;">
               <div class="row" style="gap:6px; align-items:center; flex-wrap:wrap;">
                 <span class="badge" style="background:${isBase ? 'var(--teal)' : '#7B1FA2'}; color:#fff; font-size:9.5px; padding:1px 6px;">#${idx + 1} ${isBase ? 'Base' : 'Pigment'}</span>
                 <strong style="font-size:13px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(prodObj ? prodObj.name : (c.name || 'Missing Inventory Paint'))}</strong>
                 <span class="badge" style="background:var(--surface-3); color:var(--ink-soft); font-size:10px; padding:1px 6px;">${escapeHtml(prodObj && prodObj.type ? prodObj.type : 'Paint')}</span>
+                ${isOrig
+                  ? `<span class="cm-protected-badge" title="Original catalog ingredient — protected and cannot be removed">🔒 Original</span>`
+                  : `<span class="cm-added-badge" title="Added during customization — can be removed">✨ Added</span>`}
               </div>
               <div class="muted" style="font-size:11px; margin-top:3px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
                 <span>${escapeHtml(prodObj ? prodObj.brand : (c.brand || 'No Brand'))} · ${peso(c.price)}/L</span>
@@ -2328,11 +2416,26 @@ function colorMixStudioHtml() {
               </div>
             </div>
 
-            <!-- Read-Only Percentage & Quantity Pill -->
-            <div class="cm-readonly-pct-box" title="Locked recipe ratio (read-only)">
-              <div class="cm-readonly-pct-val">${c.pct}%</div>
-              <div class="cm-readonly-qty-val"><b id="cm-req-liters-${idx}">${formatStock(reqLiters)}L</b> (${reqMl} mL)</div>
-            </div>
+            <!-- Percentage & Quantity Display (Editable while Customizing, Locked otherwise) -->
+            ${s.isCustomizingFormula ? `
+              <div class="cm-edit-pct-box">
+                <div class="cm-edit-pct-controls">
+                  <div class="cm-edit-pct-input-wrap">
+                    <input id="cm-pct-input-${idx}" class="cm-edit-pct-input" type="number" min="0.1" max="100" step="1" value="${c.pct}" oninput="onCustomizePctInput(${idx}, this)" onchange="onCustomizePctCommit(${idx}, this)" aria-label="Percentage for ${escapeAttr(c.name || 'Ingredient')}">
+                    <span class="cm-edit-pct-unit">%</span>
+                  </div>
+                  ${!isOrig ? `
+                    <button type="button" class="cm-remove-ing-btn" onclick="removeColorMixIngredient(${idx})" title="Remove newly added ingredient" aria-label="Remove ${escapeAttr(c.name || 'Ingredient')}">✕</button>
+                  ` : ''}
+                </div>
+                <div class="cm-readonly-qty-val"><b id="cm-req-liters-${idx}">${formatStock(reqLiters)}L</b> (<span id="cm-req-ml-${idx}">${reqMl}</span> mL)</div>
+              </div>
+            ` : `
+              <div class="cm-readonly-pct-box" title="${s.isCustomizedFormula ? 'Saved custom formula ratio' : 'Locked recipe ratio (read-only)'}">
+                <div class="cm-readonly-pct-val">${c.pct}%</div>
+                <div class="cm-readonly-qty-val"><b id="cm-req-liters-${idx}">${formatStock(reqLiters)}L</b> (<span id="cm-req-ml-${idx}">${reqMl}</span> mL)</div>
+              </div>
+            `}
           </div>
 
           <!-- Compact Volume & Container Source Row -->
@@ -2353,10 +2456,10 @@ function colorMixStudioHtml() {
   }).join('')}
     </div>
 
-    <!-- Read-Only Formula Footer -->
+    <!-- Formula Footer -->
     <div class="row wrap" style="gap:6px; margin-top:10px; padding-top:8px; border-top:1px solid var(--line); justify-content:space-between; align-items:center;">
-      <small class="muted">Ingredient ratios are locked to preserve formula accuracy.</small>
-      <small id="cm-total-pct-summary" style="font-weight:700; color:${isPctBalanced ? 'var(--teal-dark)' : 'var(--danger)'};">${isPctBalanced ? '✓ 100% Total Formula' : `Total: ${totalPctRounded}%`}</small>
+      <small class="muted">${s.isCustomizingFormula ? '🔒 Original ingredients are protected and cannot be removed. Total must equal 100%.' : (s.isCustomizedFormula ? '✨ Custom formula active. Original catalog recipe remains unchanged.' : 'Ingredient ratios are locked by default. Click "Customize Formula" to adjust or add pigments.')}</small>
+      <small id="cm-total-pct-summary" style="font-weight:700; color:${isPctBalanced ? 'var(--teal-dark)' : 'var(--danger)'};">${isPctBalanced ? '✓ 100% Total Formula' : `⚠️ Total: ${totalPctRounded}%`}</small>
     </div>
   </div>
 </div>
@@ -2698,9 +2801,14 @@ function syncColorMixVisuals(activeIdx = -1, skipPresetRefresh = false) {
       chip.innerHTML = `<span class="cm-color-dot" style="background:${c.hex}; width:8px; height:8px; margin-right:3px;"></span>${pct}%`;
     }
 
-    // Required liters & Stock badge
+    // Required liters, mL, low-stock card state & Stock badge
+    const reqMl = Math.round(((s.totalLiters * (pct / 100)) || 0) * 1000);
     const reqEl = document.getElementById(`cm-req-liters-${i}`);
     if (reqEl) reqEl.innerHTML = `${formatStock(reqLiters)}L`;
+    const reqMlEl = document.getElementById(`cm-req-ml-${i}`);
+    if (reqMlEl) reqMlEl.textContent = String(reqMl);
+    const ingCard = document.getElementById(`cm-ing-item-${i}`);
+    if (ingCard) ingCard.classList.toggle('is-low-stock', !hasStock);
     const srcEl = document.getElementById(`cm-mix-source-${i}`);
     if (srcEl) {
       const prodObj = c.productId ? productById(c.productId) : null;
@@ -2713,6 +2821,49 @@ function syncColorMixVisuals(activeIdx = -1, skipPresetRefresh = false) {
       stockBadge.innerHTML = hasStock ? `🥫 ${formatStock(availStock)}L avail` : `⚠️ Low: ${formatStock(availStock)}L`;
     }
   });
+
+  // 7b. Live Customize Formula status bar, Save button, banner & total summary
+  const hasInvalidZero = s.components.some(c => !c.productId || isNaN(Number(c.pct)) || Number(c.pct) <= 0);
+  const canSaveCustom = isPctBalanced && !hasInvalidZero && !hasDuplicateProducts && hasMinTwoIngredients;
+  const totalSummaryEl = document.getElementById('cm-total-pct-summary');
+  if (totalSummaryEl) {
+    totalSummaryEl.style.color = isPctBalanced ? 'var(--teal-dark)' : 'var(--danger)';
+    totalSummaryEl.textContent = isPctBalanced ? '✓ 100% Total Formula' : `⚠️ Total: ${totalPctRounded}%`;
+  }
+  const bannerDot = document.getElementById('cm-banner-color-dot');
+  if (bannerDot) bannerDot.style.background = mixed.hex;
+  const bannerMeta = document.getElementById('cm-banner-formula-meta');
+  if (bannerMeta) {
+    const activeRec = (Number(s.selectedPresetIndex) >= 0 && COLOR_RECIPE_PRESETS[s.selectedPresetIndex]) ? COLOR_RECIPE_PRESETS[s.selectedPresetIndex] : null;
+    const displayName = s.isCustomizedFormula
+      ? (s.colorName || ((s.originalCatalogName || (activeRec && (activeRec.cleanName || activeRec.name)) || 'Custom Mix') + ' (Custom)'))
+      : ((activeRec && (activeRec.cleanName || activeRec.name)) || s.originalCatalogName || s.colorName);
+    bannerMeta.innerHTML = `<b>${escapeHtml(displayName)}</b>${s.isCustomizedFormula && s.originalCatalogName ? ` <span class="muted" style="font-size:10.5px;">(Based on: ${escapeHtml(s.originalCatalogName)})</span>` : ''} · <code>${escapeHtml(mixed.hex)}</code> · ${s.components.length} Ingredients (${totalPctRounded}%)`;
+  }
+  const custToolbar = document.getElementById('cm-customize-toolbar');
+  if (custToolbar) {
+    custToolbar.classList.toggle('is-valid', canSaveCustom);
+    custToolbar.classList.toggle('is-invalid', !canSaveCustom);
+  }
+  const custMsg = document.getElementById('cm-customize-validation-msg');
+  if (custMsg) {
+    const diff = Math.round(Math.abs(100 - totalPctRounded) * 10) / 10;
+    if (hasDuplicateProducts) {
+      custMsg.textContent = '⚠️ Duplicate ingredient detected — each pigment must be unique';
+    } else if (hasInvalidZero) {
+      custMsg.textContent = '⚠️ Every ingredient must have a percentage greater than 0%';
+    } else if (!isPctBalanced) {
+      custMsg.textContent = totalPctRounded < 100
+        ? `⚠️ Total: ${totalPctRounded}% — Add ${diff}% more to reach 100%`
+        : `⚠️ Total: ${totalPctRounded}% — Reduce by ${diff}% to reach 100%`;
+    } else {
+      custMsg.textContent = '✓ Total: 100% — Ready to save custom formula';
+    }
+  }
+  const saveCustomBtn = document.getElementById('cm-save-custom-formula-btn');
+  if (saveCustomBtn) {
+    saveCustomBtn.disabled = !canSaveCustom;
+  }
 
   // 8. Refresh preset chips dehighlight status when volume or filter changes
   if (!skipPresetRefresh) {
@@ -3344,8 +3495,14 @@ function onColorMixProductSelect(idx, productId, preferredCanSize = 0) {
   const prefCan = Number(preferredCanSize) || 0;
 
   if (idx === 'add') {
+    if (!colorMixStudioState.isCustomizingFormula) {
+      showToast('Click "Customize Formula" first to add new ingredients.', 'info');
+      return;
+    }
     const currentTotal = colorMixStudioState.components.reduce((s, c) => s + (Number(c.pct) || 0), 0);
-    const remainingPct = Math.max(10, Math.round((100 - currentTotal) * 10) / 10);
+    const rawRem = Math.round((100 - currentTotal) * 10) / 10;
+    const initialPct = rawRem > 0 ? Math.min(100, rawRem) : 5;
+    const newIdx = colorMixStudioState.components.length;
     colorMixStudioState.components.push({
       id: uid('cmc'),
       productId: p.id,
@@ -3357,11 +3514,31 @@ function onColorMixProductSelect(idx, productId, preferredCanSize = 0) {
       stock: p.stock,
       price: p.price,
       hex: getProductDefaultColor(p),
-      pct: remainingPct,
-      preferredCanSize: prefCan
+      pct: initialPct,
+      preferredCanSize: prefCan,
+      isOriginal: false
     });
+    colorMixStudioState.openPickerIdx = -1;
+    colorMixStudioState.pickerSearch = '';
+    colorMixStudioState.inlineSearchIdx = -1;
+    colorMixStudioState.inlineSearchQuery = '';
+    updateColorMixCalculation(false);
+    renderColorMixStudio();
+    setTimeout(() => {
+      const inp = document.getElementById(`cm-pct-input-${newIdx}`);
+      if (inp) {
+        inp.focus();
+        inp.select();
+      }
+    }, 30);
+    showToast(`Added "${p.name}" (${initialPct}%). Adjust percentages so total equals 100%.`, 'ok');
+    return;
   } else {
     const comp = colorMixStudioState.components[idx];
+    if (comp && comp.isOriginal !== false) {
+      showToast('Original catalog ingredients are protected and cannot be replaced.', 'error');
+      return;
+    }
     if (comp) {
       comp.productId = p.id;
       comp.colorId = p.colorId || p.color_id || null;
@@ -3411,13 +3588,265 @@ function onColorMixTotalLitersChange(val, clampInput = true) {
   syncColorMixVisuals();
 }
 
+function startCustomizeColorMixFormula() {
+  const s = colorMixStudioState;
+  if (!s || !Array.isArray(s.components) || s.components.length === 0) return;
+
+  // Snapshot current state so Cancel restores the exact previous formula
+  s.customizeSnapshot = {
+    components: s.components.map(c => ({ ...c })),
+    colorName: s.colorName || '',
+    userCustomizedName: Boolean(s.userCustomizedName),
+    isCustomizedFormula: Boolean(s.isCustomizedFormula)
+  };
+  s.isCustomizingFormula = true;
+  renderColorMixStudio();
+}
+
+function cancelCustomizeColorMixFormula() {
+  const s = colorMixStudioState;
+  if (!s) return;
+  if (s.customizeSnapshot) {
+    s.components = s.customizeSnapshot.components.map(c => ({ ...c }));
+    s.colorName = s.customizeSnapshot.colorName;
+    s.userCustomizedName = s.customizeSnapshot.userCustomizedName;
+    s.isCustomizedFormula = s.customizeSnapshot.isCustomizedFormula;
+    s.customizeSnapshot = null;
+  }
+  s.isCustomizingFormula = false;
+  s.openPickerIdx = -1;
+  s.pickerSearch = '';
+  updateColorMixCalculation(false);
+  renderColorMixStudio();
+  showToast('Customization cancelled — restored previous formula.', 'info');
+}
+
+function onCustomizePctInput(idx, inputEl) {
+  const s = colorMixStudioState;
+  if (!s || !s.isCustomizingFormula || !s.components[idx]) return;
+  const raw = inputEl ? String(inputEl.value).trim() : '';
+  if (raw === '') {
+    s.components[idx].pct = 0;
+    syncColorMixVisuals(idx, true);
+    return;
+  }
+  let val = Number(raw);
+  if (isNaN(val) || val < 0) {
+    val = 0;
+    if (inputEl) inputEl.value = 0;
+  } else if (val > 100) {
+    val = 100;
+    if (inputEl) inputEl.value = 100;
+  }
+  s.components[idx].pct = Math.round(val * 10) / 10;
+  syncColorMixVisuals(idx, true);
+}
+
+function onCustomizePctCommit(idx, inputEl) {
+  const s = colorMixStudioState;
+  if (!s || !s.isCustomizingFormula || !s.components[idx]) return;
+  let val = Number(inputEl ? inputEl.value : s.components[idx].pct);
+  if (isNaN(val) || val < 0) val = 0;
+  if (val > 100) val = 100;
+  val = Math.round(val * 10) / 10;
+  s.components[idx].pct = val;
+  if (inputEl) inputEl.value = val;
+  syncColorMixVisuals(idx, true);
+}
+
+function openAddCustomIngredientPicker() {
+  const s = colorMixStudioState;
+  if (!s || !s.isCustomizingFormula) {
+    showToast('Click "Customize Formula" first to add new ingredients.', 'info');
+    return;
+  }
+  const available = colorMixModalProducts();
+  const usedIds = new Set(s.components.map(c => String(c.productId)).filter(Boolean));
+  const remaining = available.filter(p => !usedIds.has(String(p.id)));
+  if (!remaining.length) {
+    showToast('All available paint products in inventory are already included in this formula.', 'info');
+    return;
+  }
+  s.openPickerIdx = 'add';
+  s.pickerSearch = '';
+  renderColorMixStudio();
+  setTimeout(() => {
+    const inp = document.getElementById('cm-drawer-search-input');
+    if (inp) inp.focus();
+  }, 40);
+}
+
+function removeColorMixIngredient(idx) {
+  const s = colorMixStudioState;
+  if (!s || !s.isCustomizingFormula) {
+    showToast('Click "Customize Formula" first to edit ingredients.', 'info');
+    return false;
+  }
+  const comp = s.components[idx];
+  if (!comp) return false;
+  if (comp.isOriginal !== false) {
+    showToast('Original formula ingredients are protected and cannot be removed.', 'error');
+    return false;
+  }
+  const removedName = comp.name || 'Ingredient';
+  s.components.splice(idx, 1);
+  updateColorMixCalculation(false);
+  renderColorMixStudio();
+  showToast(`Removed added ingredient "${removedName}".`, 'info');
+  return true;
+}
+
+function saveCustomizeColorMixFormula() {
+  const s = colorMixStudioState;
+  if (!s || !s.isCustomizingFormula) return false;
+
+  // 1. Verify all original ingredients remain intact
+  if (s.customizeSnapshot && Array.isArray(s.customizeSnapshot.components)) {
+    const origIds = s.customizeSnapshot.components
+      .filter(c => c.isOriginal !== false && c.productId)
+      .map(c => String(c.productId));
+    const currentIds = new Set(s.components.map(c => String(c.productId)).filter(Boolean));
+    const missingOrig = origIds.find(id => !currentIds.has(id));
+    if (missingOrig) {
+      showToast('Original catalog ingredients cannot be removed from the formula.', 'error');
+      return false;
+    }
+  }
+
+  // 2. Validate every ingredient percentage (> 0, <= 100, finite)
+  for (let i = 0; i < s.components.length; i++) {
+    const c = s.components[i];
+    const pct = Number(c.pct);
+    if (!c.productId || isNaN(pct) || pct <= 0 || pct > 100) {
+      showToast(`Invalid percentage for "${c.name || `Ingredient #${i + 1}`}". Each ingredient must be between 0.1% and 100%.`, 'error');
+      return false;
+    }
+  }
+
+  // 3. Prevent duplicate ingredients
+  const seen = new Set();
+  for (const c of s.components) {
+    const pid = String(c.productId);
+    if (seen.has(pid)) {
+      showToast(`Duplicate ingredient "${c.name}" detected. Each pigment must be unique.`, 'error');
+      return false;
+    }
+    seen.add(pid);
+  }
+
+  // 4. Enforce exact 100% total
+  const totalPct = Math.round(s.components.reduce((sum, c) => sum + (Number(c.pct) || 0), 0) * 10) / 10;
+  if (Math.abs(totalPct - 100) >= 0.05) {
+    showToast(`Total formula percentage must equal exactly 100% before saving (currently ${totalPct}%).`, 'error');
+    return false;
+  }
+
+  // 5. Commit customized state without modifying original Mixed Color Catalog formulas
+  s.isCustomizingFormula = false;
+  s.isCustomizedFormula = true;
+  s.customizeSnapshot = null;
+  s.openPickerIdx = -1;
+
+  const origName = s.originalCatalogName || '';
+  const nameInput = document.getElementById('cm-color-name');
+  const currentName = (nameInput ? nameInput.value.trim() : s.colorName) || origName || 'Custom Mix';
+  const existingCatalogPresets = [
+    ...(Array.isArray(DEFAULT_COLOR_RECIPE_PRESETS) ? DEFAULT_COLOR_RECIPE_PRESETS : []),
+    ...(Array.isArray(COLOR_RECIPE_PRESETS) ? COLOR_RECIPE_PRESETS : [])
+  ];
+  const matchesExistingCatalog = existingCatalogPresets.some(
+    pr => cleanPresetColorName(pr.name).toLowerCase() === currentName.toLowerCase()
+  );
+  if (matchesExistingCatalog) {
+    let candidate = `${currentName} (Custom)`;
+    let suffix = 2;
+    while (existingCatalogPresets.some(pr => cleanPresetColorName(pr.name).toLowerCase() === candidate.toLowerCase())) {
+      candidate = `${currentName} (Custom ${suffix++})`;
+    }
+    s.colorName = candidate;
+    s.userCustomizedName = true;
+  } else {
+    s.colorName = currentName;
+    s.userCustomizedName = true;
+  }
+
+  const mixed = subtractivePaintMix(s.components);
+  const detected = detectMixedColorName(mixed.r, mixed.g, mixed.b);
+  const baseType = (document.getElementById('cm-base-type') ? document.getElementById('cm-base-type').value.trim() : s.baseType) || 'Automotive Paint';
+
+  // Save custom formula separately linked to the original catalog color
+  saveMixedColorToPresets({
+    colorName: s.colorName,
+    detectedName: detected.name,
+    hex: mixed.hex,
+    baseType,
+    components: s.components.map(c => ({ ...c, percentage: Number(c.pct) })),
+    notes: origName ? `Customized from ${origName}` : 'Custom formula'
+  });
+
+  updateColorMixCalculation(false);
+  renderColorMixStudio();
+  showToast(`Saved custom formula "${s.colorName}" (100% balanced). Original catalog formula unchanged.`, 'ok');
+  return true;
+}
+
+function resetCustomFormulaToOriginal() {
+  const s = colorMixStudioState;
+  if (!s) return;
+  if (Number(s.originalPresetIndex) >= 0 && COLOR_RECIPE_PRESETS[s.originalPresetIndex]) {
+    applyRecipePreset(s.originalPresetIndex);
+  }
+}
+
 function balanceColorMixTo100() {
-  showToast('Ingredient percentages are locked for Mixed Color Catalog recipes.', 'info');
+  const s = colorMixStudioState;
+  if (!s || !s.isCustomizingFormula) {
+    showToast('Click "Customize Formula" first to adjust ingredient percentages.', 'info');
+    return;
+  }
+  const comps = s.components;
+  if (!Array.isArray(comps) || comps.length < 2) return;
+  const sum = comps.reduce((acc, c) => acc + Math.max(0, Number(c.pct) || 0), 0);
+  if (sum <= 0) {
+    const base = Math.floor(100 / comps.length);
+    const rem = 100 - base * comps.length;
+    comps.forEach((c, i) => {
+      c.pct = base + (i === 0 ? rem : 0);
+    });
+  } else {
+    let running = 0;
+    comps.forEach((c, i) => {
+      if (i === comps.length - 1) {
+        c.pct = Math.max(0.1, Math.round((100 - running) * 10) / 10);
+      } else {
+        const scaled = Math.max(1, Math.round((Math.max(0, Number(c.pct) || 0) / sum) * 100));
+        c.pct = scaled;
+        running += scaled;
+      }
+    });
+    // Ensure exact 100.0 sum after rounding
+    const checkSum = Math.round(comps.reduce((acc, c) => acc + Number(c.pct), 0) * 10) / 10;
+    if (Math.abs(checkSum - 100) >= 0.05) {
+      const diff = Math.round((100 - checkSum) * 10) / 10;
+      const largestIdx = comps.reduce((best, c, i) => (c.pct > comps[best].pct ? i : best), 0);
+      comps[largestIdx].pct = Math.max(1, Math.round((comps[largestIdx].pct + diff) * 10) / 10);
+    }
+  }
+  comps.forEach((c, i) => {
+    const inp = document.getElementById(`cm-pct-input-${i}`);
+    if (inp) inp.value = c.pct;
+  });
+  syncColorMixVisuals(-1, true);
+  showToast('Auto-balanced formula percentages to 100%.', 'ok');
 }
 
 
 async function submitColorMix() {
   const s = colorMixStudioState;
+  if (s.isCustomizingFormula) {
+    showToast('Please click "Save Custom Formula" (or "Cancel") before adding to sale.', 'error');
+    return false;
+  }
   const customInput = document.getElementById('cm-liters');
   if (customInput) {
     const rawLiters = Number(customInput.value);
@@ -3437,9 +3866,9 @@ async function submitColorMix() {
     return false;
   }
 
-  const totalPct = s.components.reduce((sum, c) => sum + (Number(c.pct) || 0), 0);
-  if (Math.abs(totalPct - 100) > 0.5) {
-    showToast(`Color blend percentages must equal 100% (currently ${totalPct}%). Click Auto-Balance to fix.`, 'error');
+  const totalPct = Math.round(s.components.reduce((sum, c) => sum + (Number(c.pct) || 0), 0) * 10) / 10;
+  if (Math.abs(totalPct - 100) >= 0.05) {
+    showToast(`Color blend percentages must equal exactly 100% (currently ${totalPct}%).`, 'error');
     return false;
   }
 
@@ -3512,36 +3941,43 @@ async function submitColorMix() {
   const note = (document.getElementById('cm-note') ? document.getElementById('cm-note').value.trim() : s.note) || '';
 
   const componentsData = validComponents.map(c => {
-    const compLiters = Number((liters * (Number(c.pct) / 100)).toFixed(2));
+    const exactLiters = liters * (Number(c.pct) / 100);
+    const compLiters = Number(exactLiters.toFixed(2));
     const p = productById(c.productId);
     const colorName = c.colorName || (p ? getProductColorName(p) : 'Original Color');
     const hex = c.hex || (p ? getProductDefaultColor(p) : '');
+    const compType = c.type || (p ? (p.type || p.category || baseType || 'Paint') : (baseType || 'Paint'));
     return {
       productId: c.productId,
       name: c.name || (p ? p.name : 'Ingredient'),
       brand: c.brand || (p ? p.brand : ''),
+      type: compType,
       colorName: colorName,
       color: colorName,
-      price: c.price,
+      price: Number(c.price) || 0,
       hex: hex,
       colorHex: hex,
       percentage: Number(c.pct),
       pctNum: Number(c.pct),
       liters: compLiters,
+      exactLiters: Number(exactLiters.toFixed(4)),
+      ml: Math.round(exactLiters * 1000),
+      cost: Number((exactLiters * (Number(c.price) || 0)).toFixed(2)),
       preferredCanSize: Number(c.preferredCanSize) || 0,
       containerSource: ''
     };
   });
 
   const isExistingBuiltinPreset = Array.isArray(DEFAULT_COLOR_RECIPE_PRESETS) &&
-    DEFAULT_COLOR_RECIPE_PRESETS.some(pr => String(pr.name || '').trim().toLowerCase() === String(colorName || '').trim().toLowerCase());
+    DEFAULT_COLOR_RECIPE_PRESETS.some(pr => cleanPresetColorName(pr.name).toLowerCase() === String(colorName || '').trim().toLowerCase());
   if (!isExistingBuiltinPreset) {
     saveMixedColorToPresets({
       colorName: colorName,
       detectedName: detected.name,
       hex: mixed.hex,
       baseType: baseType,
-      components: componentsData
+      components: componentsData,
+      notes: s.isCustomizedFormula && s.originalCatalogName ? `Customized from ${s.originalCatalogName}` : ''
     });
   }
 
@@ -3552,8 +3988,11 @@ async function submitColorMix() {
       name: 'Custom Color Mix',
       colorName: colorName,
       detectedColorName: detected.name,
+      isCustomizedFormula: Boolean(s.isCustomizedFormula),
+      originalCatalogName: s.originalCatalogName || '',
       hexColor: mixed.hex,
       baseType: baseType,
+      containerSizeLabel: `${fmtSize(liters)} Mix`,
       liters: liters,
       baseLiters: liters,
       qty: liters,
@@ -3563,15 +4002,19 @@ async function submitColorMix() {
       priceBreakdown: {
         basePaint: breakdown.basePaint,
         basePaintCost: breakdown.basePaintCost,
+        basePct: breakdown.basePct,
         ingredients: breakdown.ingredients,
         totalColorantCost: breakdown.totalColorantCost,
         pigmentCost: breakdown.pigmentCost,
         totalColorantLiters: breakdown.totalColorantLiters,
         totalColorantMl: breakdown.totalColorantMl,
+        totalColorantPct: breakdown.totalColorantPct,
+        totalFormulaPct: Number(((Number(breakdown.basePct) || 0) + (Number(breakdown.totalColorantPct) || 0)).toFixed(1)),
         materialCost: breakdown.materialCost,
         serviceFee: breakdown.serviceFee,
         otherCharges: breakdown.otherCharges,
-        grandTotal: breakdown.grandTotal
+        grandTotal: breakdown.grandTotal,
+        totalLiters: breakdown.totalLiters
       },
       note: note,
       components: componentsData

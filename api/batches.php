@@ -5,7 +5,7 @@
  * GET  ?action=list                 -> all batches (+ computed expiry status), summary, filter options, thresholds
  * GET  ?action=detail&batch_id=ID   -> full batch view: product, batch, history, FIFO deductions, stock movements
  * GET  ?action=summary              -> status counts only (dashboard widgets)
- * POST ?action=update_batch         -> edit batch info (admin only, reason required, audited)
+ * POST ?action=update_batch         -> edit batch expiration date only (admin & staff, reason required, audited)
  * POST ?action=save_thresholds      -> change Critical / Expiring-Soon day thresholds (admin only, audited)
  *
  * Stock quantity changes are NOT made here: they go through the normal inventory + movement
@@ -33,7 +33,7 @@ try {
     bx_fail(500, 'Database connection failed: ' . $e->getMessage());
 }
 
-// ---- Authentication / RBAC (admin + staff may view; admin may edit) -------------------------
+// ---- Authentication / RBAC (admin + staff may view & edit expiration date) ------------------
 $uid = (string)($_SESSION['user_id'] ?? '');
 if ($uid === '') bx_fail(401, 'Authentication required.');
 $st = $conn->prepare("SELECT id, name, role, status FROM users WHERE id = ? LIMIT 1");
@@ -326,8 +326,8 @@ try {
             'batches' => $batches,
             'permissions' => [
                 'canEdit' => $canEditAny,
-                'canEditFull' => $isAdmin,
-                'canEditExpiryAndNotes' => $canEditAny,
+                'canEditFull' => false,
+                'canEditExpiryOnly' => $canEditAny,
                 'canAdjust' => $isAdmin,
                 'role' => $role,
             ],
@@ -416,21 +416,40 @@ try {
             'inventory' => ['sealedQuantity' => (int)$inv['sealed_quantity'], 'batchedQuantity' => (int)$inv['batched'], 'openBatches' => (int)$inv['open_batches']],
             'ledger' => $ledger, 'fifoDeductions' => $fifo, 'fifoTotal' => $totalDeducted, 'stockMovements' => $mv,
             'thresholds' => $thresholds,
-            'permissions' => ['canEdit' => $canEditAny, 'canEditFull' => $isAdmin, 'canEditExpiryAndNotes' => $canEditAny, 'canAdjust' => $isAdmin, 'role' => $role],
+            'permissions' => ['canEdit' => $canEditAny, 'canEditFull' => false, 'canEditExpiryOnly' => $canEditAny, 'canAdjust' => $isAdmin, 'role' => $role],
         ]);
         exit;
     }
 
     if ($method === 'POST' && $action === 'update_batch') {
         if (!in_array($role, ['admin', 'staff'], true)) {
-            bx_fail(403, 'Access denied: you do not have permission to edit batch information.');
+            bx_fail(403, 'Access denied: you do not have permission to edit expiration dates.');
         }
-        $d = json_decode(file_get_contents('php://input'), true) ?: [];
+        $rawBody = file_get_contents('php://input');
+        $d = json_decode($rawBody, true);
+        if (!is_array($d)) {
+            bx_fail(400, 'Invalid JSON request payload.');
+        }
+
+        // Strict allowlist: Expiration Tracking may ONLY update expirationDate.
+        // Reject any request attempting to pass protected or unexpected fields (for ALL roles, including Admin).
+        $allowedKeys = ['batchId', 'expirationDate', 'reason'];
+        $disallowedKeys = array_values(array_diff(array_keys($d), $allowedKeys));
+        if (!empty($disallowedKeys)) {
+            bx_fail(403, 'Unauthorized field modification rejected: only Expiration Date can be updated in Expiration Tracking (rejected: ' . implode(', ', $disallowedKeys) . ').');
+        }
+
         $bid = trim((string)($d['batchId'] ?? ''));
         if ($bid === '') bx_fail(422, 'Batch ID is required.');
+        if (!array_key_exists('expirationDate', $d)) {
+            bx_fail(422, 'Expiration date field is required (send empty string or null to mark as Not Specified).');
+        }
         $reason = trim((string)($d['reason'] ?? ''));
         if ($reason === '' || mb_strlen($reason) < 5) {
             bx_fail(422, 'Please provide a reason for the change (at least 5 characters).');
+        }
+        if (mb_strlen($reason) > 300) {
+            $reason = mb_substr($reason, 0, 300);
         }
 
         $conn->begin_transaction();
@@ -441,117 +460,56 @@ try {
         $st->close();
         if (!$old) { $conn->rollback(); bx_fail(404, 'Batch not found.'); }
 
-        if (!$isAdmin) {
-            // Inventory Staff may only edit Expiration Date and Restocking / Batch Notes
-            $reqNum = array_key_exists('batchNumber', $d) ? trim((string)$d['batchNumber']) : $old['batch_number'];
-            $reqRecv = array_key_exists('dateReceived', $d) ? substr(trim((string)$d['dateReceived']), 0, 10) : substr((string)$old['date_received'], 0, 10);
-            $oldCostNorm = $old['unit_cost'] !== null ? round((float)$old['unit_cost'], 2) : null;
-            $reqCostNorm = !array_key_exists('unitCost', $d) ? $oldCostNorm : (($d['unitCost'] === '' || $d['unitCost'] === null) ? null : round((float)$d['unitCost'], 2));
-            $reqSup = array_key_exists('supplierId', $d) ? (string)($d['supplierId'] ?? '') : (string)($old['supplier_id'] ?? '');
-            $supChanged = array_key_exists('supplierId', $d) && $reqSup !== '__keep_unlinked__' && $reqSup !== (string)($old['supplier_id'] ?? '');
-            if ($reqNum !== $old['batch_number'] || $reqRecv !== substr((string)$old['date_received'], 0, 10) || $reqCostNorm !== $oldCostNorm || $supChanged) {
-                $conn->rollback();
-                bx_fail(403, 'Access denied: Inventory Staff may only edit Expiration Date and Batch Notes.');
-            }
+        $expRaw = $d['expirationDate'];
+        if ($expRaw !== null && !is_string($expRaw)) {
+            $conn->rollback();
+            bx_fail(422, 'Invalid expiration date format.');
         }
-
-        $number = $isAdmin ? trim((string)($d['batchNumber'] ?? $old['batch_number'])) : $old['batch_number'];
-        if ($number === '') { $conn->rollback(); bx_fail(422, 'Batch number cannot be empty.'); }
-        if (strlen($number) > 100) { $conn->rollback(); bx_fail(422, 'Batch number is too long (max 100).'); }
-        if ($number !== $old['batch_number']) {
-            // Prevent duplicate batch_number within the same product size
-            $dupChk = $conn->prepare("SELECT batch_id FROM inventory_batches WHERE size_id = ? AND batch_number = ? AND batch_id != ? LIMIT 1");
-            if ($dupChk) {
-                $dupChk->bind_param('sss', $old['size_id'], $number, $bid);
-                $dupChk->execute();
-                $dupHit = $dupChk->get_result()->fetch_assoc();
-                $dupChk->close();
-                if ($dupHit) {
-                    $conn->rollback();
-                    bx_fail(422, 'A batch with this batch number already exists for this product size.');
-                }
-            }
-        }
-
-        $supName = (string)($old['supplier_name'] ?? '');
-        $supId = $old['supplier_id'];
-        if ($isAdmin && array_key_exists('supplierId', $d)) {
-            $rawSup = $d['supplierId'];
-            if ($rawSup === '__keep_unlinked__') {
-                // Keep existing unlinked supplier name intact
-            } else {
-                $supId = ($rawSup === '' || $rawSup === null) ? null : (string)$rawSup;
-                if ($supId !== null) {
-                    $ss = $conn->prepare("SELECT name FROM suppliers WHERE id = ? LIMIT 1");
-                    $ss->bind_param('s', $supId);
-                    $ss->execute();
-                    $sr = $ss->get_result()->fetch_assoc();
-                    $ss->close();
-                    if (!$sr) { $conn->rollback(); bx_fail(422, 'Selected supplier does not exist.'); }
-                    $supName = $sr['name'];
-                } else {
-                    $supName = '';
-                }
-            }
-        }
-
-        $expRaw = array_key_exists('expirationDate', $d) ? $d['expirationDate'] : $old['expiration_date'];
         $exp = batchNormalizeDate($expRaw);
-        if ($expRaw !== null && trim((string)$expRaw) !== '' && $exp === null) { $conn->rollback(); bx_fail(422, 'Invalid expiration date.'); }
+        if ($expRaw !== null && trim((string)$expRaw) !== '' && $exp === null) {
+            $conn->rollback();
+            bx_fail(422, 'Invalid expiration date.');
+        }
 
-        $recvRaw = $isAdmin ? ($d['dateReceived'] ?? $old['date_received']) : $old['date_received'];
-        $recvNorm = batchNormalizeDate($recvRaw);
-        if ($recvNorm === null) { $conn->rollback(); bx_fail(422, 'Invalid date received.'); }
-        if ($isAdmin && $recvNorm > date('Y-m-d')) { $conn->rollback(); bx_fail(422, 'Date received cannot be in the future.'); }
         $oldRecvDate = substr((string)$old['date_received'], 0, 10);
-        $oldRecvTime = strlen((string)$old['date_received']) >= 19 ? substr((string)$old['date_received'], 11, 8) : '00:00:00';
-        $recv = ($recvNorm === $oldRecvDate) ? (string)$old['date_received'] : ($recvNorm . ' ' . $oldRecvTime);
-
-        if ($exp !== null && $exp < $recvNorm) {
+        if ($exp !== null && $oldRecvDate !== '' && $exp < $oldRecvDate) {
             $conn->rollback();
             bx_fail(422, 'Expiration date cannot be earlier than the date received.');
         }
 
-        $cost = $old['unit_cost'] !== null ? round((float)$old['unit_cost'], 2) : null;
-        if ($isAdmin && array_key_exists('unitCost', $d)) {
-            $costRaw = $d['unitCost'];
-            if ($costRaw === null || $costRaw === '') {
-                $cost = null;
-            } else {
-                if (!is_numeric($costRaw) || (float)$costRaw < 0) { $conn->rollback(); bx_fail(422, 'Unit cost must be a non-negative number.'); }
-                $cost = round((float)$costRaw, 2);
-            }
+        $oldExpVal = $old['expiration_date'] ?: null;
+        if ($oldExpVal === $exp) {
+            $conn->rollback();
+            echo json_encode(['success' => true, 'unchanged' => true]);
+            exit;
         }
 
-        $notesRaw = array_key_exists('notes', $d) ? trim((string)$d['notes']) : (string)($old['notes'] ?? '');
-        $notes = ($notesRaw === '') ? null : mb_substr($notesRaw, 0, 500);
-
-        $changes = [];
-        $cmp = [
-            'Batch Number' => [$old['batch_number'], $number],
-            'Supplier' => [(string)($old['supplier_name'] ?: '—'), (string)($supName ?: '—')],
-            'Date Received' => [$oldRecvDate, $recvNorm],
-            'Expiration Date' => [$old['expiration_date'] ?: 'Not specified', $exp ?: 'Not specified'],
-            'Unit Cost' => [$old['unit_cost'] !== null ? number_format((float)$old['unit_cost'], 2) : '—', $cost !== null ? number_format($cost, 2) : '—'],
-            'Batch Notes' => [(string)($old['notes'] ?? ''), (string)($notes ?? '')],
-        ];
-        foreach ($cmp as $label => [$a, $b]) if ((string)$a !== (string)$b) $changes[$label] = [$a, $b];
-        if (!$changes) { $conn->rollback(); echo json_encode(['success' => true, 'unchanged' => true]); exit; }
-
+        $oldExpLabel = $oldExpVal ?: 'Not specified';
+        $newExpLabel = $exp ?: 'Not specified';
         $by = (string)$actor['name'];
-        $up = $conn->prepare("UPDATE inventory_batches SET batch_number = ?, supplier_id = ?, supplier_name = ?, date_received = ?, expiration_date = ?, unit_cost = ?, notes = ?, updated_by = ? WHERE batch_id = ?");
-        $up->bind_param('sssssdsss', $number, $supId, $supName, $recv, $exp, $cost, $notes, $by, $bid);
+        $number = (string)$old['batch_number'];
+
+        // Database-level protection: ONLY update expiration_date and updated_by
+        $up = $conn->prepare("UPDATE inventory_batches SET expiration_date = ?, updated_by = ? WHERE batch_id = ?");
+        $up->bind_param('sss', $exp, $by, $bid);
         $up->execute();
         $up->close();
 
-        $parts = [];
-        foreach ($changes as $k => [$a, $b]) $parts[] = "$k: $a → $b";
-        $summaryTxt = implode('; ', $parts);
+        $summaryTxt = "Expiration Date: {$oldExpLabel} → {$newExpLabel}";
         batchLog($conn, $bid, null, 'edit', 0, (int)$old['remaining_qty'], null, $summaryTxt . ' — Reason: ' . $reason, $by);
-        foreach ($changes as $fieldLabel => [$oldVal, $newVal]) {
-            bx_audit($conn, $actor, 'BATCH_EDIT', "Edited batch {$number} ({$old['size_id']}) — {$fieldLabel}: {$oldVal} → {$newVal}",
-                $old['product_id'], $number, $fieldLabel, (string)$oldVal, (string)$newVal, $number, $reason);
-        }
+        bx_audit(
+            $conn,
+            $actor,
+            'BATCH_EDIT',
+            "Edited expiration date for batch {$number} ({$old['size_id']}) — {$summaryTxt}",
+            $old['product_id'],
+            $number,
+            'Expiration Date',
+            $oldExpLabel,
+            $newExpLabel,
+            $number,
+            $reason
+        );
         $conn->commit();
 
         // Reload shaped batch + summary so UI and alerts reflect recalculated expiration status immediately

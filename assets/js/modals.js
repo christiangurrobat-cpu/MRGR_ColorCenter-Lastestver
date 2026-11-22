@@ -14,7 +14,7 @@ function openModal(title, bodyHtml, footHtml, size) {
     <div class="modal-foot">${footHtml || `<button class="btn secondary" onclick="closeModal()">Close</button>`}</div>
   </div>
 </div>`;
-  if (document.getElementById('mv-type') && typeof toggleMovementFields === 'function') toggleMovementFields();
+  if (root.querySelector('#mv-type') && typeof toggleMovementFields === 'function') toggleMovementFields();
 }
 function closeModal() {
   if (typeof posConfirmPromiseResolve === 'function') {

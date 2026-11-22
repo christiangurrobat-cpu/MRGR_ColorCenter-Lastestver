@@ -24,6 +24,9 @@ try { batchEnsureSchema($conn); } catch (Throwable $e) { error_log('Batch schema
 require_once __DIR__ . '/color_library_lib.php';
 try { colorLibraryEnsureSchema($conn); } catch (Throwable $e) { error_log('Color Library schema: ' . $e->getMessage()); }
 
+require_once __DIR__ . '/color_inventory_sync.php';
+try { colorSyncEnsureSchema($conn); } catch (Throwable $e) { error_log('Color Sync schema: ' . $e->getMessage()); }
+
 // Schema migration helper: ensures schema consistency without running 30+ redundant DDL queries on every request
 function ensureDBSchemaMigrated($conn, $force = false) {
     $flagFile = __DIR__ . '/.schema_migrated';
@@ -981,7 +984,8 @@ if ($action === 'color_library_delete' && ($_SERVER['REQUEST_METHOD'] ?? '') ===
         $conn,
         (string)($payload['id'] ?? ''),
         $actingUser,
-        (string)($payload['reassignToColorId'] ?? '')
+        (string)($payload['reassignToColorId'] ?? ''),
+        (string)($payload['mode'] ?? 'delete')
     );
     http_response_code($res['status'] ?? 200);
     unset($res['status']);
@@ -1132,8 +1136,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
                 'color' => $r['color'],
                 'colorId' => $r['color_id'] ?? null,
                 'color_id' => $r['color_id'] ?? null,
+                'colorClassification' => $r['color_classification'] ?? null,
+                'color_classification' => $r['color_classification'] ?? null,
                 'colorHex' => $r['color_hex'] ?? null,
                 'color_hex' => $r['color_hex'] ?? null,
+                'isColorPigment' => !empty($r['is_color_pigment']),
+                'is_color_pigment' => !empty($r['is_color_pigment']) ? 1 : 0,
                 'supplierId' => $r['supplier_id'] ?? null,
                 'supplier_id' => $r['supplier_id'] ?? null,
                 'price' => (float)$r['price'],
@@ -1371,6 +1379,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
                     'orderDate' => $orderDate ? $orderDate->format(DateTime::ATOM) : $r['order_date'],
                     'expectedDate' => $r['expected_date'] ?? null,
                     'status' => $r['status'],
+                    'receivingStage' => $r['receiving_stage'] ?? ($r['status'] === 'received' ? 'completed' : 'open'),
                     'totalAmount' => (float)$r['total_amount'],
                     'items' => $items,
                     'itemsJson' => (is_string($rawItemsJson) && !empty($rawItemsJson)) ? $rawItemsJson : json_encode($items),
@@ -1525,10 +1534,14 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             }
         }
 
+        // Track Inventory -> Color Library sync results for response
+        $syncedProductsMap = [];
+        $didColorSync = false;
+
         // 1. Sync Products
         if (!empty($dbData['products']) && is_array($dbData['products'])) {
-            $stmt = $conn->prepare("INSERT INTO products (id, product_id, product_name, name, brand, type, category, tax_classification, color, color_id, color_hex, supplier_id, price, recent_price, pending_price, price_history, stock, can_stock, opened_stock, opened_can_size, opened_by_size, sizes, pending_sizes, pending_edit, threshold, threshold_by_size, status, deactivation_reason, deactivated_at, deactivated_by, updated_by, discontinue_reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            $stmt = $conn->prepare("INSERT INTO products (id, product_id, product_name, name, brand, type, category, tax_classification, color, color_id, color_classification, color_hex, is_color_pigment, supplier_id, price, recent_price, pending_price, price_history, stock, can_stock, opened_stock, opened_can_size, opened_by_size, sizes, pending_sizes, pending_edit, threshold, threshold_by_size, status, deactivation_reason, deactivated_at, deactivated_by, updated_by, discontinue_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
                     product_id = VALUES(product_id),
                     product_name = VALUES(product_name),
@@ -1539,7 +1552,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     tax_classification = VALUES(tax_classification),
                     color = VALUES(color),
                     color_id = VALUES(color_id),
+                    color_classification = VALUES(color_classification),
                     color_hex = VALUES(color_hex),
+                    is_color_pigment = VALUES(is_color_pigment),
                     supplier_id = VALUES(supplier_id),
                     price = VALUES(price),
                     recent_price = VALUES(recent_price),
@@ -1600,7 +1615,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 
             // Pre-fetch all existing products to detect and skip unchanged products & enforce RBAC
             $existingProdMap = [];
-            $epRes = $conn->query("SELECT id, product_id, product_name, name, brand, type, category, tax_classification, color, color_id, color_hex, supplier_id, price, recent_price, pending_price, price_history, stock, can_stock, opened_stock, opened_can_size, opened_by_size, sizes, pending_sizes, pending_edit, threshold, threshold_by_size, status, deactivation_reason, deactivated_at, deactivated_by, updated_by, discontinue_reason, updated_at FROM products");
+            $epRes = $conn->query("SELECT id, product_id, product_name, name, brand, type, category, tax_classification, color, color_id, color_classification, color_hex, is_color_pigment, supplier_id, price, recent_price, pending_price, price_history, stock, can_stock, opened_stock, opened_can_size, opened_by_size, sizes, pending_sizes, pending_edit, threshold, threshold_by_size, status, deactivation_reason, deactivated_at, deactivated_by, updated_by, discontinue_reason, updated_at FROM products");
             if ($epRes) {
                 while ($epRow = $epRes->fetch_assoc()) {
                     $pidKey = (string)$epRow['id'];
@@ -1625,7 +1640,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     $pTaxClass = (string)($p['taxClassification'] ?? ($p['tax_classification'] ?? 'vatable'));
                     $pColor = (string)($p['color'] ?? '-');
                     $pColorId = !empty($p['colorId']) ? (string)$p['colorId'] : (!empty($p['color_id']) ? (string)$p['color_id'] : '');
+                    $pColorCls = !empty($p['colorClassification']) ? (string)$p['colorClassification'] : (!empty($p['color_classification']) ? (string)$p['color_classification'] : '');
                     $pColorHex = !empty($p['colorHex']) ? (string)$p['colorHex'] : (!empty($p['color_hex']) ? (string)$p['color_hex'] : '');
+                    $pIsPigment = (!empty($p['isColorPigment']) || !empty($p['is_color_pigment']) || colorSyncIsPigmentCategory($pCategory) || colorSyncIsPigmentCategory($pType)) ? 1 : 0;
                     $pSupplierId = !empty($p['supplierId']) ? (string)$p['supplierId'] : (!empty($p['supplier_id']) ? (string)$p['supplier_id'] : '');
                     $pDeactReason = !empty($p['deactivationReason']) ? (string)$p['deactivationReason'] : '';
                     $pDiscReason = !empty($p['discontinueReason']) ? (string)$p['discontinueReason'] : '';
@@ -1663,7 +1680,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                         (string)($existingP['tax_classification'] ?? 'vatable') === $pTaxClass &&
                         (string)$existingP['color'] === $pColor &&
                         (string)($existingP['color_id'] ?? '') === $pColorId &&
+                        (string)($existingP['color_classification'] ?? '') === $pColorCls &&
                         (string)($existingP['color_hex'] ?? '') === $pColorHex &&
+                        (int)($existingP['is_color_pigment'] ?? 0) === $pIsPigment &&
                         (string)($existingP['supplier_id'] ?? '') === $pSupplierId &&
                         (string)($existingP['deactivation_reason'] ?? '') === $pDeactReason &&
                         (string)($existingP['discontinue_reason'] ?? '') === $pDiscReason &&
@@ -1688,7 +1707,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 $category = (string)($p['category'] ?? $type);
                 $color = (string)($p['color'] ?? '-');
                 $colorId = !empty($p['colorId']) ? (string)$p['colorId'] : (!empty($p['color_id']) ? (string)$p['color_id'] : null);
+                $colorClassification = !empty($p['colorClassification']) ? (string)$p['colorClassification'] : (!empty($p['color_classification']) ? (string)$p['color_classification'] : null);
                 $colorHex = !empty($p['colorHex']) ? (string)$p['colorHex'] : (!empty($p['color_hex']) ? (string)$p['color_hex'] : null);
+                $isColorPigment = (!empty($p['isColorPigment']) || !empty($p['is_color_pigment']) || colorSyncIsPigmentCategory($category) || colorSyncIsPigmentCategory($type)) ? 1 : 0;
+                if (colorSyncIsNonColorCategory($category) || colorSyncIsNonColorCategory($type)) {
+                    $isColorPigment = 0;
+                }
                 $supplierId = !empty($p['supplierId']) ? (string)$p['supplierId'] : (!empty($p['supplier_id']) ? (string)$p['supplier_id'] : null);
                 $price = (float)($p['price'] ?? 0);
                 $recentPrice = (isset($p['recentPrice']) && $p['recentPrice'] !== null && $p['recentPrice'] !== '') ? (float)$p['recentPrice'] : null;
@@ -1743,7 +1767,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     $taxClassification = (string)($existingP['tax_classification'] ?: 'vatable');
                     $color = (string)$existingP['color'];
                     $colorId = $existingP['color_id'];
+                    $colorClassification = $existingP['color_classification'] ?? null;
                     $colorHex = $existingP['color_hex'];
+                    $isColorPigment = !empty($existingP['is_color_pigment']) ? 1 : 0;
                     $supplierId = $existingP['supplier_id'];
                     $price = (float)$existingP['price'];
                     $recentPrice = $existingP['recent_price'] !== null ? (float)$existingP['recent_price'] : null;
@@ -1777,7 +1803,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                         $taxClassification = (string)($existingP['tax_classification'] ?: 'vatable');
                         $color = (string)$existingP['color'];
                         $colorId = $existingP['color_id'];
+                        $colorClassification = $existingP['color_classification'] ?? null;
                         $colorHex = $existingP['color_hex'];
+                        $isColorPigment = !empty($existingP['is_color_pigment']) ? 1 : 0;
                         $price = (float)$existingP['price'];
                         $recentPrice = $existingP['recent_price'] !== null ? (float)$existingP['recent_price'] : null;
                         $priceHistoryJson = (string)($existingP['price_history'] ?? '[]');
@@ -1789,8 +1817,36 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     }
                 }
 
-                $stmt->bind_param("ssssssssssssdddsdsdissssdsssssss", $id, $productId, $productName, $name, $brand, $type, $category, $taxClassification, $color, $colorId, $colorHex, $supplierId, $price, $recentPrice, $pendingPrice, $priceHistoryJson, $stock, $canStock, $openedStock, $openedCanSize, $openedBySize, $sizesJson, $pendingSizesJson, $pendingEditJson, $threshold, $thresholdBySize, $status, $deactReason, $deactAt, $deactBy, $updatedBy, $discReason);
+                $stmt->bind_param("ssssssssssssisdddsdsdissssdsssssss", $id, $productId, $productName, $name, $brand, $type, $category, $taxClassification, $color, $colorId, $colorClassification, $colorHex, $isColorPigment, $supplierId, $price, $recentPrice, $pendingPrice, $priceHistoryJson, $stock, $canStock, $openedStock, $openedCanSize, $openedBySize, $sizesJson, $pendingSizesJson, $pendingEditJson, $threshold, $thresholdBySize, $status, $deactReason, $deactAt, $deactBy, $updatedBy, $discReason);
                 $stmt->execute();
+
+                // Genuine DB-level Inventory -> Color Library two-way synchronization (Admin only, pigment/colorant products only)
+                if ($actingRole === 'admin') {
+                    $syncInput = [
+                        'id' => $id,
+                        'productId' => $productId,
+                        'name' => $name,
+                        'type' => $type,
+                        'category' => $category,
+                        'color' => $color,
+                        'colorId' => $colorId,
+                        'colorClassification' => $colorClassification,
+                        'colorHex' => $colorHex,
+                        'isColorPigment' => $isColorPigment,
+                    ];
+                    $syncRes = colorSyncFromInventoryProduct($conn, $syncInput, $existingP, $actingUser);
+                    if (!empty($syncRes['synced'])) {
+                        $didColorSync = true;
+                        $syncedProductsMap[$id] = [
+                            'colorId' => $syncRes['colorId'],
+                            'color' => $syncRes['colorName'],
+                            'colorHex' => $syncRes['colorHex'],
+                            'colorClassification' => $syncRes['colorClassification'],
+                            'isColorPigment' => !empty($syncRes['isColorPigment']),
+                            'syncAction' => $syncRes['action'],
+                        ];
+                    }
+                }
 
                 // Sync sizes to product_sizes and inventory
                 $variantsToSync = [];
@@ -2670,7 +2726,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         }
 
         $conn->commit();
-        echo json_encode(['success' => true]);
+        $respPayload = ['success' => true];
+        if ($didColorSync) {
+            $clAllPost = colorLibraryFetchAll($conn);
+            $respPayload['colorLibrary'] = $clAllPost['colors'];
+            $respPayload['syncedProducts'] = $syncedProductsMap;
+        }
+        echo json_encode($respPayload);
     } catch (Throwable $e) {
         $conn->rollback();
         http_response_code(500);
