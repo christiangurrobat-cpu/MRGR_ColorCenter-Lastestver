@@ -7,6 +7,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 require_once __DIR__ . '/../config/database.php';
+mrgrEnableGzip();
 
 try {
     $conn = getDBConnection();
@@ -85,6 +86,23 @@ function ensureDBSchemaMigrated($conn, $force = false) {
         $chkDiscountPct = $conn->query("SHOW COLUMNS FROM sales LIKE 'discount_pct'");
         if ($chkDiscountPct && $chkDiscountPct->num_rows === 0) {
             $conn->query("ALTER TABLE sales ADD COLUMN discount_pct DECIMAL(5,2) NOT NULL DEFAULT 0.00 AFTER subtotal");
+        }
+        // Auto-migrate: Admin-designated Base Paint flag & compatibility columns on products (for Color Mixing Studio)
+        $chkIsBasePaint = $conn->query("SHOW COLUMNS FROM products LIKE 'is_base_paint'");
+        if ($chkIsBasePaint && $chkIsBasePaint->num_rows === 0) {
+            $conn->query("ALTER TABLE products ADD COLUMN is_base_paint TINYINT(1) NOT NULL DEFAULT 0 AFTER is_color_pigment");
+        }
+        $chkPaintSystem = $conn->query("SHOW COLUMNS FROM products LIKE 'paint_system'");
+        if ($chkPaintSystem && $chkPaintSystem->num_rows === 0) {
+            $conn->query("ALTER TABLE products ADD COLUMN paint_system VARCHAR(40) NOT NULL DEFAULT 'unverified' AFTER is_base_paint");
+        }
+        $chkSpecPig = $conn->query("SHOW COLUMNS FROM products LIKE 'is_specialty_pigment'");
+        if ($chkSpecPig && $chkSpecPig->num_rows === 0) {
+            $conn->query("ALTER TABLE products ADD COLUMN is_specialty_pigment TINYINT(1) NOT NULL DEFAULT 0 AFTER paint_system");
+        }
+        $chkAdminRev = $conn->query("SHOW COLUMNS FROM products LIKE 'admin_review_note'");
+        if ($chkAdminRev && $chkAdminRev->num_rows === 0) {
+            $conn->query("ALTER TABLE products ADD COLUMN admin_review_note VARCHAR(255) NULL DEFAULT NULL AFTER is_specialty_pigment");
         }
         $chkDiscountAmt = $conn->query("SHOW COLUMNS FROM sales LIKE 'discount_amount'");
         if ($chkDiscountAmt && $chkDiscountAmt->num_rows === 0) {
@@ -600,6 +618,7 @@ function getProductBackendDependencies($conn, $productId, $internalId) {
 
 // RBAC: Identify authenticated acting user strictly from PHP session
 $sessionUserId = $_SESSION['user_id'] ?? null;
+session_write_close();
 
 $actingUser = null;
 $actingUserId = null;
@@ -680,13 +699,13 @@ if ($action === 'sales_history_summary') {
     $params = [];
     $types = '';
     if ($from !== '') {
-        $where[] = "DATE(date) >= ?";
-        $params[] = $from;
+        $where[] = "date >= ?";
+        $params[] = strlen($from) === 10 ? ($from . ' 00:00:00') : $from;
         $types .= 's';
     }
     if ($to !== '') {
-        $where[] = "DATE(date) <= ?";
-        $params[] = $to;
+        $where[] = "date <= ?";
+        $params[] = strlen($to) === 10 ? ($to . ' 23:59:59') : $to;
         $types .= 's';
     }
     if ($status !== 'all' && $status !== '') {
@@ -744,6 +763,53 @@ if ($action === 'save_vat_settings') {
     $setStmt->close();
     
     echo json_encode(['success' => true, 'vatSettings' => $cleanSettings]);
+    exit;
+}
+
+// POS Automatic Promo Discount Configuration (Admin Only)
+if ($action === 'save_promo_discount_settings') {
+    $rawInput = file_get_contents('php://input');
+    $payload = json_decode($rawInput, true);
+
+    if ($actingRole !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Access denied: Only Administrators can configure POS promo discount settings.']);
+        exit;
+    }
+    $ps = $payload['promoDiscountSettings'] ?? $payload;
+    if (!$ps || !is_array($ps)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Invalid promo discount settings payload.']);
+        exit;
+    }
+    $enabled = isset($ps['enabled']) ? (bool)$ps['enabled'] : true;
+    $minAmount = isset($ps['minAmount']) ? round((float)$ps['minAmount'], 2) : 2500.00;
+    $discountPct = isset($ps['discountPct']) ? round((float)$ps['discountPct'], 2) : 10.00;
+
+    if ($minAmount < 0) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Minimum purchase amount cannot be negative.']);
+        exit;
+    }
+    if ($discountPct < 0 || $discountPct > 100) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Discount percentage must be between 0 and 100.']);
+        exit;
+    }
+
+    $cleanPromo = [
+        'enabled' => $enabled,
+        'minAmount' => $minAmount,
+        'discountPct' => $discountPct
+    ];
+
+    $setStmt = $conn->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('pos_promo_discount', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)");
+    $valJson = json_encode($cleanPromo);
+    $setStmt->bind_param("s", $valJson);
+    $setStmt->execute();
+    $setStmt->close();
+
+    echo json_encode(['success' => true, 'promoDiscountSettings' => $cleanPromo]);
     exit;
 }
 
@@ -1093,11 +1159,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
             $pid = $r['id'];
             $variants = $sizesByProd[$pid] ?? ($sizesByProd[$r['product_id']] ?? []);
 
-            // Synchronize legacy structures from variants if available
-            $canStockObj = (!empty($r['can_stock']) && is_array(json_decode($r['can_stock'], true))) ? json_decode($r['can_stock'], true) : [];
-            $sizesList = (!empty($r['sizes']) && is_array(json_decode($r['sizes'], true))) ? json_decode($r['sizes'], true) : [];
-            $thresholdObj = (!empty($r['threshold_by_size']) && is_array(json_decode($r['threshold_by_size'], true))) ? json_decode($r['threshold_by_size'], true) : [];
-            $openedObj = (!empty($r['opened_by_size']) && is_array(json_decode($r['opened_by_size'], true))) ? json_decode($r['opened_by_size'], true) : [];
+            // Synchronize legacy structures from variants if available (avoid redundant double json_decode)
+            $openedObj = !empty($r['opened_by_size']) ? (json_decode($r['opened_by_size'], true) ?: []) : [];
+            if (!is_array($openedObj)) $openedObj = [];
 
             if (!empty($variants)) {
                 $sizesList = [];
@@ -1114,7 +1178,18 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
                     }
                 }
                 sort($sizesList);
+            } else {
+                $canStockObj = !empty($r['can_stock']) ? (json_decode($r['can_stock'], true) ?: []) : [];
+                if (!is_array($canStockObj)) $canStockObj = [];
+                $sizesList = !empty($r['sizes']) ? (json_decode($r['sizes'], true) ?: []) : [];
+                if (!is_array($sizesList)) $sizesList = [];
+                $thresholdObj = !empty($r['threshold_by_size']) ? (json_decode($r['threshold_by_size'], true) ?: []) : [];
+                if (!is_array($thresholdObj)) $thresholdObj = [];
             }
+
+            $priceHistDecoded = !empty($r['price_history']) ? json_decode($r['price_history'], true) : null;
+            $pendingSizesDecoded = !empty($r['pending_sizes']) ? json_decode($r['pending_sizes'], true) : null;
+            $pendingEditDecoded = !empty($r['pending_edit']) ? json_decode($r['pending_edit'], true) : null;
 
             $prodId = !empty($r['product_id']) ? $r['product_id'] : $r['id'];
             $prodName = !empty($r['product_name']) ? $r['product_name'] : $r['name'];
@@ -1142,20 +1217,28 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
                 'color_hex' => $r['color_hex'] ?? null,
                 'isColorPigment' => !empty($r['is_color_pigment']),
                 'is_color_pigment' => !empty($r['is_color_pigment']) ? 1 : 0,
+                'isBasePaint' => !empty($r['is_base_paint']),
+                'is_base_paint' => !empty($r['is_base_paint']) ? 1 : 0,
+                'paintSystem' => !empty($r['paint_system']) ? (string)$r['paint_system'] : 'unverified',
+                'paint_system' => !empty($r['paint_system']) ? (string)$r['paint_system'] : 'unverified',
+                'isSpecialtyPigment' => !empty($r['is_specialty_pigment']) || (($r['color_classification'] ?? '') === 'Specialty Colors'),
+                'is_specialty_pigment' => (!empty($r['is_specialty_pigment']) || (($r['color_classification'] ?? '') === 'Specialty Colors')) ? 1 : 0,
+                'adminReviewNote' => $r['admin_review_note'] ?? null,
+                'admin_review_note' => $r['admin_review_note'] ?? null,
                 'supplierId' => $r['supplier_id'] ?? null,
                 'supplier_id' => $r['supplier_id'] ?? null,
                 'price' => (float)$r['price'],
                 'recentPrice' => (isset($r['recent_price']) && $r['recent_price'] !== null && $r['recent_price'] !== '') ? (float)$r['recent_price'] : null,
                 'pendingPrice' => (isset($r['pending_price']) && $r['pending_price'] !== null && $r['pending_price'] !== '') ? (float)$r['pending_price'] : null,
-                'priceHistory' => (!empty($r['price_history']) && is_array(json_decode($r['price_history'], true))) ? json_decode($r['price_history'], true) : [],
+                'priceHistory' => is_array($priceHistDecoded) ? $priceHistDecoded : [],
                 'stock' => (float)$r['stock'],
                 'canStock' => !empty($canStockObj) ? $canStockObj : new stdClass(),
                 'openedStock' => (float)($r['opened_stock'] ?? 0),
                 'openedCanSize' => (int)($r['opened_can_size'] ?? 0),
                 'sizes' => $sizesList,
                 'sizesData' => $variants,
-                'pendingSizes' => (!empty($r['pending_sizes']) && is_array(json_decode($r['pending_sizes'], true))) ? json_decode($r['pending_sizes'], true) : [],
-                'pendingEdit' => (!empty($r['pending_edit']) && is_array(json_decode($r['pending_edit'], true))) ? json_decode($r['pending_edit'], true) : null,
+                'pendingSizes' => is_array($pendingSizesDecoded) ? $pendingSizesDecoded : [],
+                'pendingEdit' => is_array($pendingEditDecoded) ? $pendingEditDecoded : null,
                 'openedBySize' => !empty($openedObj) ? $openedObj : new stdClass(),
                 'threshold' => (float)$r['threshold'],
                 'thresholdBySize' => !empty($thresholdObj) ? $thresholdObj : new stdClass(),
@@ -1317,18 +1400,21 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
             }
         }
 
-        // Movements
+        // Movements (single aggregated LEFT JOIN replaces per-row correlated subquery)
         $movements = [];
-        $res = $conn->query("SELECT m.*, p.name AS current_product_name,
-                (SELECT GROUP_CONCAT(DISTINCT ib.batch_number ORDER BY bm.id ASC SEPARATOR ', ')
-                 FROM batch_movements bm
-                 JOIN inventory_batches ib ON ib.batch_id = bm.batch_id
-                 WHERE bm.movement_id = m.id) AS batch_numbers
+        $manilaTz = new DateTimeZone('Asia/Manila');
+        $res = $conn->query("SELECT m.*, p.name AS current_product_name, bm_agg.batch_numbers
             FROM movements m
             LEFT JOIN products p ON p.id = m.product_id
+            LEFT JOIN (
+                SELECT bm.movement_id, GROUP_CONCAT(DISTINCT ib.batch_number ORDER BY bm.id ASC SEPARATOR ', ') AS batch_numbers
+                FROM batch_movements bm
+                JOIN inventory_batches ib ON ib.batch_id = bm.batch_id
+                GROUP BY bm.movement_id
+            ) bm_agg ON bm_agg.movement_id = m.id
             ORDER BY m.date DESC");
         while ($r = $res->fetch_assoc()) {
-            $movementDate = DateTime::createFromFormat('Y-m-d H:i:s', $r['date'], new DateTimeZone('Asia/Manila'));
+            $movementDate = DateTime::createFromFormat('Y-m-d H:i:s', $r['date'], $manilaTz);
             $storedProductName = trim((string)($r['product_name'] ?? ''));
             $productName = ($storedProductName === '' || $storedProductName === '0')
                 ? (string)($r['current_product_name'] ?? '')
@@ -1419,9 +1505,18 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
             }
         }
 
-        // Void Requests
+        // Void Requests (Cashiers see only their own void requests)
         $voidRequests = [];
-        $vres = $conn->query("SELECT * FROM void_requests ORDER BY date DESC");
+        if ($actingRole === 'cashier') {
+            $vStmt = $conn->prepare("SELECT * FROM void_requests WHERE cashier_id = ? OR ((cashier_id IS NULL OR cashier_id = '') AND LOWER(TRIM(cashier_name)) = LOWER(TRIM(?))) ORDER BY date DESC");
+            $cNameForVr = (string)($actingUser['name'] ?? '');
+            $vStmt->bind_param("ss", $actingUserId, $cNameForVr);
+            $vStmt->execute();
+            $vres = $vStmt->get_result();
+        } else {
+            $vStmt = null;
+            $vres = $conn->query("SELECT * FROM void_requests ORDER BY date DESC");
+        }
         if ($vres) {
             while ($vr = $vres->fetch_assoc()) {
                 $vitems = [];
@@ -1453,11 +1548,22 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
 
         $clAll = colorLibraryFetchAll($conn);
 
+        $promoDiscountSettings = ['enabled' => true, 'minAmount' => 2500.0, 'discountPct' => 10.0];
+        if (isset($settings['pos_promo_discount']) && is_array($settings['pos_promo_discount'])) {
+            $pds = $settings['pos_promo_discount'];
+            $promoDiscountSettings = [
+                'enabled' => isset($pds['enabled']) ? (bool)$pds['enabled'] : true,
+                'minAmount' => isset($pds['minAmount']) ? max(0.0, round((float)$pds['minAmount'], 2)) : 2500.0,
+                'discountPct' => isset($pds['discountPct']) ? min(100.0, max(0.0, round((float)$pds['discountPct'], 2))) : 10.0
+            ];
+        }
+
         echo json_encode([
             'success' => true,
             'db' => [
                 'settings' => $settings,
                 'vatSettings' => $vatSettings,
+                'promoDiscountSettings' => $promoDiscountSettings,
                 'colorLibrary' => $clAll['colors'],
                 'colorFormulas' => $clAll['formulas'],
                 'products' => $products,
@@ -1525,14 +1631,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             }
         }
 
-        // Pre-fetch existing product statuses for RBAC
+        // Pre-fetch existing product statuses (populated below from single products query to avoid duplicate scan)
         $existingProdStatuses = [];
-        $epRes = $conn->query("SELECT id, status FROM products");
-        if ($epRes) {
-            while ($epRow = $epRes->fetch_assoc()) {
-                $existingProdStatuses[$epRow['id']] = $epRow['status'];
-            }
-        }
 
         // Track Inventory -> Color Library sync results for response
         $syncedProductsMap = [];
@@ -1540,8 +1640,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 
         // 1. Sync Products
         if (!empty($dbData['products']) && is_array($dbData['products'])) {
-            $stmt = $conn->prepare("INSERT INTO products (id, product_id, product_name, name, brand, type, category, tax_classification, color, color_id, color_classification, color_hex, is_color_pigment, supplier_id, price, recent_price, pending_price, price_history, stock, can_stock, opened_stock, opened_can_size, opened_by_size, sizes, pending_sizes, pending_edit, threshold, threshold_by_size, status, deactivation_reason, deactivated_at, deactivated_by, updated_by, discontinue_reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            $stmt = $conn->prepare("INSERT INTO products (id, product_id, product_name, name, brand, type, category, tax_classification, color, color_id, color_classification, color_hex, is_color_pigment, is_base_paint, paint_system, is_specialty_pigment, admin_review_note, supplier_id, price, recent_price, pending_price, price_history, stock, can_stock, opened_stock, opened_can_size, opened_by_size, sizes, pending_sizes, pending_edit, threshold, threshold_by_size, status, deactivation_reason, deactivated_at, deactivated_by, updated_by, discontinue_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
                     product_id = VALUES(product_id),
                     product_name = VALUES(product_name),
@@ -1555,6 +1655,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     color_classification = VALUES(color_classification),
                     color_hex = VALUES(color_hex),
                     is_color_pigment = VALUES(is_color_pigment),
+                    is_base_paint = VALUES(is_base_paint),
+                    paint_system = VALUES(paint_system),
+                    is_specialty_pigment = VALUES(is_specialty_pigment),
+                    admin_review_note = VALUES(admin_review_note),
                     supplier_id = VALUES(supplier_id),
                     price = VALUES(price),
                     recent_price = VALUES(recent_price),
@@ -1596,30 +1700,35 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             $existingSizesRes = $conn->query("SELECT size_id, product_id, container_size, price_per_liter, price_per_can, minimum_stock, is_active FROM product_sizes");
             $existingSizeMap = []; // [prodId_containerSize] => size_id
             $existingSizeMeta = []; // [size_id] => row
+            $existingSizesByProd = []; // [product_id] => [size_id, ...]
             $maxSizeNum = 0;
             while ($esRow = $existingSizesRes->fetch_assoc()) {
                 $existingSizeMap[$esRow['product_id'] . '_' . (float)$esRow['container_size']] = $esRow['size_id'];
                 $existingSizeMeta[$esRow['size_id']] = $esRow;
+                $existingSizesByProd[$esRow['product_id']][] = $esRow['size_id'];
                 $sNum = (int)str_replace('SZ-', '', $esRow['size_id']);
                 if ($sNum > $maxSizeNum) $maxSizeNum = $sNum;
             }
 
-            $existingInvRes = $conn->query("SELECT inventory_id, size_id FROM inventory");
+            $existingInvRes = $conn->query("SELECT inventory_id, size_id, sealed_quantity, opened_quantity, remaining_volume FROM inventory");
             $existingInvMap = []; // [size_id] => inventory_id
+            $existingInvMeta = []; // [size_id] => row
             $maxInvNum = 0;
             while ($eiRow = $existingInvRes->fetch_assoc()) {
                 $existingInvMap[$eiRow['size_id']] = $eiRow['inventory_id'];
+                $existingInvMeta[$eiRow['size_id']] = $eiRow;
                 $iNum = (int)str_replace('INV-', '', $eiRow['inventory_id']);
                 if ($iNum > $maxInvNum) $maxInvNum = $iNum;
             }
 
             // Pre-fetch all existing products to detect and skip unchanged products & enforce RBAC
             $existingProdMap = [];
-            $epRes = $conn->query("SELECT id, product_id, product_name, name, brand, type, category, tax_classification, color, color_id, color_classification, color_hex, is_color_pigment, supplier_id, price, recent_price, pending_price, price_history, stock, can_stock, opened_stock, opened_can_size, opened_by_size, sizes, pending_sizes, pending_edit, threshold, threshold_by_size, status, deactivation_reason, deactivated_at, deactivated_by, updated_by, discontinue_reason, updated_at FROM products");
+            $epRes = $conn->query("SELECT id, product_id, product_name, name, brand, type, category, tax_classification, color, color_id, color_classification, color_hex, is_color_pigment, is_base_paint, paint_system, is_specialty_pigment, admin_review_note, supplier_id, price, recent_price, pending_price, price_history, stock, can_stock, opened_stock, opened_can_size, opened_by_size, sizes, pending_sizes, pending_edit, threshold, threshold_by_size, status, deactivation_reason, deactivated_at, deactivated_by, updated_by, discontinue_reason, updated_at FROM products");
             if ($epRes) {
                 while ($epRow = $epRes->fetch_assoc()) {
                     $pidKey = (string)$epRow['id'];
                     $existingProdMap[$pidKey] = $epRow;
+                    $existingProdStatuses[$pidKey] = $epRow['status'];
                 }
             }
 
@@ -1643,6 +1752,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     $pColorCls = !empty($p['colorClassification']) ? (string)$p['colorClassification'] : (!empty($p['color_classification']) ? (string)$p['color_classification'] : '');
                     $pColorHex = !empty($p['colorHex']) ? (string)$p['colorHex'] : (!empty($p['color_hex']) ? (string)$p['color_hex'] : '');
                     $pIsPigment = (!empty($p['isColorPigment']) || !empty($p['is_color_pigment']) || colorSyncIsPigmentCategory($pCategory) || colorSyncIsPigmentCategory($pType)) ? 1 : 0;
+                    $pIsBasePaint = (!empty($p['isBasePaint']) || !empty($p['is_base_paint'])) ? 1 : 0;
+                    $pPaintSystem = !empty($p['paintSystem']) ? (string)$p['paintSystem'] : (!empty($p['paint_system']) ? (string)$p['paint_system'] : ($existingP['paint_system'] ?? 'unverified'));
+                    $pIsSpecPig = (!empty($p['isSpecialtyPigment']) || !empty($p['is_specialty_pigment']) || $pColorCls === 'Specialty Colors') ? 1 : 0;
+                    $pAdminNote = array_key_exists('adminReviewNote', $p) ? ($p['adminReviewNote'] !== '' ? $p['adminReviewNote'] : null) : (array_key_exists('admin_review_note', $p) ? ($p['admin_review_note'] !== '' ? $p['admin_review_note'] : null) : ($existingP['admin_review_note'] ?? null));
                     $pSupplierId = !empty($p['supplierId']) ? (string)$p['supplierId'] : (!empty($p['supplier_id']) ? (string)$p['supplier_id'] : '');
                     $pDeactReason = !empty($p['deactivationReason']) ? (string)$p['deactivationReason'] : '';
                     $pDiscReason = !empty($p['discontinueReason']) ? (string)$p['discontinueReason'] : '';
@@ -1652,23 +1765,67 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     $exPending = ($existingP['pending_price'] !== null && $existingP['pending_price'] !== '') ? (float)$existingP['pending_price'] : null;
 
                     $pCanStock = isset($p['canStock']) && (is_array($p['canStock']) || is_object($p['canStock'])) ? (array)$p['canStock'] : [];
-                    $exCanStock = (!empty($existingP['can_stock']) && is_array(json_decode($existingP['can_stock'], true))) ? json_decode($existingP['can_stock'], true) : [];
+                    $exCanStockDec = !empty($existingP['can_stock']) ? json_decode($existingP['can_stock'], true) : null;
+                    $exCanStock = is_array($exCanStockDec) ? $exCanStockDec : [];
 
                     $pOpenedBySize = isset($p['openedBySize']) && (is_array($p['openedBySize']) || is_object($p['openedBySize'])) ? (array)$p['openedBySize'] : [];
-                    $exOpenedBySize = (!empty($existingP['opened_by_size']) && is_array(json_decode($existingP['opened_by_size'], true))) ? json_decode($existingP['opened_by_size'], true) : [];
+                    $exOpenedDec = !empty($existingP['opened_by_size']) ? json_decode($existingP['opened_by_size'], true) : null;
+                    $exOpenedBySize = is_array($exOpenedDec) ? $exOpenedDec : [];
 
                     $pSizesArr = isset($p['sizes']) && is_array($p['sizes']) ? array_values($p['sizes']) : [];
-                    $exSizesArr = (!empty($existingP['sizes']) && is_array(json_decode($existingP['sizes'], true))) ? json_decode($existingP['sizes'], true) : [];
+                    $exSizesDec = !empty($existingP['sizes']) ? json_decode($existingP['sizes'], true) : null;
+                    $exSizesArr = is_array($exSizesDec) ? $exSizesDec : [];
 
                     $pThreshBySize = (isset($p['thresholdBySize']) && (is_array($p['thresholdBySize']) || is_object($p['thresholdBySize']))) ? (array)$p['thresholdBySize'] : [];
-                    $exThreshBySize = (!empty($existingP['threshold_by_size']) && is_array(json_decode($existingP['threshold_by_size'], true))) ? json_decode($existingP['threshold_by_size'], true) : [];
+                    $exThreshDec = !empty($existingP['threshold_by_size']) ? json_decode($existingP['threshold_by_size'], true) : null;
+                    $exThreshBySize = is_array($exThreshDec) ? $exThreshDec : [];
 
                     $hasPendingEdits = !empty($p['pendingEdit']) || !empty($p['pendingSizes']) || !empty($existingP['pending_edit']) || !empty($existingP['pending_sizes']);
-                    $hasSizesData = !empty($p['sizesData']) && is_array($p['sizesData']);
+
+                    // Compare sizesData + inventory quantities against DB so unchanged products with size variants are skipped
+                    $incomingSizes = (!empty($p['sizesData']) && is_array($p['sizesData'])) ? $p['sizesData'] : [];
+                    $exProdSizeIds = $existingSizesByProd[$id] ?? [];
+                    $sizesDataUnchanged = (count($incomingSizes) === count($exProdSizeIds));
+                    if ($sizesDataUnchanged && !empty($incomingSizes)) {
+                        foreach ($incomingSizes as $sd) {
+                            $cSz = (float)($sd['containerSize'] ?? ($sd['container_size'] ?? 0));
+                            $szKey = $id . '_' . $cSz;
+                            if (!isset($existingSizeMap[$szKey])) {
+                                $sizesDataUnchanged = false;
+                                break;
+                            }
+                            $szId = $existingSizeMap[$szKey];
+                            $exSm = $existingSizeMeta[$szId] ?? null;
+                            $exIm = $existingInvMeta[$szId] ?? null;
+                            if (!$exSm || !$exIm) {
+                                $sizesDataUnchanged = false;
+                                break;
+                            }
+                            $sdPpl = (float)($sd['pricePerLiter'] ?? ($sd['price_per_liter'] ?? $pPrice));
+                            $sdPpc = (float)($sd['pricePerCan'] ?? ($sd['price_per_can'] ?? ($sdPpl * $cSz)));
+                            $sdMin = (int)($sd['minimumStock'] ?? ($sd['minimum_stock'] ?? $pThresh));
+                            $sdAct = isset($sd['isActive']) ? ((int)(bool)$sd['isActive']) : (isset($sd['is_active']) ? (int)$sd['is_active'] : 1);
+                            $sdSealed = (int)($sd['sealedQuantity'] ?? ($sd['sealed_quantity'] ?? 0));
+                            $sdOpened = (int)($sd['openedQuantity'] ?? ($sd['opened_quantity'] ?? 0));
+                            $sdRemVol = (float)($sd['remainingVolume'] ?? ($sd['remaining_volume'] ?? 0));
+                            if (
+                                abs((float)$exSm['price_per_liter'] - $sdPpl) > 0.005 ||
+                                abs((float)$exSm['price_per_can'] - $sdPpc) > 0.005 ||
+                                (int)$exSm['minimum_stock'] !== $sdMin ||
+                                (int)$exSm['is_active'] !== $sdAct ||
+                                (int)$exIm['sealed_quantity'] !== $sdSealed ||
+                                (int)$exIm['opened_quantity'] !== $sdOpened ||
+                                abs((float)$exIm['remaining_volume'] - $sdRemVol) > 0.005
+                            ) {
+                                $sizesDataUnchanged = false;
+                                break;
+                            }
+                        }
+                    }
 
                     if (
                         !$hasPendingEdits &&
-                        !$hasSizesData &&
+                        $sizesDataUnchanged &&
                         (float)$existingP['price'] === $pPrice &&
                         (float)$existingP['stock'] === $pStock &&
                         (string)$existingP['status'] === $pStatus &&
@@ -1683,6 +1840,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                         (string)($existingP['color_classification'] ?? '') === $pColorCls &&
                         (string)($existingP['color_hex'] ?? '') === $pColorHex &&
                         (int)($existingP['is_color_pigment'] ?? 0) === $pIsPigment &&
+                        (int)($existingP['is_base_paint'] ?? 0) === $pIsBasePaint &&
+                        (string)($existingP['paint_system'] ?? 'unverified') === $pPaintSystem &&
+                        (int)($existingP['is_specialty_pigment'] ?? 0) === $pIsSpecPig &&
+                        (string)($existingP['admin_review_note'] ?? '') === (string)($pAdminNote ?? '') &&
                         (string)($existingP['supplier_id'] ?? '') === $pSupplierId &&
                         (string)($existingP['deactivation_reason'] ?? '') === $pDeactReason &&
                         (string)($existingP['discontinue_reason'] ?? '') === $pDiscReason &&
@@ -1713,6 +1874,17 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 if (colorSyncIsNonColorCategory($category) || colorSyncIsNonColorCategory($type)) {
                     $isColorPigment = 0;
                 }
+                // Pigment / Colorant products must never be treated as Base Paint
+                $isBasePaint = ($actingRole === 'admin' && !$isColorPigment && (!empty($p['isBasePaint']) || !empty($p['is_base_paint']))) ? 1 : 0;
+                $allowedPaintSystems = ['unverified', 'water_based', 'solvent_based', 'automotive', 'specialty', 'universal_colorant'];
+                $rawPaintSys = !empty($p['paintSystem']) ? (string)$p['paintSystem'] : (!empty($p['paint_system']) ? (string)$p['paint_system'] : ($existingP['paint_system'] ?? 'unverified'));
+                $paintSystem = in_array($rawPaintSys, $allowedPaintSystems, true) ? $rawPaintSys : 'unverified';
+                $isSpecialtyPigment = (!empty($p['isSpecialtyPigment']) || !empty($p['is_specialty_pigment']) || $colorClassification === 'Specialty Colors') ? 1 : 0;
+                $adminReviewNote = array_key_exists('adminReviewNote', $p)
+                    ? (!empty($p['adminReviewNote']) ? (string)$p['adminReviewNote'] : null)
+                    : (array_key_exists('admin_review_note', $p)
+                        ? (!empty($p['admin_review_note']) ? (string)$p['admin_review_note'] : null)
+                        : ($existingP['admin_review_note'] ?? null));
                 $supplierId = !empty($p['supplierId']) ? (string)$p['supplierId'] : (!empty($p['supplier_id']) ? (string)$p['supplier_id'] : null);
                 $price = (float)($p['price'] ?? 0);
                 $recentPrice = (isset($p['recentPrice']) && $p['recentPrice'] !== null && $p['recentPrice'] !== '') ? (float)$p['recentPrice'] : null;
@@ -1770,6 +1942,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     $colorClassification = $existingP['color_classification'] ?? null;
                     $colorHex = $existingP['color_hex'];
                     $isColorPigment = !empty($existingP['is_color_pigment']) ? 1 : 0;
+                    $isBasePaint = !empty($existingP['is_base_paint']) ? 1 : 0;
+                    $paintSystem = !empty($existingP['paint_system']) ? (string)$existingP['paint_system'] : 'unverified';
+                    $isSpecialtyPigment = !empty($existingP['is_specialty_pigment']) ? 1 : 0;
+                    $adminReviewNote = $existingP['admin_review_note'] ?? null;
                     $supplierId = $existingP['supplier_id'];
                     $price = (float)$existingP['price'];
                     $recentPrice = $existingP['recent_price'] !== null ? (float)$existingP['recent_price'] : null;
@@ -1806,6 +1982,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                         $colorClassification = $existingP['color_classification'] ?? null;
                         $colorHex = $existingP['color_hex'];
                         $isColorPigment = !empty($existingP['is_color_pigment']) ? 1 : 0;
+                    $isBasePaint = !empty($existingP['is_base_paint']) ? 1 : 0;
+                    $paintSystem = !empty($existingP['paint_system']) ? (string)$existingP['paint_system'] : 'unverified';
+                    $isSpecialtyPigment = !empty($existingP['is_specialty_pigment']) ? 1 : 0;
+                    $adminReviewNote = $existingP['admin_review_note'] ?? null;
                         $price = (float)$existingP['price'];
                         $recentPrice = $existingP['recent_price'] !== null ? (float)$existingP['recent_price'] : null;
                         $priceHistoryJson = (string)($existingP['price_history'] ?? '[]');
@@ -1817,7 +1997,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     }
                 }
 
-                $stmt->bind_param("ssssssssssssisdddsdsdissssdsssssss", $id, $productId, $productName, $name, $brand, $type, $category, $taxClassification, $color, $colorId, $colorClassification, $colorHex, $isColorPigment, $supplierId, $price, $recentPrice, $pendingPrice, $priceHistoryJson, $stock, $canStock, $openedStock, $openedCanSize, $openedBySize, $sizesJson, $pendingSizesJson, $pendingEditJson, $threshold, $thresholdBySize, $status, $deactReason, $deactAt, $deactBy, $updatedBy, $discReason);
+                $stmt->bind_param("ssssssssssssiisisssdddsdsdissssdsssssss", $id, $productId, $productName, $name, $brand, $type, $category, $taxClassification, $color, $colorId, $colorClassification, $colorHex, $isColorPigment, $isBasePaint, $paintSystem, $isSpecialtyPigment, $adminReviewNote, $supplierId, $price, $recentPrice, $pendingPrice, $priceHistoryJson, $stock, $canStock, $openedStock, $openedCanSize, $openedBySize, $sizesJson, $pendingSizesJson, $pendingEditJson, $threshold, $thresholdBySize, $status, $deactReason, $deactAt, $deactBy, $updatedBy, $discReason);
                 $stmt->execute();
 
                 // Genuine DB-level Inventory -> Color Library two-way synchronization (Admin only, pigment/colorant products only)
@@ -2372,6 +2552,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 if (isset($existingSalesMap[$id]) && $existingSalesMap[$id] === $saleSig) {
                     continue; // Skip unchanged sale record
                 }
+                // Validate numeric bounds only for newly created sales (never block historical records on unrelated saves)
+                if (!isset($existingSalesOwner[$id])) {
+                    if ($subtotal < 0 || $total < 0 || $discountPct < 0 || $discountPct > 100 || $discountAmount < 0) {
+                        throw new Exception('Invalid negative or out-of-range sale amount.');
+                    }
+                }
 
                 $receiptNo = trim((string)($sale['receiptNo'] ?? ''));
                 $date = safeDateSql($sale['date'] ?? null, 'Y-m-d H:i:s', date('Y-m-d H:i:s'));
@@ -2449,8 +2635,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     continue; // Skip already recorded ledger movement
                 }
 
-                $date = date('Y-m-d H:i:s', strtotime($m['date']));
-                $type = (string)$m['type'];
+                $date = safeDateSql($m['date'] ?? null, 'Y-m-d H:i:s', date('Y-m-d H:i:s'));
+                $type = (string)($m['type'] ?? '');
+                if ($actingRole === 'cashier' && !in_array(strtolower($type), ['sale', 'colormix', 'color_mix', 'mix', 'return', 'exchange', 'open_can'], true)) {
+                    continue; // Cashiers may only record POS-related movements
+                }
                 $productId = !empty($m['productId']) ? (string)$m['productId'] : (!empty($m['product_id']) ? (string)$m['product_id'] : null);
                 $sizeId = !empty($m['sizeId']) ? (string)$m['sizeId'] : (!empty($m['size_id']) ? (string)$m['size_id'] : null);
                 $containerSize = isset($m['containerSize']) && $m['containerSize'] !== null ? (float)$m['containerSize'] : (isset($m['container_size']) && $m['container_size'] !== null ? (float)$m['container_size'] : null);
@@ -2482,6 +2671,24 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         foreach ($mvNewRows as $nm) {
             if ($nm['type'] === 'colormix') {
                 $hasColorMixMovement = true;
+                if ((float)$nm['qtyChange'] < 0 && !empty($nm['productId'])) {
+                    $cmPid = (string)$nm['productId'];
+                    $cmStmt = $conn->prepare("SELECT id, name, status, is_color_pigment, is_base_paint FROM products WHERE id = ? OR product_id = ? LIMIT 1");
+                    $cmRow = null;
+                    if ($cmStmt) {
+                        $cmStmt->bind_param("ss", $cmPid, $cmPid);
+                        $cmStmt->execute();
+                        $cmRow = $cmStmt->get_result()->fetch_assoc();
+                        $cmStmt->close();
+                    }
+                    if (!$cmRow || strtolower((string)($cmRow['status'] ?? '')) !== 'active') {
+                        throw new Exception("Unavailable: Required ingredient '{$cmPid}' is unavailable or inactive in inventory.");
+                    }
+                    $isEligibleMix = !empty($cmRow['is_color_pigment']) || !empty($cmRow['is_base_paint']);
+                    if (!$isEligibleMix) {
+                        throw new Exception("Admin Review: '{$cmRow['name']}' is not approved for color mixing.");
+                    }
+                }
             }
             batchProcessMovement($conn, $nm['m'], $nm['type'], $nm['sizeId'], $nm['productId'], $nm['containerSize'], $nm['qtyChange'], $nm['staff'], $nm['note'], $nm['date']);
         }
@@ -2517,13 +2724,16 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             foreach ($dbData['purchaseOrders'] as $po) {
                 $id = (string)$po['id'];
                 $status = (string)($po['status'] ?? 'ordered');
-                // RBAC: Only Admin may approve a pending PO to ordered, or create an already-ordered PO
+                // RBAC: Only Admin may approve a pending PO, create an already-ordered/received PO, or cancel a pending PO
                 if ($actingRole !== 'admin') {
                     if (isset($existingPOStatus[$id])) {
-                        if ($existingPOStatus[$id] === 'pending' && $status === 'ordered') {
+                        $prevPoSt = $existingPOStatus[$id];
+                        if ($prevPoSt === 'pending' && $status !== 'pending') {
                             $status = 'pending';
+                        } elseif (in_array($prevPoSt, ['received', 'cancelled'], true) && $status !== $prevPoSt) {
+                            $status = $prevPoSt;
                         }
-                    } elseif ($status === 'ordered') {
+                    } else {
                         $status = 'pending';
                     }
                 }
@@ -2625,10 +2835,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 $reviewedBy = !empty($ar['reviewedBy']) ? (string)$ar['reviewedBy'] : null;
                 $rejectReason = !empty($ar['rejectReason']) ? (string)$ar['rejectReason'] : null;
 
-                // RBAC: Only admin can approve or reject adjustment requests; all other roles can only submit 'pending'
+                // RBAC: Only admin can approve or reject adjustment requests; non-admins cannot re-open finalized requests
                 if ($actingRole !== 'admin') {
                     if (isset($existingReqStatuses[$id])) {
                         $prevSt = $existingReqStatuses[$id];
+                        if ($prevSt === 'approved' || $prevSt === 'rejected') {
+                            continue; // Finalized adjustment requests are immutable to non-admins
+                        }
                         if ($prevSt === 'pending' && ($status === 'approved' || $status === 'rejected')) {
                             $status = 'pending';
                             $reviewedBy = null;

@@ -61,17 +61,30 @@ function renderAdminAuditLogRows(rows) {
   }).join('');
 }
 
-function loadAdminRecentAuditLogs() {
+let _adminAuditCacheRows = null;
+let _adminAuditCacheTs = 0;
+let _adminAuditCacheVer = -1;
+
+function loadAdminRecentAuditLogs(force = false) {
   const container = document.getElementById('admin-audit-table-body');
   if (!container) return;
+  const ver = typeof _dbCacheVersion !== 'undefined' ? _dbCacheVersion : 0;
+  if (!force && _adminAuditCacheRows && _adminAuditCacheVer === ver && (Date.now() - _adminAuditCacheTs) < 15000) {
+    container.innerHTML = _adminAuditCacheRows.length
+      ? renderAdminAuditLogRows(_adminAuditCacheRows)
+      : `<tr><td colspan="5" class="empty-state" style="padding:24px 0; text-align:center; color:var(--ink-soft);">No recent user activities recorded.</td></tr>`;
+    return;
+  }
   const userParam = (typeof currentUser !== 'undefined' && currentUser && currentUser.id) ? `&userId=${encodeURIComponent(currentUser.id)}` : '';
   fetch('api/audit.php?limit=6&page=1' + userParam)
     .then(r => r.ok ? r.json() : null)
     .then(data => {
-      if (data && Array.isArray(data.logs) && data.logs.length) {
-        container.innerHTML = renderAdminAuditLogRows(data.logs);
-      } else if (data && Array.isArray(data.rows) && data.rows.length) {
-        container.innerHTML = renderAdminAuditLogRows(data.rows);
+      const rows = (data && Array.isArray(data.logs)) ? data.logs : ((data && Array.isArray(data.rows)) ? data.rows : []);
+      _adminAuditCacheRows = rows;
+      _adminAuditCacheTs = Date.now();
+      _adminAuditCacheVer = ver;
+      if (rows.length) {
+        container.innerHTML = renderAdminAuditLogRows(rows);
       } else {
         container.innerHTML = `<tr><td colspan="5" class="empty-state" style="padding:24px 0; text-align:center; color:var(--ink-soft);">No recent user activities recorded.</td></tr>`;
       }
@@ -776,6 +789,9 @@ function adminDashboard() {
       </button>
       <button class="btn secondary small" onclick="openVatSettingsModal()" title="Configure Philippine VAT Rate, Tax Status, and Pricing Model">
         ⚙️ Philippine VAT Settings
+      </button>
+      <button class="btn secondary small" onclick="openPromoDiscountSettingsModal()" title="Configure Automatic POS Promo Discount (Minimum Amount &amp; Percentage)">
+        🏷️ POS Promo Discount ${typeof getPromoDiscountSettings === 'function' ? (() => { const ps = getPromoDiscountSettings(); return ps.enabled ? `<span class="nav-badge" style="background:var(--teal); color:#fff;">${ps.discountPct}% ≥ ${peso(ps.minAmount)}</span>` : `<span class="nav-badge" style="background:var(--ink-soft); color:#fff;">Off</span>`; })() : ''}
       </button>
       <button class="btn secondary small" onclick="goToApprovalsTab('purchaseOrders')" title="Review and authorize purchase orders">
         📋 Review Purchase Orders ${pendingPOs.length ? `<span class="nav-badge">${pendingPOs.length}</span>` : ''}

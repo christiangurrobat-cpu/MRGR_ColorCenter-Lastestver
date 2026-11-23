@@ -232,7 +232,7 @@ function posPage() {
           <!-- Search Box with Clear Button -->
           <div class="pos-search-wrap">
             <span class="pos-search-icon">🔍</span>
-            <input id="pos-search" type="text" class="pos-search-input" placeholder="Search by paint name, brand, color, or size…" value="${escapeHtml(posSearchQuery)}" oninput="posCurrentPage=1; renderPosProductList()">
+            <input id="pos-search" type="text" class="pos-search-input" placeholder="Search by paint name, brand, color, or size…" value="${escapeHtml(posSearchQuery)}" oninput="onPosSearchInput(this.value)">
             <button type="button" class="pos-search-clear" onclick="clearPosSearch()" title="Clear search">✕</button>
           </div>
 
@@ -242,14 +242,15 @@ function posPage() {
               <span>🌈 All Products</span>
               <span class="pill-count">${totalActive}</span>
             </button>
-            ${categories.map(cat => {
-    const count = activeProducts().filter(p => p.type === cat).length;
-    return `
+            ${(() => {
+    const catCounts = new Map();
+    activeProducts().forEach(p => { if (p && p.type) catCounts.set(p.type, (catCounts.get(p.type) || 0) + 1); });
+    return categories.map(cat => `
               <button class="pos-cat-pill ${posCategoryFilter === cat ? 'active' : ''}" data-cat="${escapeHtml(cat)}" onclick="setPosCategoryFilter('${escapeHtml(cat)}')">
                 <span>${escapeHtml(cat)}</span>
-                <span class="pill-count">${count}</span>
-              </button>`;
-  }).join('')}
+                <span class="pill-count">${catCounts.get(cat) || 0}</span>
+              </button>`).join('');
+  })()}
           </div>
         </div>
         <div class="panel-body tight" id="pos-product-list"></div>
@@ -268,6 +269,9 @@ function posPage() {
             ${(currentUser && currentUser.role === 'admin') ? `
               <button type="button" class="btn ghost small" style="padding:2px 8px; font-size:11px;" onclick="openVatSettingsModal()" title="Manage Philippine VAT Settings">
                 ⚙️ VAT Settings
+              </button>
+              <button type="button" class="btn ghost small" style="padding:2px 8px; font-size:11px;" onclick="openPromoDiscountSettingsModal()" title="Manage Automatic POS Promo Discount">
+                🏷️ Promo Discount
               </button>
             ` : ''}
             ${cart.length ? `<button type="button" class="btn ghost small" style="padding:2px 8px; font-size:11px; color:var(--danger);" onclick="clearPosCart()" title="Empty cart">🗑️ Clear</button>` : ''}
@@ -319,6 +323,17 @@ function renderPosProductPriceHtml(p) {
         <span class="pos-disc-save">Save ${peso(primaryDisc.savedAmt)}/${fmtSize(primaryDisc.size)}</span>
       </div>
     ` : ''}`;
+}
+
+let _posSearchTimer = null;
+function onPosSearchInput(val) {
+  posSearchQuery = val || '';
+  posCurrentPage = 1;
+  if (_posSearchTimer) clearTimeout(_posSearchTimer);
+  _posSearchTimer = setTimeout(() => {
+    _posSearchTimer = null;
+    renderPosProductList();
+  }, 140);
 }
 
 function renderPosProductList() {
@@ -1744,6 +1759,146 @@ async function submitVatSettingsModal() {
   }
 }
 
+/* ---------- POS Automatic Promo Discount Settings (Admin-Editable) ---------- */
+function getPromoDiscountSettings() {
+  const raw = (db && db.promoDiscountSettings)
+    || (db && db.settings && db.settings.pos_promo_discount)
+    || null;
+  if (!raw || typeof raw !== 'object') {
+    return { enabled: true, minAmount: 2500, discountPct: 10 };
+  }
+  const minAmt = Number(raw.minAmount);
+  const pct = Number(raw.discountPct);
+  return {
+    enabled: raw.enabled !== undefined ? Boolean(raw.enabled) : true,
+    minAmount: (!isNaN(minAmt) && minAmt >= 0) ? minAmt : 2500,
+    discountPct: (!isNaN(pct) && pct >= 0 && pct <= 100) ? pct : 10
+  };
+}
+
+async function savePromoDiscountSettings(newSettings) {
+  if (!currentUser || currentUser.role !== 'admin') {
+    showToast('Access denied: Only Administrators can change POS Promo Discount settings.', 'error');
+    return false;
+  }
+  const clean = {
+    enabled: Boolean(newSettings.enabled),
+    minAmount: Math.max(0, Number(parseFloat(newSettings.minAmount || 0).toFixed(2))),
+    discountPct: Math.min(100, Math.max(0, Number(parseFloat(newSettings.discountPct || 0).toFixed(2))))
+  };
+  try {
+    const resp = await fetch('api/db.php?action=save_promo_discount_settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ promoDiscountSettings: clean })
+    });
+    const json = await resp.json();
+    if (!resp.ok || !json.success) {
+      showToast((json && json.error) || 'Failed to save promo discount settings.', 'error');
+      return false;
+    }
+    const saved = json.promoDiscountSettings || clean;
+    if (db) {
+      db.promoDiscountSettings = saved;
+      if (!db.settings) db.settings = {};
+      db.settings.pos_promo_discount = saved;
+    }
+    if (typeof logAudit === 'function') {
+      logAudit(
+        'SETTINGS_UPDATE',
+        'POS Promo Discount',
+        saved.enabled
+          ? `Updated POS automatic promo discount to ${saved.discountPct}% for purchases >= ${peso(saved.minAmount)}`
+          : 'Disabled POS automatic promo discount',
+        { entityName: 'POS Promo Discount', fieldChanged: 'pos_promo_discount', newValue: JSON.stringify(saved) }
+      );
+    }
+    showToast(
+      saved.enabled
+        ? `Promo discount saved: ${saved.discountPct}% off for purchases ≥ ${peso(saved.minAmount)}.`
+        : 'Automatic POS promo discount disabled.',
+      'ok'
+    );
+    if (typeof refreshCartUI === 'function') refreshCartUI();
+    if (typeof renderPage === 'function' && currentPage === 'dashboard') renderPage();
+    return true;
+  } catch (e) {
+    console.error('Failed to save promo discount settings:', e);
+    showToast('Could not save promo discount settings — check database connection.', 'error');
+    return false;
+  }
+}
+
+function openPromoDiscountSettingsModal() {
+  if (!currentUser || currentUser.role !== 'admin') {
+    showToast('Only Administrators can configure POS Promo Discount settings.', 'error');
+    return;
+  }
+  const s = getPromoDiscountSettings();
+  openModal(
+    '🏷️ POS Automatic Promo Discount Settings',
+    `
+    <div style="font-size:12.5px; color:var(--ink-soft); margin-bottom:14px; line-height:1.5;">
+      Configure the automatic cart-wide discount applied at Point of Sale when a customer's subtotal reaches the minimum amount.
+      Changes apply immediately to new sales without affecting past receipts.
+    </div>
+    <form id="promo-discount-form" onsubmit="event.preventDefault(); submitPromoDiscountSettingsModal();">
+      <div class="field" style="margin-bottom:14px;">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:700; font-size:13px; color:var(--ink);">
+          <input type="checkbox" id="promo-disc-enabled" ${s.enabled ? 'checked' : ''} onchange="const b=document.getElementById('promo-disc-fields'); if(b) b.style.opacity=this.checked?'1':'0.5';">
+          <span>Enable Automatic POS Promo Discount</span>
+        </label>
+      </div>
+      <div id="promo-disc-fields" style="display:grid; grid-template-columns:1fr 1fr; gap:12px; ${s.enabled ? '' : 'opacity:0.5;'}">
+        <div class="field">
+          <label style="font-weight:700; font-size:13px; color:var(--ink); margin-bottom:6px; display:block;">
+            Minimum Purchase Amount (₱) <span style="color:var(--danger);">*</span>
+          </label>
+          <input type="number" id="promo-disc-min" step="0.01" min="0" value="${s.minAmount}"
+            style="width:100%; padding:9px 12px; font-size:14px; font-weight:700; font-family:'Space Grotesk',monospace; border:1px solid var(--line); border-radius:6px; box-sizing:border-box;">
+          <div class="muted small" style="font-size:11px; margin-top:4px;">Example: 2500 means subtotal ≥ ₱2,500.00 qualifies.</div>
+        </div>
+        <div class="field">
+          <label style="font-weight:700; font-size:13px; color:var(--ink); margin-bottom:6px; display:block;">
+            Discount Percentage (%) <span style="color:var(--danger);">*</span>
+          </label>
+          <input type="number" id="promo-disc-pct" step="0.01" min="0" max="100" value="${s.discountPct}"
+            style="width:100%; padding:9px 12px; font-size:14px; font-weight:700; font-family:'Space Grotesk',monospace; border:1px solid var(--line); border-radius:6px; box-sizing:border-box;">
+          <div class="muted small" style="font-size:11px; margin-top:4px;">Enter a value from 0% to 100% (default: 10%).</div>
+        </div>
+      </div>
+    </form>
+    `,
+    `
+    <button type="button" class="btn ghost" onclick="closeModal()">Cancel</button>
+    <button type="button" class="btn" onclick="submitPromoDiscountSettingsModal()" style="background:var(--teal); color:#fff;">Save Discount Settings</button>
+    `
+  );
+}
+
+async function submitPromoDiscountSettingsModal() {
+  const enEl = document.getElementById('promo-disc-enabled');
+  const minEl = document.getElementById('promo-disc-min');
+  const pctEl = document.getElementById('promo-disc-pct');
+  const enabled = enEl ? enEl.checked : true;
+  const minAmount = minEl ? parseFloat(minEl.value) : 2500;
+  const discountPct = pctEl ? parseFloat(pctEl.value) : 10;
+
+  if (isNaN(minAmount) || minAmount < 0) {
+    showToast('Minimum purchase amount must be 0 or greater.', 'error');
+    if (minEl) minEl.focus();
+    return;
+  }
+  if (isNaN(discountPct) || discountPct < 0 || discountPct > 100) {
+    showToast('Discount percentage must be between 0% and 100%.', 'error');
+    if (pctEl) pctEl.focus();
+    return;
+  }
+
+  const ok = await savePromoDiscountSettings({ enabled, minAmount, discountPct });
+  if (ok) closeModal();
+}
+
 /**
  * Centralized Philippine VAT calculation function.
  * Single source of truth for POS cart, confirmation modal, receipt, and sales history.
@@ -1860,10 +2015,13 @@ function calculateSaleVat(items, discountAmount = 0, customVatSettings = null) {
 
 function cartTotals() {
   const grossSubtotal = Number(cart.reduce((t, c) => t + (Number(c.lineTotal) || 0), 0).toFixed(2));
-  const isEligible = grossSubtotal >= 2500;
-  const discountPct = isEligible ? 10 : 0;
-  const discountAmount = isEligible ? Number((grossSubtotal * 0.10).toFixed(2)) : 0;
-  const neededToQualify = isEligible ? 0 : Number((2500 - grossSubtotal).toFixed(2));
+  const promo = getPromoDiscountSettings();
+  const isEligible = promo.enabled && promo.discountPct > 0 && grossSubtotal >= promo.minAmount;
+  const discountPct = isEligible ? promo.discountPct : 0;
+  const discountAmount = isEligible ? Number((grossSubtotal * (promo.discountPct / 100)).toFixed(2)) : 0;
+  const neededToQualify = (promo.enabled && promo.discountPct > 0 && !isEligible)
+    ? Number(Math.max(0, promo.minAmount - grossSubtotal).toFixed(2))
+    : 0;
 
   const vatCalc = calculateSaleVat(cart, discountAmount);
 
@@ -1883,7 +2041,10 @@ function cartTotals() {
     taxStatus: vatCalc.taxStatus,
     pricingType: vatCalc.pricingType,
     isEligible,
-    neededToQualify
+    neededToQualify,
+    promoEnabled: promo.enabled,
+    promoMinAmount: promo.minAmount,
+    promoDiscountPct: promo.discountPct
   };
 }
 
@@ -1905,12 +2066,12 @@ function cartTotalsHtml() {
       </div>
       <div class="pos-promo-indicator qualified">
         <span>🎉</span>
-        <span>10% Discount Applied!</span>
+        <span>${t.discountPct}% Discount Applied!</span>
       </div>
-    ` : (hasItems ? `
+    ` : (hasItems && t.promoEnabled && t.promoDiscountPct > 0 ? `
       <div class="pos-promo-indicator hint">
         <span>💡</span>
-        <span>Add ${peso(t.neededToQualify)} more to qualify for a 10% discount.</span>
+        <span>Add ${peso(t.neededToQualify)} more to qualify for a ${t.promoDiscountPct}% discount.</span>
       </div>
     ` : '')}
 
@@ -2620,7 +2781,7 @@ function promptCustomerPurchaseConfirmation(data) {
             </div>
             <div style="display:inline-flex; align-items:center; gap:5px; background:var(--teal-tint); border:1px solid var(--teal-tint-border); color:var(--teal-dark); padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700; margin:4px 0 2px;">
               <span>🎉</span>
-              <span>10% Discount Applied!</span>
+              <span>${totals.discountPct}% Discount Applied!</span>
             </div>
           ` : ''}
 
@@ -3161,7 +3322,8 @@ async function completeSale() {
     currentSaleCustomerName = '';
     const custInp = document.getElementById('pos-customer-name');
     if (custInp) custInp.value = '';
-    renderApp();
+    renderPage();
+    if (typeof updateNavBadges === 'function') updateNavBadges();
     showReceipt(sale);
   } finally {
     window._isCompletingSale = false;
@@ -3265,7 +3427,9 @@ function showReceipt(sale) {
       <img src="assets/images/logo.png" alt="MRGR Logo" style="width:48px; height:48px; border-radius:50%; margin:0 auto 8px auto; display:block; object-fit:cover;">
       <div class="pos-receipt-title">MRGR COLOR CENTER</div>
       <div class="pos-receipt-sub">Paint &amp; Color Formulation Specialists</div>
-      <div class="pos-receipt-sub" style="font-size:11px; margin-top:2px;">Official Sales Receipt</div>
+      <div class="pos-receipt-sub" style="font-size:11px; line-height:1.35; margin-top:4px; max-width:360px; margin-left:auto; margin-right:auto;">${businessAddressHtml()}</div>
+      <div class="pos-receipt-sub" style="font-size:11px; margin-top:2px;">Contact Number: ${escapeHtml(BUSINESS_CONTACT_NUMBER)}</div>
+      <div class="pos-receipt-sub" style="font-size:11px; margin-top:4px; font-weight:600;">Official Sales Receipt</div>
       <div class="pos-receipt-badge">Receipt #: <span>${escapeHtml(receiptNo)}</span></div>
       ${status === 'voided' ? `
         <div style="background:var(--danger-bg); border:2px dashed #C1443D; border-radius:8px; padding:10px 14px; margin-top:10px; text-align:center;">
@@ -3509,7 +3673,9 @@ function buildThermalReceiptHtml(sale) {
       <div class="th-center">
         <div class="th-title">MRGR COLOR CENTER</div>
         <div class="th-sub">Paint &amp; Color Formulation Specialists</div>
-        <div class="th-sub">Official Sales Receipt</div>
+        <div class="th-sub" style="font-size:9.5px; line-height:1.3; margin:2px 0; word-break:break-word;">${businessAddressHtml()}</div>
+        <div class="th-sub" style="font-size:9.5px; margin-bottom:2px;">Contact Number: ${escapeHtml(BUSINESS_CONTACT_NUMBER)}</div>
+        <div class="th-sub" style="font-weight:700;">Official Sales Receipt</div>
         <div class="th-receipt-no">${escapeHtml(receiptNo)}</div>
         ${status === 'voided' ? `<div class="th-void">*** TRANSACTION VOIDED ***</div>` : ''}
       </div>

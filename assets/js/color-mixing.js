@@ -608,7 +608,7 @@ let colorMixStudioState = {
   components: [],
   totalLiters: 1,
   colorName: '',
-  baseType: 'Automotive Paint',
+  baseType: 'Pigment / Colorant',
   pricePerLiter: 400,
   userCustomizedName: false,
   userCustomizedPrice: false,
@@ -624,8 +624,36 @@ let colorMixStudioState = {
   selectedPresetIndex: -1
 };
 
+function isPigmentMixingProduct(p) {
+  if (!p) return false;
+  return Boolean(
+    p.isColorPigment ||
+    p.is_color_pigment ||
+    /pigment|colorant/i.test(String(p.type || '')) ||
+    /pigment|colorant/i.test(String(p.category || ''))
+  );
+}
+
+function isSpecialtyEffectPigment(p) {
+  if (!p) return false;
+  return Boolean(
+    String(p.colorClassification || p.color_classification || '').trim() === 'Specialty Colors' ||
+    /^(PRD-036|PRD-037|PRD-039|PRD-051|PRD-066)$/i.test(String(p.id || '')) ||
+    /\b(fluorescent|glow-in-the-dark|metallic|pearl)\b/i.test(`${p.name || ''} ${p.color || ''}`)
+  );
+}
+
+function isProductEligibleForColorMixing(p, requireStock = true) {
+  if (!p || p.status !== 'active') return false;
+  if (requireStock && productMixAvailableStock(p) <= 0) return false;
+  const isPigment = isPigmentMixingProduct(p);
+  const isBase = isDesignatedBasePaintProduct(p);
+  // Exclude Regular Paints (neither Pigment / Colorant nor Admin-designated Base Paint)
+  return isPigment || isBase;
+}
+
 function colorMixAvailableProducts(filterByType = true) {
-  const all = activeProducts().filter(p => productMixAvailableStock(p) > 0);
+  const all = activeProducts().filter(p => isProductEligibleForColorMixing(p, true));
   if (filterByType && colorMixStudioState && colorMixStudioState.typeFilter && colorMixStudioState.typeFilter !== 'all') {
     const filtered = all.filter(p => (p.type || '').toLowerCase() === colorMixStudioState.typeFilter.toLowerCase());
     if (filtered.length > 0) return filtered;
@@ -634,7 +662,7 @@ function colorMixAvailableProducts(filterByType = true) {
 }
 
 function colorMixModalProducts() {
-  const all = activeProducts().filter(p => p && productMixAvailableStock(p) > 0);
+  const all = activeProducts().filter(p => isProductEligibleForColorMixing(p, false));
   if (colorMixStudioState && colorMixStudioState.typeFilter && colorMixStudioState.typeFilter !== 'all') {
     const filtered = all.filter(p => (p.type || '').toLowerCase() === colorMixStudioState.typeFilter.toLowerCase());
     if (filtered.length > 0) return filtered;
@@ -646,11 +674,217 @@ function getInventoryBasePaintTypes() {
   const prods = (typeof activeProducts === 'function')
     ? activeProducts()
     : ((typeof db !== 'undefined' && db && Array.isArray(db.products)) ? db.products.filter(p => p && p.status === 'active') : []);
-  return Array.from(new Set(
+  const types = Array.from(new Set(
     prods
+      .filter(p => isPigmentMixingProduct(p) || isDesignatedBasePaintProduct(p))
       .map(p => (p && p.type ? String(p.type).trim() : ''))
       .filter(t => t && t !== '-' && t.toLowerCase() !== 'accessory')
   ));
+  // Ensure 'Pigment / Colorant' is always first (default category)
+  types.sort((a, b) => {
+    const aPig = /pigment|colorant/i.test(a) ? 0 : 1;
+    const bPig = /pigment|colorant/i.test(b) ? 0 : 1;
+    if (aPig !== bPig) return aPig - bPig;
+    return a.localeCompare(b);
+  });
+  return types.length ? types : ['Pigment / Colorant'];
+}
+
+function getFormulaCategoryOptions() {
+  const canonical = [
+    { value: 'House Paint', label: 'House Paint' },
+    { value: 'Automotive Paint', label: 'Automotive Paint' },
+    { value: 'Specialty Paint', label: 'Specialty Paint' },
+    { value: 'Pigment / Colorant', label: 'Pigment / Colorant' }
+  ];
+  const seen = new Set(canonical.map(c => c.value.toLowerCase()));
+  const prods = (typeof activeProducts === 'function')
+    ? activeProducts()
+    : ((typeof db !== 'undefined' && db && Array.isArray(db.products)) ? db.products.filter(p => p && p.status === 'active') : []);
+  prods.forEach(p => {
+    const t = p && p.type ? String(p.type).trim() : '';
+    if (t && t !== '-' && t.toLowerCase() !== 'accessory' && !seen.has(t.toLowerCase())) {
+      seen.add(t.toLowerCase());
+      canonical.push({ value: t, label: t });
+    }
+  });
+  return canonical;
+}
+
+function normalizeColorMixCategory(rawCat) {
+  const opts = getFormulaCategoryOptions();
+  const val = String(rawCat || '').trim();
+  if (val) {
+    const match = opts.find(o => o.value.toLowerCase() === val.toLowerCase());
+    if (match) return match.value;
+    if (/pigment|colorant/i.test(val)) return 'Pigment / Colorant';
+  }
+  return 'Pigment / Colorant';
+}
+
+function evaluateColorMixIngredientStatus(c, idx, selectedCat = null, totalLiters = null, allComponents = null) {
+  const s = colorMixStudioState || {};
+  const cat = String(selectedCat !== null ? selectedCat : (s.baseType || 'Pigment / Colorant')).trim();
+  const catLower = cat.toLowerCase();
+  const isPigmentCatMode = /pigment|colorant/i.test(catLower);
+  const vol = Math.max(0.5, Number(totalLiters !== null ? totalLiters : (s.totalLiters || 1)));
+  const pct = Math.max(0, Number(c && c.pct) || 0);
+  const reqLiters = Number(((vol * (pct / 100)) || 0).toFixed(2));
+  const prod = (c && c.productId && typeof productById === 'function') ? productById(c.productId) : null;
+  const comps = Array.isArray(allComponents) ? allComponents : (Array.isArray(s.components) ? s.components : []);
+
+  // 1. If base slot is missing a designated Base Paint for the chosen paint category (House Paint, Automotive Paint, Specialty Paint)
+  if (c && c.baseMissingForCategory && !isPigmentCatMode) {
+    const adminMsg = c.notConfiguredReason || `No designated Base Paint configured for ${cat}.`;
+    return {
+      status: 'ADMIN REVIEW',
+      badgeBg: 'var(--warning-bg)', badgeColor: 'var(--warning-text)', badgeBorder: 'var(--warning-border)',
+      compatible: false, hasStock: false, availStock: 0, reqLiters,
+      simpleReason: 'Admin Review: A valid Base Paint is required for this paint type.',
+      detail: 'Admin Review: A valid Base Paint is required for this paint type.',
+      adminDetail: adminMsg
+    };
+  }
+
+  // 2. Missing or inactive product -> UNAVAILABLE
+  if (!prod || prod.status !== 'active') {
+    const adminMsg = (c && c.notConfiguredReason) ? c.notConfiguredReason : 'Required ingredient product is unavailable or inactive in inventory.';
+    return {
+      status: 'UNAVAILABLE',
+      badgeBg: 'var(--danger-bg)', badgeColor: 'var(--danger-text)', badgeBorder: 'var(--danger-border)',
+      compatible: false, hasStock: false, availStock: 0, reqLiters,
+      simpleReason: 'Unavailable: Required ingredients or quantities are unavailable.',
+      detail: 'Required ingredient is unavailable in inventory.',
+      adminDetail: adminMsg
+    };
+  }
+
+  const availStock = typeof productMixNonExpiredAvailableStock === 'function'
+    ? productMixNonExpiredAvailableStock(prod)
+    : (typeof productMixAvailableStock === 'function' ? productMixAvailableStock(prod) : (Number(prod.stock) || 0));
+  const hasStock = availStock + 1e-6 >= reqLiters && availStock > 0;
+  const isPigment = isPigmentMixingProduct(prod);
+  const isBase = isDesignatedBasePaintProduct(prod);
+  const pCat = String(prod.type || prod.category || '').trim();
+  const pCatLower = pCat.toLowerCase();
+
+  // 3. Stock checks -> UNAVAILABLE whenever required quantity is missing or insufficient
+  if (availStock <= 0) {
+    return {
+      status: 'UNAVAILABLE',
+      badgeBg: 'var(--danger-bg)', badgeColor: 'var(--danger-text)', badgeBorder: 'var(--danger-border)',
+      compatible: true, hasStock: false, availStock: 0, reqLiters,
+      simpleReason: 'Unavailable: Required ingredients or quantities are unavailable.',
+      detail: `Out of stock (needs ${formatStock(reqLiters)}L, available 0.00L).`,
+      adminDetail: `${prod.name}: Out of stock (needs ${formatStock(reqLiters)}L, available 0.00L).`
+    };
+  }
+  if (availStock + 1e-6 < reqLiters) {
+    return {
+      status: 'UNAVAILABLE',
+      badgeBg: 'var(--danger-bg)', badgeColor: 'var(--danger-text)', badgeBorder: 'var(--danger-border)',
+      compatible: true, hasStock: false, availStock, reqLiters,
+      simpleReason: 'Unavailable: Required ingredients or quantities are unavailable.',
+      detail: `Insufficient stock (needs ${formatStock(reqLiters)}L, available ${formatStock(availStock)}L).`,
+      adminDetail: `${prod.name}: Insufficient stock (needs ${formatStock(reqLiters)}L, available ${formatStock(availStock)}L).`
+    };
+  }
+
+  // 4. Reject regular finished paints (neither Pigment / Colorant nor Admin-designated Base Paint) -> ADMIN REVIEW
+  if (!isPigment && !isBase) {
+    return {
+      status: 'ADMIN REVIEW',
+      badgeBg: 'var(--warning-bg)', badgeColor: 'var(--warning-text)', badgeBorder: 'var(--warning-border)',
+      compatible: false, hasStock, availStock, reqLiters,
+      simpleReason: 'Admin Review: This formula contains an ingredient that is not approved for color mixing.',
+      detail: 'Requires Admin approval for color mixing.',
+      adminDetail: `Regular finished paint ("${prod.name}") is not an Admin-designated Base Paint or Pigment / Colorant.`
+    };
+  }
+
+  // 5. Enforce Base Paint category & single-base rules -> ADMIN REVIEW
+  if (isBase) {
+    if (!isPigmentCatMode && pCatLower !== catLower) {
+      return {
+        status: 'ADMIN REVIEW',
+        badgeBg: 'var(--warning-bg)', badgeColor: 'var(--warning-text)', badgeBorder: 'var(--warning-border)',
+        compatible: false, hasStock, availStock, reqLiters,
+        simpleReason: 'Admin Review: Selected Base Paint does not match this paint type.',
+        detail: 'Base Paint category requires Admin review.',
+        adminDetail: `Category mismatch: "${prod.name}" is classified under ${pCat} and cannot be used as a ${cat} base.`
+      };
+    }
+    const firstBaseIdx = comps.findIndex(x => x && x.productId && isDesignatedBasePaintProduct(productById(x.productId)));
+    if (firstBaseIdx >= 0 && firstBaseIdx !== idx) {
+      return {
+        status: 'ADMIN REVIEW',
+        badgeBg: 'var(--warning-bg)', badgeColor: 'var(--warning-text)', badgeBorder: 'var(--warning-border)',
+        compatible: false, hasStock, availStock, reqLiters,
+        simpleReason: 'Admin Review: Only one Base Paint is allowed per formula.',
+        detail: 'Only one Base Paint is allowed per formula.',
+        adminDetail: `Maximum of 1 Base Paint is allowed per formula ("${prod.name}" cannot be used as a 2nd Base Paint).`
+      };
+    }
+  } else if (idx === 0 && !isPigmentCatMode) {
+    const anyBaseInFormula = comps.some(x => x && x.productId && isDesignatedBasePaintProduct(productById(x.productId)));
+    if (!anyBaseInFormula) {
+      return {
+        status: 'ADMIN REVIEW',
+        badgeBg: 'var(--warning-bg)', badgeColor: 'var(--warning-text)', badgeBorder: 'var(--warning-border)',
+        compatible: false, hasStock, availStock, reqLiters,
+        simpleReason: 'Admin Review: A valid Base Paint is required for this paint type.',
+        detail: 'Missing designated Base Paint for this paint type.',
+        adminDetail: `No designated Base Paint configured for ${cat}. Pigment "${prod.name}" cannot serve as a paint base.`
+      };
+    }
+  }
+
+  return {
+    status: 'READY',
+    badgeBg: 'var(--success-bg)', badgeColor: 'var(--success-text)', badgeBorder: 'var(--success-border)',
+    compatible: true, hasStock: true, availStock, reqLiters,
+    simpleReason: 'Ready: The formula passed all required checks and can be dispensed.',
+    detail: `Ready (${formatStock(availStock)}L available, needs ${formatStock(reqLiters)}L).`,
+    adminDetail: `${prod.name}: Ready (${formatStock(availStock)}L in stock, needs ${formatStock(reqLiters)}L).`
+  };
+}
+
+function onColorMixBaseTypeChange(newType) {
+  const normalized = normalizeColorMixCategory(newType);
+  colorMixStudioState.baseType = normalized;
+  colorMixStudioState.typeFilter = 'all';
+  colorMixStudioState.openPickerIdx = -1;
+  colorMixStudioState.inlineSearchIdx = -1;
+  if (typeof _cmRecipeEvalCache !== 'undefined' && _cmRecipeEvalCache) _cmRecipeEvalCache.clear();
+  // Re-resolve active catalog preset for the new category when not editing a custom formula
+  const s = colorMixStudioState;
+  if (!s.isCustomizingFormula && !s.isCustomizedFormula && Number(s.selectedPresetIndex) >= 0 && COLOR_RECIPE_PRESETS[s.selectedPresetIndex]) {
+    const p = COLOR_RECIPE_PRESETS[s.selectedPresetIndex];
+    if (!p.isCustom && Array.isArray(p.recipe) && p.recipe.length >= 2) {
+      const check = evaluateRecipePresetAvailability(p, s.totalLiters || 1);
+      if (check && Array.isArray(check.resolvedItems) && check.resolvedItems.length >= 2) {
+        s.components = check.resolvedItems.map(({ item, product, reason, baseMissingForCategory }, idx) => ({
+          id: uid('cmc'),
+          productId: product ? product.id : (item.productId || ''),
+          colorId: item.colorId || (product ? (product.colorId || product.color_id || null) : null),
+          name: product ? product.name : (item.name || `Ingredient ${idx + 1}`),
+          brand: product ? (product.brand || '') : '',
+          colorName: product ? getProductColorName(product) : (item.name || ''),
+          color: product ? getProductColorName(product) : (item.name || ''),
+          stock: product ? product.stock : 0,
+          price: product ? product.price : 0,
+          hex: product ? getProductDefaultColor(product) : (item.hex || '#FFFFFF'),
+          pct: Number(item.pct) || 0,
+          preferredCanSize: 0,
+          isOriginal: true,
+          baseMissingForCategory: Boolean(baseMissingForCategory),
+          notConfiguredReason: reason || ''
+        }));
+      }
+    }
+  }
+  if (typeof updateColorMixCalculation === 'function') updateColorMixCalculation(false);
+  renderColorMixStudio();
 }
 
 function getColorMixSelectedProductSlotMap() {
@@ -726,7 +960,7 @@ function initColorMixStudioState() {
     ],
     totalLiters: 1,
     colorName: '',
-    baseType: prod1 ? prod1.type : 'Automotive Paint',
+    baseType: 'Pigment / Colorant',
     pricePerLiter: 400,
     userCustomizedName: false,
     userCustomizedPrice: false,
@@ -759,7 +993,7 @@ function initColorMixStudioState() {
     const p = COLOR_RECIPE_PRESETS[pickIdx];
     const check = evaluateRecipePresetAvailability(p, 1);
     if (check && Array.isArray(check.resolvedItems) && check.resolvedItems.length >= 2) {
-      colorMixStudioState.components = check.resolvedItems.map(({ item, product }, idx) => ({
+      colorMixStudioState.components = check.resolvedItems.map(({ item, product, reason, baseMissingForCategory }, idx) => ({
         id: uid('cmc'),
         productId: product ? product.id : (item.productId || ''),
         colorId: item.colorId || (product ? (product.colorId || product.color_id || null) : null),
@@ -772,29 +1006,38 @@ function initColorMixStudioState() {
         hex: product ? getProductDefaultColor(product) : (item.hex || '#FFFFFF'),
         pct: Number(item.pct) || 0,
         preferredCanSize: 0,
-        isOriginal: true
+        isOriginal: true,
+        baseMissingForCategory: Boolean(baseMissingForCategory),
+        notConfiguredReason: reason || ''
       }));
       colorMixStudioState.selectedPresetIndex = pickIdx;
       colorMixStudioState.originalPresetIndex = pickIdx;
       colorMixStudioState.originalCatalogName = cleanPresetColorName(p.name);
       colorMixStudioState.colorName = cleanPresetColorName(p.name);
-      const firstType = check.resolvedItems[0] && check.resolvedItems[0].product && check.resolvedItems[0].product.type;
-      if (firstType) colorMixStudioState.baseType = firstType;
     }
   }
 
   updateColorMixCalculation(true);
 }
 
+function isDesignatedBasePaintProduct(p) {
+  if (!p) return false;
+  if (isPigmentMixingProduct(p)) return false;
+  return Boolean(p.isBasePaint || p.is_base_paint);
+}
+
+function hasAnyDesignatedBasePaints() {
+  return (db && Array.isArray(db.products)) ? db.products.some(p => p.status === 'active' && isDesignatedBasePaintProduct(p)) : false;
+}
+
 function isBasePaintComponent(c, idx, components = []) {
   if (!c) return false;
-  const name = `${c.name || ''} ${c.colorName || ''} ${c.color || ''} ${c.brand || ''}`.toLowerCase();
-  const isPigmentKeyword = /pigment|colorant|tinter|tinting|dye/i.test(name);
-  const isBaseKeyword = /base\s*paint|\bbase\b/i.test(name);
-  if (isPigmentKeyword) return false;
-  if (isBaseKeyword) return true;
-  // If no explicit base keyword, slot 0 is the primary base paint slot
-  return idx === 0;
+  const p = (c.productId && typeof productById === 'function') ? productById(c.productId) : null;
+  if (p) {
+    if (isDesignatedBasePaintProduct(p)) return true;
+    if (isPigmentMixingProduct(p)) return false;
+  }
+  return false;
 }
 
 function syncColorMixingWithLibrary(reason = 'update') {
@@ -1573,18 +1816,43 @@ let _cmProdIndexList = [];
 let _cmRecipeEvalCacheSig = '';
 const _cmRecipeEvalCache = new Map();
 
+const CANONICAL_RECIPE_COLOR_MAP = {
+  'white': { colorId: 'clr_bi_pure_white', exactColors: ['pure white', 'white'], exactNames: ['pure white pigment', 'white paint', 'pure white'] },
+  'yellow': { colorId: 'clr_bi_pure_yellow', exactColors: ['pure yellow', 'yellow'], exactNames: ['pure yellow pigment', 'yellow paint', 'pure yellow'] },
+  'red': { colorId: 'clr_bi_bright_red', exactColors: ['bright red', 'pure red', 'red'], exactNames: ['bright red pigment', 'red paint', 'bright red'] },
+  'blue': { colorId: 'clr_bi_pure_blue', exactColors: ['pure blue', 'blue'], exactNames: ['pure blue pigment', 'blue paint', 'pure blue'] },
+  'green': { colorId: 'clr_bi_pure_green', exactColors: ['pure green', 'green'], exactNames: ['pure green pigment', 'green paint', 'pure green'] },
+  'orange': { colorId: 'clr_bi_pure_orange', exactColors: ['pure orange', 'orange'], exactNames: ['pure orange pigment', 'orange paint', 'pure orange'] },
+  'purple': { colorId: 'clr_bi_pure_violet', exactColors: ['purple', 'pure violet'], exactNames: ['purple pigment', 'purple paint', 'purple'] },
+  'violet': { colorId: 'clr_bi_violet', exactColors: ['violet'], exactNames: ['violet pigment', 'violet paint', 'violet'] },
+  'brown': { colorId: 'clr_cust_e1269dbabe', exactColors: ['brown', 'pure brown'], exactNames: ['brown pigment', 'brown paint', 'brown'] },
+  'black': { colorId: 'clr_bi_pure_black', exactColors: ['pure black', 'black'], exactNames: ['pure black pigment', 'black paint', 'pure black'] },
+  'gray': { colorId: 'clr_bi_medium_gray', exactColors: ['medium gray', 'gray'], exactNames: ['medium gray pigment', 'gray paint', 'medium gray'] },
+  'beige': { colorId: 'clr_bi_beige', exactColors: ['beige'], exactNames: ['beige pigment', 'beige paint', 'beige'] }
+};
+
+function normalizeRecipeColorToken(raw) {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+(paint|pigment|colorant|tinter|base)$/i, '')
+    .trim();
+}
+
 function getColorMixInventorySignature() {
   const prods = (typeof activeProducts === 'function' ? activeProducts() : []);
   let stockSum = 0;
   let openedSum = 0;
+  let baseMask = '';
   for (let i = 0; i < prods.length; i++) {
     const p = prods[i];
     if (!p) continue;
     stockSum += Number(p.stock) || 0;
     if (typeof productOpenedStock === 'function') openedSum += productOpenedStock(p);
+    baseMask += `${isDesignatedBasePaintProduct(p) ? 'B' : '0'}${isPigmentMixingProduct(p) ? 'P' : '0'}`;
   }
   const libLen = (typeof db !== 'undefined' && db && Array.isArray(db.colorLibrary)) ? db.colorLibrary.length : 0;
-  return `${prods.length}|${Math.round(stockSum * 100)}|${Math.round(openedSum * 100)}|${libLen}`;
+  return `${prods.length}|${Math.round(stockSum * 100)}|${Math.round(openedSum * 100)}|${libLen}|${baseMask}`;
 }
 
 function getColorMixProductIndex() {
@@ -1604,100 +1872,163 @@ function getColorMixProductIndex() {
     const pColor = String(prod.color || '').trim().toLowerCase();
     const pColorName = String((libEntry && libEntry.name) || prod.colorName || prod.color || '').trim().toLowerCase();
     const pName = String(prod.name || '').trim().toLowerCase();
-    let libText = libEntry ? `${libEntry.name || ''} ${libEntry.category || ''} ${libEntry.colorFamily || ''}`.toLowerCase() : '';
-    if (!libText && hex && libList.length) {
-      const rgb = hexToRgb(hex);
-      if (rgb && typeof detectClosestLibraryColor === 'function') {
-        const libDet = detectClosestLibraryColor(rgb.r, rgb.g, rgb.b);
-        if (libDet) libText = `${libDet.name || ''} ${libDet.family || ''} ${libDet.category || ''}`.toLowerCase();
-      }
-    }
+    const cleanPigmentName = normalizeRecipeColorToken(pName);
+    const cleanColorToken = normalizeRecipeColorToken(pColorName || pColor);
+    const isPigmentFlag = isPigmentMixingProduct(prod);
+    const isBaseFlag = isDesignatedBasePaintProduct(prod);
+    const isSpecFlag = isSpecialtyEffectPigment(prod);
     return {
       product: prod,
       idStr: String(prod.id),
       colorId: cid ? String(cid) : '',
-      isColorPigment: Boolean(prod.isColorPigment || prod.is_color_pigment || /pigment|colorant/i.test(String(prod.category || prod.type || ''))),
+      isColorPigment: isPigmentFlag,
+      isBasePaint: isBaseFlag,
+      isSpecialtyPigment: isSpecFlag,
       hex,
-      searchText: `${pColor} ${pColorName} ${pName} ${libText}`,
-      usableStock: typeof productMixAvailableStock === 'function' ? productMixAvailableStock(prod) : (Number(prod.stock) || 0),
+      pColor,
+      pColorName,
+      pName,
+      cleanPigmentName,
+      cleanColorToken,
+      searchText: `${pColor} ${pColorName} ${pName}`,
+      usableStock: typeof productMixNonExpiredAvailableStock === 'function'
+        ? productMixNonExpiredAvailableStock(prod)
+        : (typeof productMixAvailableStock === 'function' ? productMixAvailableStock(prod) : (Number(prod.stock) || 0)),
       openedStock: typeof productOpenedStock === 'function' ? productOpenedStock(prod) : 0,
-      typeLower: String(prod.type || '').toLowerCase()
+      typeLower: String(prod.type || '').trim().toLowerCase()
     };
-  });
+  }).filter(e => e.isColorPigment || e.isBasePaint);
   _cmProdIndexSig = sig;
   _cmRecipeEvalCache.clear();
-  _cmRecipeEvalCacheSig = sig;
+  _cmRecipeEvalCacheSig = _cmProdIndexSig;
   return _cmProdIndexList;
 }
 
-function findMatchingProductForRecipeItem(item, reqLiters = 0, excludeProductIds = new Set(), preferredType = '') {
-  const index = getColorMixProductIndex();
-  const prefLower = String(preferredType || '').toLowerCase();
+function getExactColorMatchScore(entry, item) {
+  if (!entry || !item) return 0;
+  const targetCid = String(item.colorId || '').trim();
+  if (targetCid && entry.colorId === targetCid) {
+    return 100;
+  }
 
-  // 1. Exact productId match first (for saved custom mixes)
+  const rawHint = normalizeRecipeColorToken(item.colorHint || item.colorName || item.color || item.name || '');
+  const rawName = String(item.name || '').trim().toLowerCase();
+  if (!rawHint && !rawName) return 0;
+
+  // Exclude Specialty/Effect pigments unless the recipe item explicitly requests that specialty color name
+  if (entry.isSpecialtyPigment && !/\b(fluorescent|glow-in-the-dark|metallic|pearl)\b/i.test(`${rawHint} ${rawName}`)) {
+    return 0;
+  }
+
+  const canonical = CANONICAL_RECIPE_COLOR_MAP[rawHint];
+  if (canonical) {
+    if (entry.colorId && entry.colorId === canonical.colorId) return 95;
+    if (canonical.exactNames.includes(entry.pName)) return 92;
+    if (canonical.exactColors.includes(entry.pColorName) || canonical.exactColors.includes(entry.pColor) || canonical.exactColors.includes(entry.cleanPigmentName)) return 90;
+    return 0; // Never fall back to loose substring matching for canonical colors!
+  }
+
+  // Exact product name or exact color name matching for non-canonical shades (supports Base Pigment & Custom Pigment brands)
+  if (rawName && entry.pName === rawName) return 88;
+  if (rawHint && (entry.pColorName === rawHint || entry.pColor === rawHint || entry.cleanPigmentName === rawHint || entry.cleanColorToken === rawHint)) {
+    return 85;
+  }
+  return 0;
+}
+
+function sortExactCandidates(candidates, reqLiters, prefLower) {
+  return candidates.slice().sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    const aTypeMatch = prefLower && a.entry.typeLower === prefLower ? 1 : 0;
+    const bTypeMatch = prefLower && b.entry.typeLower === prefLower ? 1 : 0;
+    if (aTypeMatch !== bTypeMatch) return bTypeMatch - aTypeMatch;
+    const aSufficient = reqLiters > 0 ? (a.entry.usableStock >= reqLiters ? 1 : 0) : (a.entry.usableStock > 0 ? 1 : 0);
+    const bSufficient = reqLiters > 0 ? (b.entry.usableStock >= reqLiters ? 1 : 0) : (b.usableStock > 0 ? 1 : 0);
+    if (aSufficient !== bSufficient) return bSufficient - aSufficient;
+    const aOpened = a.entry.openedStock > 0 ? 1 : 0;
+    const bOpened = b.entry.openedStock > 0 ? 1 : 0;
+    if (aOpened !== bOpened) return bOpened - aOpened;
+    return b.entry.usableStock - a.entry.usableStock;
+  });
+}
+
+function findMatchingProductForRecipeItem(item, reqLiters = 0, excludeProductIds = new Set(), preferredType = '', isBaseSlot = false) {
+  const index = getColorMixProductIndex();
+  const prefCat = String(preferredType || (colorMixStudioState && colorMixStudioState.baseType) || 'Pigment / Colorant').trim();
+  const prefLower = prefCat.toLowerCase();
+  const isPigmentCatMode = /pigment|colorant/i.test(prefLower);
+
+  // 1. Exact productId match first (for saved custom mixes — preserve exact product reference without silent substitution)
   if (item.productId && !excludeProductIds.has(String(item.productId))) {
     const byId = index.find(e => e.idStr === String(item.productId));
-    if (byId) return { product: byId.product, reason: null };
-    const rawProd = typeof productById === 'function' ? productById(item.productId) : null;
-    if (rawProd && rawProd.status === 'active') return { product: rawProd, reason: null };
-  }
-
-  // 1b. Exact Color Library ID match (identifies linked pigment products & color-linked paints)
-  if (item.colorId) {
-    const targetCid = String(item.colorId);
-    const cidCandidates = index.filter(e => !excludeProductIds.has(e.idStr) && e.colorId === targetCid);
-    if (cidCandidates.length > 0) {
-      cidCandidates.sort((a, b) => {
-        const aSufficient = reqLiters > 0 ? (a.usableStock >= reqLiters ? 1 : 0) : (a.usableStock > 0 ? 1 : 0);
-        const bSufficient = reqLiters > 0 ? (b.usableStock >= reqLiters ? 1 : 0) : (b.usableStock > 0 ? 1 : 0);
-        if (aSufficient !== bSufficient) return bSufficient - aSufficient;
-
-        const aTypeMatch = prefLower && a.typeLower === prefLower ? 1 : 0;
-        const bTypeMatch = prefLower && b.typeLower === prefLower ? 1 : 0;
-        if (aTypeMatch !== bTypeMatch) return bTypeMatch - aTypeMatch;
-
-        const aPigment = a.isColorPigment ? 1 : 0;
-        const bPigment = b.isColorPigment ? 1 : 0;
-        if (aPigment !== bPigment) return bPigment - aPigment;
-
-        return b.usableStock - a.usableStock;
-      });
-      return { product: cidCandidates[0].product, reason: null };
+    if (byId) return { product: byId.product, reason: null, baseMissingForCategory: false };
+    const rawProd = (typeof productById === 'function') ? productById(item.productId) : null;
+    if (rawProd) {
+      return { product: rawProd, reason: null, baseMissingForCategory: false };
     }
   }
 
-  // 2. Match by colorHint or name using pre-indexed searchText (O(N) string check, zero library scans)
-  const hint = String(item.colorHint || item.name || '').trim().toLowerCase();
-  if (hint) {
-    const candidates = [];
-    for (let i = 0; i < index.length; i++) {
-      const e = index[i];
-      if (excludeProductIds.has(e.idStr)) continue;
-      if (e.searchText.includes(hint)) candidates.push(e);
+  // 2. Base Slot Resolution when a specific paint category (House Paint, Automotive Paint, Specialty Paint) is selected:
+  // - Must match the exact color identity of the slot (never overwrite Orange/Brown/Yellow/Blue/Purple with White!)
+  // - Must be an explicitly designated Base Paint (never a Pigment / Colorant or Regular Paint)
+  // - Must belong to the exact selected category (never silently pull an Automotive Base Paint into House Paint or Specialty Paint!)
+  if (isBaseSlot && !isPigmentCatMode) {
+    const sameCatBaseCandidates = index
+      .filter(e => !excludeProductIds.has(e.idStr) && e.isBasePaint && !e.isColorPigment && e.typeLower === prefLower)
+      .map(entry => ({ entry, score: getExactColorMatchScore(entry, item) }))
+      .filter(x => x.score > 0);
+
+    if (sameCatBaseCandidates.length > 0) {
+      const sorted = sortExactCandidates(sameCatBaseCandidates, reqLiters, prefLower);
+      return { product: sorted[0].entry.product, reason: null, baseMissingForCategory: false };
     }
 
-    if (candidates.length > 0) {
-      candidates.sort((a, b) => {
-        const aSufficient = reqLiters > 0 ? (a.usableStock >= reqLiters ? 1 : 0) : (a.usableStock > 0 ? 1 : 0);
-        const bSufficient = reqLiters > 0 ? (b.usableStock >= reqLiters ? 1 : 0) : (b.usableStock > 0 ? 1 : 0);
-        if (aSufficient !== bSufficient) return bSufficient - aSufficient;
+    // No designated Base Paint of that exact color exists in the selected paint category.
+    // Resolve the exact-color pigment ONLY for visual formula inspection while flagging baseMissingForCategory = true.
+    const exactPigmentForDisplay = index
+      .filter(e => !excludeProductIds.has(e.idStr) && e.isColorPigment && !e.isBasePaint)
+      .map(entry => ({ entry, score: getExactColorMatchScore(entry, item) }))
+      .filter(x => x.score > 0);
 
-        const aTypeMatch = prefLower && a.typeLower === prefLower ? 1 : 0;
-        const bTypeMatch = prefLower && b.typeLower === prefLower ? 1 : 0;
-        if (aTypeMatch !== bTypeMatch) return bTypeMatch - aTypeMatch;
-
-        const aOpened = a.openedStock > 0 ? 1 : 0;
-        const bOpened = b.openedStock > 0 ? 1 : 0;
-        if (aOpened !== bOpened) return bOpened - aOpened;
-
-        return b.usableStock - a.usableStock;
-      });
-
-      return { product: candidates[0].product, reason: null };
+    const missingBaseReason = `Not Configured: No designated "${item.name || item.colorHint || 'Base'}" Base Paint found for ${prefCat}.`;
+    if (exactPigmentForDisplay.length > 0) {
+      const sortedPig = sortExactCandidates(exactPigmentForDisplay, reqLiters, prefLower);
+      return {
+        product: sortedPig[0].entry.product,
+        reason: missingBaseReason,
+        baseMissingForCategory: true
+      };
     }
+    return { product: null, reason: missingBaseReason, baseMissingForCategory: true };
   }
 
-  return { product: null, reason: `Missing ${item.name || item.colorHint || 'ingredient'} in inventory` };
+  // 3. Pigment / Colorant Resolution (supports both Base Pigment & Custom Pigment brands strictly by exact color identity)
+  const pigmentCandidates = index
+    .filter(e => !excludeProductIds.has(e.idStr) && e.isColorPigment && (isBaseSlot || !e.isBasePaint))
+    .map(entry => ({ entry, score: getExactColorMatchScore(entry, item) }))
+    .filter(x => x.score > 0);
+
+  if (pigmentCandidates.length > 0) {
+    const sorted = sortExactCandidates(pigmentCandidates, reqLiters, prefLower);
+    return { product: sorted[0].entry.product, reason: null, baseMissingForCategory: false };
+  }
+
+  // Fallback for non-base slot if the only exact-color pigment is also designated as Base Paint (e.g. Pure White Pigment in slot > 0)
+  const anyExactPigment = index
+    .filter(e => !excludeProductIds.has(e.idStr) && e.isColorPigment)
+    .map(entry => ({ entry, score: getExactColorMatchScore(entry, item) }))
+    .filter(x => x.score > 0);
+
+  if (anyExactPigment.length > 0) {
+    const sorted = sortExactCandidates(anyExactPigment, reqLiters, prefLower);
+    return { product: sorted[0].entry.product, reason: null, baseMissingForCategory: false };
+  }
+
+  return {
+    product: null,
+    reason: `Not Configured: Exact pigment "${item.name || item.colorHint || 'ingredient'}" was not found in inventory.`,
+    baseMissingForCategory: false
+  };
 }
 
 function productMixNonExpiredAvailableStock(p) {
@@ -1724,26 +2055,103 @@ function productMixNonExpiredAvailableStock(p) {
   return (typeof productMixAvailableStock === 'function') ? productMixAvailableStock(p) : Number(Math.max(0, opened + (Number(p.stock) || 0)).toFixed(2));
 }
 
+function evaluateFormulaVerificationStatus(components, selectedCat, totalLiters, physicalSampleTested = false) {
+  const comps = Array.isArray(components) ? components : [];
+  if (comps.length < 2) {
+    return {
+      status: 'ADMIN REVIEW',
+      reason: 'Admin Review: At least 2 ingredients are required to dispense a formula.',
+      adminDetails: ['Formula contains fewer than 2 ingredients.']
+    };
+  }
+  const totalPct = Math.round(comps.reduce((s, c) => s + (Number(c && c.pct) || 0), 0) * 10) / 10;
+  if (Math.abs(totalPct - 100) >= 0.05) {
+    return {
+      status: 'ADMIN REVIEW',
+      reason: `Admin Review: Ingredient percentages must total 100% (currently ${totalPct}%).`,
+      adminDetails: [`Total formula percentage is ${totalPct}% (must equal 100.0%).`]
+    };
+  }
+
+  const evals = comps.map((c, idx) => evaluateColorMixIngredientStatus(c, idx, selectedCat, totalLiters, comps));
+
+  // 1. Check UNAVAILABLE first (missing product or insufficient stock for the requested volume)
+  const unavailList = evals.filter(e => e.status === 'UNAVAILABLE');
+  if (unavailList.length > 0) {
+    const adminDetails = Array.from(new Set(unavailList.map(e => e.adminDetail || e.detail).filter(Boolean)));
+    return {
+      status: 'UNAVAILABLE',
+      reason: 'Unavailable: Required ingredients or quantities are unavailable.',
+      adminDetails
+    };
+  }
+
+  // 2. Check duplicate or zero-percentage ingredients -> ADMIN REVIEW
+  const seenPids = new Set();
+  for (let i = 0; i < comps.length; i++) {
+    const c = comps[i];
+    if (!c || !c.productId || Number(c.pct) <= 0) {
+      return {
+        status: 'ADMIN REVIEW',
+        reason: 'Admin Review: Every ingredient must have a percentage greater than 0%.',
+        adminDetails: [`Ingredient #${i + 1} is missing a product or has a 0% ratio.`]
+      };
+    }
+    const pid = String(c.productId);
+    if (seenPids.has(pid)) {
+      return {
+        status: 'ADMIN REVIEW',
+        reason: 'Admin Review: Duplicate ingredient detected in this formula.',
+        adminDetails: [`Duplicate product "${c.name || pid}" in slot #${i + 1}.`]
+      };
+    }
+    seenPids.add(pid);
+  }
+
+  // 3. Check ADMIN REVIEW (unconfirmed ingredient role or invalid Base Paint)
+  const reviewList = evals.filter(e => e.status === 'ADMIN REVIEW');
+  if (reviewList.length > 0) {
+    const adminDetails = Array.from(new Set(reviewList.map(e => e.adminDetail || e.detail).filter(Boolean)));
+    return {
+      status: 'ADMIN REVIEW',
+      reason: reviewList[0].simpleReason || 'Admin Review: This formula contains an ingredient that has not been confirmed for this paint type.',
+      adminDetails
+    };
+  }
+
+  // 4. All checks passed -> READY
+  return {
+    status: 'READY',
+    reason: 'Ready: The formula passed all required checks and can be dispensed.',
+    adminDetails: []
+  };
+}
+
 function evaluateRecipePresetAvailability(preset, totalLiters = (colorMixStudioState && colorMixStudioState.totalLiters ? colorMixStudioState.totalLiters : 1)) {
   if (!preset || !Array.isArray(preset.recipe) || !preset.recipe.length) {
     return {
       available: false,
+      hasStock: false,
+      formulaStatus: 'ADMIN REVIEW',
+      formulaStatusReason: 'Admin Review: Formula requires Admin attention before dispensing.',
       lackingReasons: ['Empty recipe'],
       shortageDescriptions: ['Empty recipe'],
       ingredients: [],
       resolvedItems: [],
-      tooltip: 'Empty recipe'
+      tooltip: 'Admin Review'
     };
   }
 
   const vol = Math.max(0.5, Number(totalLiters) || 0.5);
-  const preferredType = (colorMixStudioState && colorMixStudioState.typeFilter && colorMixStudioState.typeFilter !== 'all')
-    ? colorMixStudioState.typeFilter
-    : (preset.baseType || '');
+  const preferredType = (colorMixStudioState && colorMixStudioState.baseType)
+    ? colorMixStudioState.baseType
+    : ((colorMixStudioState && colorMixStudioState.typeFilter && colorMixStudioState.typeFilter !== 'all')
+      ? colorMixStudioState.typeFilter
+      : (preset.baseType || 'Pigment / Colorant'));
 
   // Ensure product index & recipe evaluation cache are synchronized with current inventory stock
   getColorMixProductIndex();
-  const recipeKey = `${preset.id || preset.cleanName || preset.name || ''}|${vol}|${preferredType}`;
+  const recipeKey = `${preset.id || preset.cleanName || preset.name || ''}|${vol}|${preferredType}|${preset.physicalSampleTested ? '1' : '0'}`;
   if (_cmRecipeEvalCache.has(recipeKey)) {
     return _cmRecipeEvalCache.get(recipeKey);
   }
@@ -1752,32 +2160,39 @@ function evaluateRecipePresetAvailability(preset, totalLiters = (colorMixStudioS
   const productTotalReqMap = new Map();
   const resolvedItems = [];
 
-  // Pass 1: Match products and aggregate required liters per product ID (avoids double counting)
-  preset.recipe.forEach(item => {
+  // Pass 1: Match products strictly by exact identity and aggregate required liters per product ID
+  preset.recipe.forEach((item, idx) => {
     const pct = Number(item.pct) || 0;
     const reqLiters = Number(((vol * (pct / 100)) || 0).toFixed(2));
-    const { product, reason } = findMatchingProductForRecipeItem(item, reqLiters, usedProductIds, preferredType);
+    const { product, reason, baseMissingForCategory } = findMatchingProductForRecipeItem(item, reqLiters, usedProductIds, preferredType, idx === 0);
     if (product) {
       usedProductIds.add(String(product.id));
       const prevTotal = productTotalReqMap.get(String(product.id)) || 0;
       productTotalReqMap.set(String(product.id), Number((prevTotal + reqLiters).toFixed(2)));
     }
-    resolvedItems.push({ item, product, reqLiters, reason });
+    resolvedItems.push({ item, product, reqLiters, reason, baseMissingForCategory: Boolean(baseMissingForCategory) });
   });
 
-  // Pass 2: Evaluate stock sufficiency per ingredient
+  // Pass 2: Evaluate stock sufficiency & ingredient status per ingredient
   const ingredients = [];
   const lackingReasons = [];
   const shortageDescriptions = [];
+  const tempComps = resolvedItems.map(({ item, product, reason, baseMissingForCategory }) => ({
+    productId: product ? product.id : '',
+    name: product ? product.name : (item.name || ''),
+    pct: Number(item.pct) || 0,
+    baseMissingForCategory: Boolean(baseMissingForCategory),
+    notConfiguredReason: reason || ''
+  }));
 
-  resolvedItems.forEach(({ item, product, reqLiters, reason }) => {
+  resolvedItems.forEach(({ item, product, reqLiters, reason, baseMissingForCategory }, idx) => {
     const rawHint = item.colorHint || (item.name ? item.name.replace(/paint/i, '').trim() : '');
     const fallbackDisplayName = rawHint ? (rawHint.charAt(0).toUpperCase() + rawHint.slice(1).toLowerCase() + ' Paint') : 'Ingredient';
     const displayName = item.name || fallbackDisplayName;
 
     if (!product) {
-      const shortageDesc = `${displayName} needs ${formatStock(reqLiters)} L but only 0.00 L is available.`;
-      lackingReasons.push(reason || shortageDesc);
+      const shortageDesc = reason || `${displayName} (${formatStock(reqLiters)} L) is unavailable in inventory.`;
+      lackingReasons.push(shortageDesc);
       shortageDescriptions.push(shortageDesc);
       ingredients.push({
         item,
@@ -1790,8 +2205,9 @@ function evaluateRecipePresetAvailability(preset, totalLiters = (colorMixStudioS
         sealedStock: 0,
         usableStock: 0,
         isAvailable: false,
+        baseMissingForCategory: Boolean(baseMissingForCategory),
         shortageLiters: reqLiters,
-        statusText: 'Insufficient'
+        statusText: baseMissingForCategory ? 'ADMIN REVIEW' : 'UNAVAILABLE'
       });
       return;
     }
@@ -1802,9 +2218,10 @@ function evaluateRecipePresetAvailability(preset, totalLiters = (colorMixStudioS
     const totalReqForProduct = productTotalReqMap.get(String(product.id)) || reqLiters;
     const hasSufficient = usableStock >= totalReqForProduct && usableStock > 0;
     const shortageLiters = hasSufficient ? 0 : Number(Math.max(0, totalReqForProduct - usableStock).toFixed(2));
+    const ingStatus = evaluateColorMixIngredientStatus(tempComps[idx], idx, preferredType, vol, tempComps);
 
     if (!hasSufficient) {
-      const shortageDesc = `${displayName} needs ${formatStock(totalReqForProduct)} L but only ${formatStock(usableStock)} L is available.`;
+      const shortageDesc = `${displayName} (${product.name}) needs ${formatStock(totalReqForProduct)} L but only ${formatStock(usableStock)} L is available.`;
       lackingReasons.push(shortageDesc);
       shortageDescriptions.push(shortageDesc);
     }
@@ -1821,31 +2238,19 @@ function evaluateRecipePresetAvailability(preset, totalLiters = (colorMixStudioS
       sealedStock,
       usableStock,
       isAvailable: hasSufficient,
+      baseMissingForCategory: Boolean(baseMissingForCategory),
       shortageLiters,
-      statusText: hasSufficient ? 'Available' : 'Insufficient'
+      statusText: !hasSufficient ? 'UNAVAILABLE' : ingStatus.status
     });
   });
 
-  const isAvailable = ingredients.length > 0 && ingredients.every(ing => ing.isAvailable);
+  const hasAllStock = ingredients.length > 0 && ingredients.every(ing => ing.isAvailable);
+  const formulaVer = evaluateFormulaVerificationStatus(tempComps, preferredType, vol, Boolean(preset.physicalSampleTested));
 
-  // Build clean multiline tooltip strictly matching requirements:
-  // Preset: Flamingo Pink
-  //
-  // Required Ingredients:
-  // - White Paint: 0.60 L — Available
-  // - Red Paint: 0.40 L — Insufficient
-  //
-  // Shortage:
-  // Red Paint needs 0.40 L but only 0.20 L is available.
-  let tooltip = `Mixed Color Catalog: ${preset.name}\n\nRequired Ingredients:\n`;
+  let tooltip = `${preset.cleanName || preset.name} — ${formulaVer.status}\n${formulaVer.reason}\n\nIngredients:\n`;
   ingredients.forEach(ing => {
-    tooltip += `- ${ing.displayName}: ${formatStock(ing.reqLiters)} L — ${ing.isAvailable ? 'Available' : 'Insufficient'}\n`;
+    tooltip += `- ${ing.displayName} (${ing.productName || 'Unavailable'}): ${formatStock(ing.reqLiters)} L — ${ing.statusText}\n`;
   });
-  if (!isAvailable) {
-    tooltip += `\nShortage:\n${shortageDescriptions.join('\n')}`;
-  } else {
-    tooltip += `\nStatus: Available (${vol} L mix)`;
-  }
 
   const resolvedHex = (resolvedItems.length >= 2 && resolvedItems.every(r => r.product))
     ? subtractivePaintMix(resolvedItems.map(r => ({
@@ -1855,7 +2260,10 @@ function evaluateRecipePresetAvailability(preset, totalLiters = (colorMixStudioS
     : preset.hex;
 
   const evalResult = {
-    available: isAvailable,
+    available: hasAllStock,
+    hasStock: hasAllStock,
+    formulaStatus: formulaVer.status,
+    formulaStatusReason: formulaVer.reason,
     lackingReasons,
     shortageDescriptions,
     ingredients,
@@ -1882,13 +2290,18 @@ function isPresetCurrentlyActive(preset, pIdx) {
   return doesComponentsMatchPreset(preset, colorMixStudioState.components);
 }
 
+let _cmPresetSearchTimer = null;
 function onColorMixPresetSearch(val) {
   if (!colorMixStudioState) return;
   colorMixStudioState.presetSearch = String(val || '');
   const clrBtn = document.getElementById('cm-preset-search-clear');
   if (clrBtn) clrBtn.style.display = colorMixStudioState.presetSearch.trim() ? 'inline-flex' : 'none';
-  const wrap = document.getElementById('cm-preset-chips-wrap');
-  if (wrap) wrap.innerHTML = renderColorMixPresetChipsHtml();
+  if (_cmPresetSearchTimer) clearTimeout(_cmPresetSearchTimer);
+  _cmPresetSearchTimer = setTimeout(() => {
+    _cmPresetSearchTimer = null;
+    const wrap = document.getElementById('cm-preset-chips-wrap');
+    if (wrap) wrap.innerHTML = renderColorMixPresetChipsHtml();
+  }, 140);
 }
 
 function clearColorMixPresetSearch() {
@@ -1972,8 +2385,8 @@ function renderColorMixPresetChipsHtml() {
                 <span>· ${escapeHtml(preset.family || 'Mix')}</span>
               </span>
             </span>
-            <span class="cm-ready-recipe-status ${hasFormula ? (isAvailable ? 'ok' : 'low') : 'none'}">
-              ${!hasFormula ? 'No Formula' : (isActive ? '✓ Selected' : (isAvailable ? 'Ready' : 'Low Stock'))}
+            <span class="cm-ready-recipe-status ${hasFormula ? (check.formulaStatus === 'READY' ? 'ok' : 'low') : 'none'}">
+              ${!hasFormula ? 'UNAVAILABLE' : (isActive && check.formulaStatus === 'READY' ? '✓ Selected' : check.formulaStatus)}
             </span>
           </button>
         `;
@@ -2105,20 +2518,22 @@ function applyRecipePreset(presetIndex, preCheck = null) {
     return;
   }
 
-  const newComponents = check.resolvedItems.map(({ item, product }) => ({
+  const newComponents = check.resolvedItems.map(({ item, product, reason, baseMissingForCategory }) => ({
     id: uid('cmc'),
-    productId: product.id,
-    colorId: item.colorId || product.colorId || product.color_id || null,
-    name: product.name,
-    brand: product.brand,
-    colorName: getProductColorName(product),
-    color: getProductColorName(product),
-    stock: product.stock,
-    price: product.price,
-    hex: getProductDefaultColor(product),
+    productId: product ? product.id : (item.productId || ''),
+    colorId: item.colorId || (product ? (product.colorId || product.color_id || null) : null),
+    name: product ? product.name : (item.name || 'Missing Ingredient'),
+    brand: product ? product.brand : '',
+    colorName: product ? getProductColorName(product) : (item.name || ''),
+    color: product ? getProductColorName(product) : (item.name || ''),
+    stock: product ? product.stock : 0,
+    price: product ? product.price : 0,
+    hex: product ? getProductDefaultColor(product) : (item.hex || '#FFFFFF'),
     pct: item.pct,
     preferredCanSize: 0,
-    isOriginal: true
+    isOriginal: true,
+    baseMissingForCategory: Boolean(baseMissingForCategory),
+    notConfiguredReason: reason || ''
   }));
 
   colorMixStudioState.components = newComponents;
@@ -2130,16 +2545,10 @@ function applyRecipePreset(presetIndex, preCheck = null) {
   colorMixStudioState.customizeSnapshot = null;
   colorMixStudioState.openPickerIdx = -1;
   colorMixStudioState.selectedLibraryColorId = p.colorId || null;
-  const invTypes = getInventoryBasePaintTypes();
-  const firstProdType = (check.resolvedItems[0] && check.resolvedItems[0].product && check.resolvedItems[0].product.type)
-    ? String(check.resolvedItems[0].product.type).trim()
-    : '';
-  if (p.baseType && invTypes.includes(p.baseType)) {
-    colorMixStudioState.baseType = p.baseType;
-  } else if (firstProdType && invTypes.includes(firstProdType)) {
-    colorMixStudioState.baseType = firstProdType;
-  } else if (invTypes.length > 0 && !invTypes.includes(colorMixStudioState.baseType)) {
-    colorMixStudioState.baseType = invTypes[0];
+  if (p.isCustom && p.baseType) {
+    colorMixStudioState.baseType = normalizeColorMixCategory(p.baseType);
+  } else {
+    colorMixStudioState.baseType = normalizeColorMixCategory(colorMixStudioState.baseType);
   }
   // Set formula color name cleanly from the preset (stripping emoji e.g. "🌸 Pastel Rose" -> "Pastel Rose")
   const cleanPresetName = cleanPresetColorName(p.name);
@@ -2239,26 +2648,17 @@ function applyFinishPreset(sheen) {
 
 function colorMixStudioHtml() {
   const s = colorMixStudioState;
-  const prods = colorMixAvailableProducts();
-
-  // Ensure current components do not point to products at or below threshold, without creating duplicates
-  const usedFallbackIds = new Set(s.components.map(comp => String(comp.productId)).filter(Boolean));
-  s.components.forEach((c, idx) => {
-    if (c.productId && !prods.some(p => p.id === c.productId)) {
-      usedFallbackIds.delete(String(c.productId));
-      const fallback = prods.find(p => !usedFallbackIds.has(String(p.id))) || null;
-      if (fallback) {
-        usedFallbackIds.add(String(fallback.id));
-        c.productId = fallback.id;
-        c.name = fallback.name;
-        c.brand = fallback.brand;
-        c.stock = fallback.stock;
-        c.price = fallback.price;
-        c.hex = getProductDefaultColor(fallback);
-      } else {
-        c.productId = '';
-        c.name = 'Component ' + String.fromCharCode(65 + idx);
-        c.stock = 0;
+  // Never silently substitute an out-of-stock or unconfigured component with another pigment!
+  // Sync component metadata from its exact productId if present in inventory.
+  s.components.forEach((c) => {
+    if (c && c.productId) {
+      const exactProd = productById(c.productId);
+      if (exactProd) {
+        c.name = exactProd.name;
+        c.brand = exactProd.brand;
+        c.stock = exactProd.stock;
+        c.price = exactProd.price;
+        c.hex = getProductDefaultColor(exactProd);
       }
     }
   });
@@ -2314,10 +2714,10 @@ function colorMixStudioHtml() {
       <div class="cm-title-group">
         <span>🧪 Selected Color Formula</span>
         ${s.isCustomizingFormula
-          ? `<span class="cm-formula-status-pill is-editing">✏️ Editing Formula</span>`
-          : (s.isCustomizedFormula
-            ? `<span class="cm-formula-status-pill is-custom">✨ Customized Formula</span>`
-            : `<span class="cm-formula-status-pill is-readonly">🔒 Read-Only</span>`)}
+      ? `<span class="cm-formula-status-pill is-editing">✏️ Editing Formula</span>`
+      : (s.isCustomizedFormula
+        ? `<span class="cm-formula-status-pill is-custom">✨ Customized Formula</span>`
+        : `<span class="cm-formula-status-pill is-readonly">🔒 Read-Only</span>`)}
       </div>
       <div class="cm-formula-header-actions">
         ${s.isCustomizingFormula ? `
@@ -2360,7 +2760,7 @@ function colorMixStudioHtml() {
       return `
       <div id="cm-customize-toolbar" class="cm-customize-toolbar ${isToolbarValid ? 'is-valid' : 'is-invalid'}">
         <div id="cm-customize-validation-msg" class="cm-customize-validation-msg">${valMsg}</div>
-        <div class="cm-customize-toolbar-btns">
+        <div class="cm-customize-toolbar-btns" style="display:flex; align-items:center; justify-content:flex-end; margin-left:auto; gap:6px; flex-wrap:wrap;">
           <button type="button" class="cm-customize-cancel-btn" onclick="balanceColorMixTo100()" title="Scale percentages proportionally to 100%">⚖️ Auto-Balance</button>
           <button type="button" id="cm-add-ingredient-btn" class="cm-customize-btn" onclick="openAddCustomIngredientPicker()">+ Add Ingredient</button>
         </div>
@@ -2376,22 +2776,29 @@ function colorMixStudioHtml() {
       `).join('')}
     </div>
 
+    <div id="cm-main-formula-status-wrap">
+      ${renderColorMixMainFormulaStatusBannerHtml(s)}
+    </div>
+
     <!-- Ingredient Breakdown List (Original Protected + Custom Added) -->
     <div id="cm-ingredients-list" class="cm-ingredients-grid">
       ${s.components.map((c, idx) => {
-    const reqLiters = Number(((s.totalLiters * (c.pct / 100)) || 0).toFixed(2));
-    const reqMl = Math.round((s.totalLiters * (c.pct / 100)) * 1000);
-    const prodObj = c.productId ? productById(c.productId) : null;
-    const availStock = prodObj && typeof productMixAvailableStock === 'function' ? productMixAvailableStock(prodObj) : (Number(c.stock) || 0);
-    const openedAvail = prodObj ? productOpenedStock(prodObj) : 0;
-    const prefCan = Number(c.preferredCanSize) || 0;
-    const mixPlan = prodObj ? previewColorMixConsumption(prodObj, reqLiters, prefCan) : null;
-    const hasStock = prodObj ? availStock + 1e-6 >= reqLiters : c.stock >= reqLiters;
-    const isDup = duplicateSlots.has(idx + 1);
-    const isBase = isBasePaintComponent(c, idx, s.components);
-    const isOrig = c.isOriginal !== false;
-    return `
-        <div class="cm-ingredient-item ${!hasStock ? 'is-low-stock' : ''}" id="cm-ing-item-${idx}" style="padding:10px 12px; margin-bottom:0; ${isDup ? 'border:1.5px solid var(--danger-border); background:var(--danger-bg);' : ''}">
+      const reqLiters = Number(((s.totalLiters * (c.pct / 100)) || 0).toFixed(2));
+      const reqMl = Math.round((s.totalLiters * (c.pct / 100)) * 1000);
+      const prodObj = c.productId ? productById(c.productId) : null;
+      const availStock = prodObj && typeof productMixAvailableStock === 'function' ? productMixAvailableStock(prodObj) : (Number(c.stock) || 0);
+      const openedAvail = prodObj ? productOpenedStock(prodObj) : 0;
+      const prefCan = Number(c.preferredCanSize) || 0;
+      const mixPlan = prodObj ? previewColorMixConsumption(prodObj, reqLiters, prefCan) : null;
+      const ingEval = evaluateColorMixIngredientStatus(c, idx, s.baseType, s.totalLiters);
+      const hasStock = ingEval.hasStock;
+      const isDup = duplicateSlots.has(idx + 1);
+      const isBase = isBasePaintComponent(c, idx, s.components);
+      const isOrig = c.isOriginal !== false;
+      const isAdminUser = typeof currentUser !== 'undefined' && currentUser && currentUser.role === 'admin';
+      const badgeTitle = isAdminUser ? (ingEval.adminDetail || ingEval.detail) : (ingEval.simpleReason || ingEval.detail);
+      return `
+        <div class="cm-ingredient-item ${(ingEval.status !== 'READY') ? 'is-low-stock' : ''}" id="cm-ing-item-${idx}" style="padding:10px 12px; margin-bottom:0; ${(isDup || ingEval.status !== 'READY') ? `border:1.5px solid ${ingEval.badgeBorder}; background:${ingEval.badgeBg};` : ''}">
           <div class="cm-ing-grid" style="grid-template-columns: auto 1fr auto;">
             <!-- Product Color Swatch -->
             <div class="cm-swatch-display" id="cm-swatch-box-${idx}" style="background-color:${c.hex || '#FFFFFF'};" title="${escapeHtml(c.name || 'Ingredient')} · ${c.hex || '#FFFFFF'}">
@@ -2404,15 +2811,16 @@ function colorMixStudioHtml() {
                 <span class="badge" style="background:${isBase ? 'var(--teal)' : '#7B1FA2'}; color:#fff; font-size:9.5px; padding:1px 6px;">#${idx + 1} ${isBase ? 'Base' : 'Pigment'}</span>
                 <strong style="font-size:13px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(prodObj ? prodObj.name : (c.name || 'Missing Inventory Paint'))}</strong>
                 <span class="badge" style="background:var(--surface-3); color:var(--ink-soft); font-size:10px; padding:1px 6px;">${escapeHtml(prodObj && prodObj.type ? prodObj.type : 'Paint')}</span>
+                <span id="cm-ing-status-badge-${idx}" class="badge" style="background:${ingEval.badgeBg}; color:${ingEval.badgeColor}; border:1px solid ${ingEval.badgeBorder}; font-size:10px; padding:1px 6px; font-weight:700;" title="${escapeAttr(badgeTitle)}">${escapeHtml(ingEval.status)}</span>
                 ${isOrig
-                  ? `<span class="cm-protected-badge" title="Original catalog ingredient — protected and cannot be removed">🔒 Original</span>`
-                  : `<span class="cm-added-badge" title="Added during customization — can be removed">✨ Added</span>`}
+          ? `<span class="cm-protected-badge" title="Original catalog ingredient — protected and cannot be removed">🔒 Original</span>`
+          : `<span class="cm-added-badge" title="Added during customization — can be removed">✨ Added</span>`}
               </div>
               <div class="muted" style="font-size:11px; margin-top:3px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
                 <span>${escapeHtml(prodObj ? prodObj.brand : (c.brand || 'No Brand'))} · ${peso(c.price)}/L</span>
                 ${openedAvail > 0
-        ? `<span style="color:var(--warning-text); font-weight:600;">🫙 ${productOpenedSizesLabel(prodObj)} opened</span>`
-        : `<span id="cm-stock-badge-${idx}" class="${hasStock ? '' : 'low'}" style="color:${hasStock ? 'var(--teal-dark)' : 'var(--danger)'}; font-weight:600;">${hasStock ? `🥫 ${formatStock(availStock)}L avail` : `⚠️ Low: ${formatStock(availStock)}L`}</span>`}
+          ? `<span style="color:var(--warning-text); font-weight:600;">🫙 ${productOpenedSizesLabel(prodObj)} opened</span>`
+          : `<span id="cm-stock-badge-${idx}" class="${hasStock ? '' : 'low'}" style="color:${hasStock ? 'var(--teal-dark)' : 'var(--danger)'}; font-weight:600;">${hasStock ? `🥫 ${formatStock(availStock)}L avail` : `⚠️ Low: ${formatStock(availStock)}L`}</span>`}
               </div>
             </div>
 
@@ -2445,15 +2853,15 @@ function colorMixStudioHtml() {
               <span class="muted" style="font-size:10px;">Container:</span>
               <button type="button" class="cm-preset-btn ${prefCan === 0 ? 'active' : ''}" style="font-size:9.5px; padding:1px 5px;" onclick="setColorMixPreferredCanSize(${idx}, 0)" title="Automatically choose the best-fitting available container size">Auto</button>
               ${(prodObj ? productSizes(prodObj) : CAN_SIZES).map(sz => {
-          const hasBd = prodObj ? productHasCanBreakdown(prodObj) : false;
-          const cnt = prodObj ? productCanCount(prodObj, sz) : 0;
-          const avail = prodObj ? (hasBd ? cnt > 0 : prodObj.stock >= sz) : false;
-          return `<button type="button" class="cm-preset-btn ${prefCan === sz ? 'active' : ''}" style="font-size:9.5px; padding:1px 5px; ${!avail ? 'opacity:0.4;' : ''}" ${!avail ? 'disabled' : ''} onclick="setColorMixPreferredCanSize(${idx}, ${sz})" title="${hasBd ? `${cnt} × ${sz}L sealed unit(s) in stock` : `Open a ${sz}L container`}">${sz}L${hasBd ? ` (${cnt})` : ''}</button>`;
-        }).join('')}
+            const hasBd = prodObj ? productHasCanBreakdown(prodObj) : false;
+            const cnt = prodObj ? productCanCount(prodObj, sz) : 0;
+            const avail = prodObj ? (hasBd ? cnt > 0 : prodObj.stock >= sz) : false;
+            return `<button type="button" class="cm-preset-btn ${prefCan === sz ? 'active' : ''}" style="font-size:9.5px; padding:1px 5px; ${!avail ? 'opacity:0.4;' : ''}" ${!avail ? 'disabled' : ''} onclick="setColorMixPreferredCanSize(${idx}, ${sz})" title="${hasBd ? `${cnt} × ${sz}L sealed unit(s) in stock` : `Open a ${sz}L container`}">${sz}L${hasBd ? ` (${cnt})` : ''}</button>`;
+          }).join('')}
             </div>
           </div>
         </div>`;
-  }).join('')}
+    }).join('')}
     </div>
 
     <!-- Formula Footer -->
@@ -2542,10 +2950,6 @@ function colorMixStudioHtml() {
       <div class="field full">
         <label style="font-size:12px; font-weight:700;">Container Size &amp; Volume:</label>
         <div class="cm-can-grid">
-          <button class="cm-can-btn ${s.totalLiters === 0.5 ? 'active' : ''}" type="button" onclick="onColorMixTotalLitersChange(0.5)">
-            <div>🧴 0.5 L</div>
-            <div style="font-size:9.5px; opacity:0.85;">Sample</div>
-          </button>
           <button class="cm-can-btn ${s.totalLiters === 1 ? 'active' : ''}" type="button" onclick="onColorMixTotalLitersChange(1)">
             <div>🥫 1.0 L</div>
             <div style="font-size:9.5px; opacity:0.85;">1 Quart</div>
@@ -2566,23 +2970,10 @@ function colorMixStudioHtml() {
         </div>
       </div>
 
-      <div class="field">
+      <div class="field full">
         <label for="cm-price" style="font-size:12px; font-weight:700;">Price per Liter (₱)</label>
         <input id="cm-price" type="number" min="0" step="any" value="${s.pricePerLiter}" oninput="onColorMixPriceLive(this.value)" onchange="onColorMixPriceChange(this.value)" required>
         <small id="cm-price-helper" class="muted" style="display:block; margin-top:2px; font-size:10.5px;">${s.userCustomizedPrice ? `Custom price applied · <a href="javascript:void(0)" onclick="resetColorMixPriceToAuto()" style="color:var(--teal-text); font-weight:600; text-decoration:underline;">Reset to auto</a>` : 'Auto-calculated base materials + ₱50 service fee'}</small>
-      </div>
-
-      <div class="field">
-        <label for="cm-base-type" style="font-size:12px; font-weight:700;">Base Paint Type</label>
-        <select id="cm-base-type" onchange="colorMixStudioState.baseType=this.value;">
-          ${(() => {
-      const invTypes = getInventoryBasePaintTypes();
-      if (invTypes.length > 0 && !invTypes.includes(s.baseType)) {
-        s.baseType = invTypes[0];
-      }
-      return invTypes.map(bt => `<option value="${escapeHtml(bt)}" ${s.baseType === bt ? 'selected' : ''}>${escapeHtml(bt)}</option>`).join('');
-    })()}
-        </select>
       </div>
 
       <div class="field full">
@@ -2820,7 +3211,32 @@ function syncColorMixVisuals(activeIdx = -1, skipPresetRefresh = false) {
       stockBadge.style.color = hasStock ? 'var(--teal-dark)' : 'var(--danger)';
       stockBadge.innerHTML = hasStock ? `🥫 ${formatStock(availStock)}L avail` : `⚠️ Low: ${formatStock(availStock)}L`;
     }
+    const ingStatusBadge = document.getElementById(`cm-ing-status-badge-${i}`);
+    if (ingStatusBadge) {
+      const ingEval = evaluateColorMixIngredientStatus(c, i, s.baseType, s.totalLiters, s.components);
+      const isAdminUser = typeof currentUser !== 'undefined' && currentUser && currentUser.role === 'admin';
+      ingStatusBadge.textContent = ingEval.status;
+      ingStatusBadge.style.background = ingEval.badgeBg;
+      ingStatusBadge.style.color = ingEval.badgeColor;
+      ingStatusBadge.style.borderColor = ingEval.badgeBorder;
+      ingStatusBadge.title = isAdminUser ? (ingEval.adminDetail || ingEval.detail) : (ingEval.simpleReason || ingEval.detail);
+      if (ingCard) {
+        ingCard.classList.toggle('is-low-stock', ingEval.status !== 'READY');
+        if (ingEval.status !== 'READY') {
+          ingCard.style.border = `1.5px solid ${ingEval.badgeBorder}`;
+          ingCard.style.background = ingEval.badgeBg;
+        } else {
+          ingCard.style.border = '';
+          ingCard.style.background = '';
+        }
+      }
+    }
   });
+
+  const statusWrap = document.getElementById('cm-main-formula-status-wrap');
+  if (statusWrap && typeof renderColorMixMainFormulaStatusBannerHtml === 'function') {
+    statusWrap.innerHTML = renderColorMixMainFormulaStatusBannerHtml(s);
+  }
 
   // 7b. Live Customize Formula status bar, Save button, banner & total summary
   const hasInvalidZero = s.components.some(c => !c.productId || isNaN(Number(c.pct)) || Number(c.pct) <= 0);
@@ -3244,19 +3660,28 @@ function renderColorMixCardHtml(idx, p, selectedProductId, alreadySelectedSlotMa
 }
 
 function renderCategorizedAccordionMenusHtml(idx, prods, selectedProductId, searchQuery = '', selectedPrefCan = 0) {
+  const isAddPigmentMode = idx === 'add';
+  const eligibleProds = (prods || [])
+    .filter(p => isAddPigmentMode ? (isProductEligibleForColorMixing(p, false) && isPigmentMixingProduct(p)) : isProductEligibleForColorMixing(p, false))
+    .sort((a, b) => {
+      const aInStock = productMixAvailableStock(a) > 0 ? 1 : 0;
+      const bInStock = productMixAvailableStock(b) > 0 ? 1 : 0;
+      if (aInStock !== bInStock) return bInStock - aInStock;
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    });
   const slotMap = getColorMixSelectedProductSlotMap();
   const q = (searchQuery || '').trim().toLowerCase();
   const filtered = q
-    ? prods.filter(p => matchesColorMixSearch(p, q))
-    : prods;
+    ? eligibleProds.filter(p => matchesColorMixSearch(p, q))
+    : eligibleProds;
 
   if (!filtered.length) {
     return `
       <div class="cm-no-results">
         <div style="font-size:24px; margin-bottom:6px;">🔍</div>
-        <strong style="font-size:14px; color:var(--ink);">No matching paint products found</strong>
-        <p class="muted" style="margin:4px 0 12px; font-size:12px;">No products match "${escapeHtml(q)}". Try searching by brand, color name (e.g., Red, White), category, or hex color code.</p>
-        <button type="button" class="btn secondary small" onclick="clearColorMixDrawerSearch()">Clear Search</button>
+        <strong style="font-size:14px; color:var(--ink);">No matching ${isAddPigmentMode ? 'pigment / colorant' : 'paint'} products found</strong>
+        <p class="muted" style="margin:4px 0 12px; font-size:12px;">${q ? `No ${isAddPigmentMode ? 'pigment ' : ''}products match "${escapeHtml(q)}". Try searching by product name, brand, color name, category, or hex code.` : `No available ${isAddPigmentMode ? 'Pigment / Colorant ' : ''}products in stock.`}</p>
+        ${q ? `<button type="button" class="btn secondary small" onclick="clearColorMixDrawerSearch()">Clear Search</button>` : ''}
       </div>
     `;
   }
@@ -3264,7 +3689,32 @@ function renderCategorizedAccordionMenusHtml(idx, prods, selectedProductId, sear
   // 1. Opened / Used Containers Section (Prioritized)
   const openedSectionHtml = renderColorMixOpenedContainersSectionHtml(idx, filtered, selectedProductId, selectedPrefCan, slotMap);
 
-  // 2. Regular Categories: House Paint, Automotive Paint, Specialty Paint
+  // Add New Pigment to Formula mode: show ONLY Pigment / Colorant Paints (expanded by default, no House/Automotive/Specialty categories)
+  if (isAddPigmentMode) {
+    return `
+      ${openedSectionHtml}
+      <div class="cm-accordion-group open" style="margin-top:6px;">
+        <div class="cm-accordion-header" style="cursor:default;">
+          <div class="row" style="gap:8px; align-items:center;">
+            <span style="font-size:16px;">🥫</span>
+            <span style="font-size:13.5px; font-weight:700; color:var(--ink);">Pigment / Colorant Paints</span>
+          </div>
+          <div class="row" style="gap:8px; align-items:center;">
+            <span class="badge" style="background:var(--surface-3); color:var(--ink); font-size:11px; padding:2px 8px; font-weight:600;">
+              ${filtered.length} product${filtered.length === 1 ? '' : 's'} available
+            </span>
+          </div>
+        </div>
+        <div class="cm-accordion-body">
+          <div class="cm-color-card-grid">
+            ${filtered.map(p => renderColorMixCardHtml(idx, p, selectedProductId, slotMap)).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // 2. Non-add mode (e.g. Base Paint / Ingredient replacement): only show non-empty categories
   const STANDARD_CATEGORIES = [
     { key: 'House Paint', title: 'House Paint', icon: '🏠' },
     { key: 'Automotive Paint', title: 'Automotive Paint', icon: '🚗' },
@@ -3272,8 +3722,6 @@ function renderCategorizedAccordionMenusHtml(idx, prods, selectedProductId, sear
   ];
 
   const categoryMap = new Map();
-  STANDARD_CATEGORIES.forEach(c => categoryMap.set(c.key, []));
-
   filtered.forEach(p => {
     const catKey = getProductCategoryKey(p);
     if (!categoryMap.has(catKey)) {
@@ -3285,17 +3733,19 @@ function renderCategorizedAccordionMenusHtml(idx, prods, selectedProductId, sear
   const categoryGroups = [];
   STANDARD_CATEGORIES.forEach(c => {
     const items = categoryMap.get(c.key) || [];
-    categoryGroups.push({
-      key: c.key,
-      icon: c.icon,
-      title: c.title,
-      items
-    });
+    if (items.length > 0) {
+      categoryGroups.push({
+        key: c.key,
+        icon: c.icon,
+        title: c.title,
+        items
+      });
+    }
   });
 
-  // Any extra categories beyond the standard 3
+  // Any extra categories beyond the standard 3 (e.g. Pigment / Colorant)
   categoryMap.forEach((items, key) => {
-    if (!STANDARD_CATEGORIES.some(c => c.key === key)) {
+    if (items.length > 0 && !STANDARD_CATEGORIES.some(c => c.key === key)) {
       categoryGroups.push({
         key,
         icon: '🥫',
@@ -3359,7 +3809,7 @@ function renderColorMixOffcanvasDrawerHtml(prods) {
   const selectedProductId = comp ? comp.productId : '';
   const selectedPrefCan = comp ? (Number(comp.preferredCanSize) || 0) : 0;
   const q = s.pickerSearch || '';
-  const modalProds = prods || colorMixModalProducts();
+  const modalProds = (prods || colorMixModalProducts()).filter(p => isProductEligibleForColorMixing(p, false));
 
   return `
     <div class="cm-offcanvas-backdrop" onclick="if(event.target === this) closeColorMixPigmentDrawer()">
@@ -3371,7 +3821,7 @@ function renderColorMixOffcanvasDrawerHtml(prods) {
                 ${isAddMode ? '🎨 Add New Pigment to Formula' : `🎨 Select Paint for Ingredient #${Number(idx) + 1}`}
               </div>
               <div class="muted" style="font-size:12px; margin-top:2px;">
-                ${comp && comp.name ? `Currently selected: <strong style="color:var(--ink);">${escapeHtml(comp.name)}</strong> · ${escapeHtml(comp.brand || '')} · <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background-color:${comp.hex || '#fff'}; vertical-align:middle; border:1px solid var(--line);"></span> ${escapeHtml(comp.hex || '')}` : 'Choose an opened container or unopened paint product'}
+                ${comp && comp.name ? `Currently selected: <strong style="color:var(--ink);">${escapeHtml(comp.name)}</strong> · ${escapeHtml(comp.brand || '')} · <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background-color:${comp.hex || '#fff'}; vertical-align:middle; border:1px solid var(--line);"></span> ${escapeHtml(comp.hex || '')}` : (isAddMode ? 'Choose an opened container or unopened Pigment / Colorant product' : 'Choose an opened container or unopened paint product')}
               </div>
             </div>
             <button type="button" class="btn secondary small" onclick="closeColorMixPigmentDrawer()">✕ Close</button>
@@ -3423,25 +3873,38 @@ function clearColorMixDrawerSearch() {
   onColorMixDrawerSearch('');
 }
 
-function onColorMixDrawerSearch(val) {
-  colorMixStudioState.pickerSearch = val || '';
+let _cmDrawerSearchTimer = null;
+function _renderColorMixDrawerBody() {
   const body = document.getElementById('cm-offcanvas-body');
-  if (body) {
-    const prods = colorMixModalProducts();
-    const idx = colorMixStudioState.openPickerIdx;
-    const comp = idx !== 'add' && colorMixStudioState.components[idx] ? colorMixStudioState.components[idx] : null;
-    const selectedProductId = comp ? comp.productId : '';
-    const selectedPrefCan = comp ? (Number(comp.preferredCanSize) || 0) : 0;
-    const q = colorMixStudioState.pickerSearch;
-    body.innerHTML = `
-      ${q.trim() ? `
-        <div class="cm-search-status-bar">
-          <span>🔍 Showing results for "<strong>${escapeHtml(q)}</strong>"</span>
-          <button type="button" class="btn text small" style="color:var(--info-text); font-weight:700; padding:1px 6px;" onclick="clearColorMixDrawerSearch()">✕ Clear</button>
-        </div>
-      ` : ''}
-      ${renderCategorizedAccordionMenusHtml(idx, prods, selectedProductId, q, selectedPrefCan)}
-    `;
+  if (!body || !colorMixStudioState) return;
+  const idx = colorMixStudioState.openPickerIdx;
+  const prods = colorMixModalProducts().filter(p => isProductEligibleForColorMixing(p, false));
+  const comp = idx !== 'add' && colorMixStudioState.components[idx] ? colorMixStudioState.components[idx] : null;
+  const selectedProductId = comp ? comp.productId : '';
+  const selectedPrefCan = comp ? (Number(comp.preferredCanSize) || 0) : 0;
+  const q = colorMixStudioState.pickerSearch || '';
+  body.innerHTML = `
+    ${q.trim() ? `
+      <div class="cm-search-status-bar">
+        <span>🔍 Showing results for "<strong>${escapeHtml(q)}</strong>"</span>
+        <button type="button" class="btn text small" style="color:var(--info-text); font-weight:700; padding:1px 6px;" onclick="clearColorMixDrawerSearch()">✕ Clear</button>
+      </div>
+    ` : ''}
+    ${renderCategorizedAccordionMenusHtml(idx, prods, selectedProductId, q, selectedPrefCan)}
+  `;
+}
+
+function onColorMixDrawerSearch(val, immediate = false) {
+  colorMixStudioState.pickerSearch = val || '';
+  if (_cmDrawerSearchTimer) clearTimeout(_cmDrawerSearchTimer);
+  if (immediate || !val) {
+    _cmDrawerSearchTimer = null;
+    _renderColorMixDrawerBody();
+  } else {
+    _cmDrawerSearchTimer = setTimeout(() => {
+      _cmDrawerSearchTimer = null;
+      _renderColorMixDrawerBody();
+    }, 140);
   }
 }
 
@@ -3481,6 +3944,19 @@ function onColorMixProductSelect(idx, productId, preferredCanSize = 0) {
   if (existingSlot && (idx === 'add' || Number(existingSlot) !== Number(idx) + 1)) {
     showToast(`"${p.name}" is already selected in Ingredient #${existingSlot}. Each ingredient slot must contain a unique paint product.`, 'error');
     return;
+  }
+
+  // Enforce max 1 Admin-designated Base Paint per formula
+  if (isDesignatedBasePaintProduct(p)) {
+    const existingBaseIdx = (colorMixStudioState.components || []).findIndex((c, i) => {
+      if (idx !== 'add' && Number(i) === Number(idx)) return false;
+      const cp = (c.productId && typeof productById === 'function') ? productById(c.productId) : null;
+      return isDesignatedBasePaintProduct(cp);
+    });
+    if (existingBaseIdx !== -1) {
+      showToast(`Only 1 Base Paint is allowed per formula (already using "${colorMixStudioState.components[existingBaseIdx].name}").`, 'error');
+      return;
+    }
   }
 
   if (productMixAvailableStock(p) <= 0) {
@@ -3596,6 +4072,7 @@ function startCustomizeColorMixFormula() {
   s.customizeSnapshot = {
     components: s.components.map(c => ({ ...c })),
     colorName: s.colorName || '',
+    baseType: normalizeColorMixCategory(s.baseType),
     userCustomizedName: Boolean(s.userCustomizedName),
     isCustomizedFormula: Boolean(s.isCustomizedFormula)
   };
@@ -3609,6 +4086,7 @@ function cancelCustomizeColorMixFormula() {
   if (s.customizeSnapshot) {
     s.components = s.customizeSnapshot.components.map(c => ({ ...c }));
     s.colorName = s.customizeSnapshot.colorName;
+    if (s.customizeSnapshot.baseType) s.baseType = normalizeColorMixCategory(s.customizeSnapshot.baseType);
     s.userCustomizedName = s.customizeSnapshot.userCustomizedName;
     s.isCustomizedFormula = s.customizeSnapshot.isCustomizedFormula;
     s.customizeSnapshot = null;
@@ -3772,7 +4250,8 @@ function saveCustomizeColorMixFormula() {
 
   const mixed = subtractivePaintMix(s.components);
   const detected = detectMixedColorName(mixed.r, mixed.g, mixed.b);
-  const baseType = (document.getElementById('cm-base-type') ? document.getElementById('cm-base-type').value.trim() : s.baseType) || 'Automotive Paint';
+  const baseType = normalizeColorMixCategory(s.baseType);
+  s.baseType = baseType;
 
   // Save custom formula separately linked to the original catalog color
   saveMixedColorToPresets({
@@ -3798,46 +4277,109 @@ function resetCustomFormulaToOriginal() {
   }
 }
 
+function renderColorMixMainFormulaStatusBannerHtml(s) {
+  const st = s || colorMixStudioState || {};
+  const formulaVer = evaluateFormulaVerificationStatus(st.components, st.baseType, st.totalLiters, Boolean(st.physicalSampleTested));
+  const status = formulaVer.status; // 'READY' | 'UNAVAILABLE' | 'ADMIN REVIEW'
+  const isReady = status === 'READY';
+  const isUnavail = status === 'UNAVAILABLE';
+  const badgeBg = isReady ? 'var(--success-bg)' : (isUnavail ? 'var(--danger-bg)' : 'var(--warning-bg)');
+  const badgeBorder = isReady ? 'var(--success-border)' : (isUnavail ? 'var(--danger-border)' : 'var(--warning-border)');
+  const badgeColor = isReady ? 'var(--success-text)' : (isUnavail ? 'var(--danger-text)' : 'var(--warning-text)');
+  const pillBg = isReady ? '#15803D' : (isUnavail ? '#DC2626' : '#B45309');
+  const isAdminUser = typeof currentUser !== 'undefined' && currentUser && currentUser.role === 'admin';
+  const adminDetails = Array.isArray(formulaVer.adminDetails) ? formulaVer.adminDetails : [];
+
+  return `
+    <div id="cm-main-formula-status-banner" data-formula-status="${escapeAttr(status)}" style="margin-bottom:10px; padding:9px 12px; border-radius:7px; font-size:12px; line-height:1.45; background:${badgeBg}; border:1px solid ${badgeBorder}; color:${badgeColor};">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <span class="badge" style="background:${pillBg}; color:#fff; font-size:10.5px; font-weight:800; padding:2px 8px; letter-spacing:0.03em;">${escapeHtml(status)}</span>
+          <span style="font-weight:600;">${escapeHtml(formulaVer.reason)}</span>
+        </div>
+      </div>
+      ${(isAdminUser && !isReady && adminDetails.length > 0) ? `
+        <details style="margin-top:6px; padding-top:6px; border-top:1px dashed ${badgeBorder}; font-size:11px;">
+          <summary style="cursor:pointer; font-weight:700; user-select:none;">Admin Details (${adminDetails.length})</summary>
+          <ul style="margin:4px 0 0 18px; padding:0;">
+            ${adminDetails.map(d => `<li>${escapeHtml(d)}</li>`).join('')}
+          </ul>
+        </details>
+      ` : ''}
+    </div>
+  `;
+}
+
 function balanceColorMixTo100() {
   const s = colorMixStudioState;
   if (!s || !s.isCustomizingFormula) {
     showToast('Click "Customize Formula" first to adjust ingredient percentages.', 'info');
-    return;
+    return false;
   }
   const comps = s.components;
-  if (!Array.isArray(comps) || comps.length < 2) return;
+  if (!Array.isArray(comps) || comps.length < 2) return false;
+
+  // Auto-Balance must block UNAVAILABLE and ADMIN REVIEW items
+  const blockedComps = comps.map((c, i) => ({ c, ev: evaluateColorMixIngredientStatus(c, i, s.baseType, s.totalLiters, comps) }))
+    .filter(x => x.ev.status !== 'READY');
+  if (blockedComps.length > 0) {
+    const firstEv = blockedComps[0].ev;
+    showToast(firstEv.simpleReason || `Cannot Auto-Balance: formula status is ${firstEv.status}.`, 'error');
+    return false;
+  }
+
+  const vol = Math.max(0.5, Number(s.totalLiters) || 1);
   const sum = comps.reduce((acc, c) => acc + Math.max(0, Number(c.pct) || 0), 0);
+  const proposedPcts = [];
+
   if (sum <= 0) {
     const base = Math.floor(100 / comps.length);
     const rem = 100 - base * comps.length;
     comps.forEach((c, i) => {
-      c.pct = base + (i === 0 ? rem : 0);
+      proposedPcts.push(base + (i === 0 ? rem : 0));
     });
   } else {
     let running = 0;
     comps.forEach((c, i) => {
       if (i === comps.length - 1) {
-        c.pct = Math.max(0.1, Math.round((100 - running) * 10) / 10);
+        proposedPcts.push(Math.max(0.1, Math.round((100 - running) * 10) / 10));
       } else {
         const scaled = Math.max(1, Math.round((Math.max(0, Number(c.pct) || 0) / sum) * 100));
-        c.pct = scaled;
+        proposedPcts.push(scaled);
         running += scaled;
       }
     });
-    // Ensure exact 100.0 sum after rounding
-    const checkSum = Math.round(comps.reduce((acc, c) => acc + Number(c.pct), 0) * 10) / 10;
+    const checkSum = Math.round(proposedPcts.reduce((acc, p) => acc + Number(p), 0) * 10) / 10;
     if (Math.abs(checkSum - 100) >= 0.05) {
       const diff = Math.round((100 - checkSum) * 10) / 10;
-      const largestIdx = comps.reduce((best, c, i) => (c.pct > comps[best].pct ? i : best), 0);
-      comps[largestIdx].pct = Math.max(1, Math.round((comps[largestIdx].pct + diff) * 10) / 10);
+      const largestIdx = proposedPcts.reduce((best, p, i) => (p > proposedPcts[best] ? i : best), 0);
+      proposedPcts[largestIdx] = Math.max(1, Math.round((proposedPcts[largestIdx] + diff) * 10) / 10);
     }
   }
+
+  // Verify Auto-Balance does not increase any ingredient beyond its available stock at the selected mixing volume
+  for (let i = 0; i < comps.length; i++) {
+    const c = comps[i];
+    const prod = c && c.productId ? productById(c.productId) : null;
+    const avail = prod ? productMixNonExpiredAvailableStock(prod) : 0;
+    const newReqLiters = Number(((vol * (proposedPcts[i] / 100)) || 0).toFixed(2));
+    if (avail + 1e-6 < newReqLiters) {
+      showToast(`Cannot Auto-Balance: scaling "${c.name || 'Ingredient'}" to ${proposedPcts[i]}% requires ${formatStock(newReqLiters)}L, which exceeds available stock (${formatStock(avail)}L).`, 'error');
+      return false;
+    }
+  }
+
+  // Apply proposed percentages and revalidate
   comps.forEach((c, i) => {
+    c.pct = proposedPcts[i];
     const inp = document.getElementById(`cm-pct-input-${i}`);
     if (inp) inp.value = c.pct;
   });
+
   syncColorMixVisuals(-1, true);
-  showToast('Auto-balanced formula percentages to 100%.', 'ok');
+  renderColorMixStudio();
+  showToast('Auto-balanced formula percentages to 100.0%.', 'ok');
+  return true;
 }
 
 
@@ -3876,6 +4418,26 @@ async function submitColorMix() {
   if (validComponents.length < 2) {
     showToast('At least 2 formula ingredients (each with a percentage above 0%) are required to mix a color.', 'error');
     return false;
+  }
+
+  // Enforce max 1 Admin-designated Base Paint per formula before dispensing
+  const basePaintComps = validComponents.filter(c => {
+    const cp = (c.productId && typeof productById === 'function') ? productById(c.productId) : null;
+    return isDesignatedBasePaintProduct(cp);
+  });
+  if (basePaintComps.length > 1) {
+    showToast(`Only 1 Base Paint is allowed per color mix formula (found ${basePaintComps.length}: ${basePaintComps.map(b => b.name).join(', ')}).`, 'error');
+    return false;
+  }
+
+  // Enforce category compatibility & actual usable stock for every ingredient before dispensing
+  for (let i = 0; i < validComponents.length; i++) {
+    const comp = validComponents[i];
+    const ev = evaluateColorMixIngredientStatus(comp, i, s.baseType, s.totalLiters);
+    if (ev.status !== 'READY') {
+      showToast(ev.simpleReason || `${ev.status}: ${ev.detail}`, 'error');
+      return false;
+    }
   }
 
   // Validate product uniqueness before saving or adding to sale
@@ -3937,12 +4499,13 @@ async function submitColorMix() {
   const breakdown = calculateColorMixPriceBreakdown(s);
   const grandTotal = breakdown.grandTotal;
   const price = Number((grandTotal / liters).toFixed(2));
-  const baseType = (document.getElementById('cm-base-type') ? document.getElementById('cm-base-type').value.trim() : s.baseType) || 'Automotive Paint';
+  const baseType = normalizeColorMixCategory(s.baseType);
+  s.baseType = baseType;
   const note = (document.getElementById('cm-note') ? document.getElementById('cm-note').value.trim() : s.note) || '';
 
   const componentsData = validComponents.map(c => {
     const exactLiters = liters * (Number(c.pct) / 100);
-    const compLiters = Number(exactLiters.toFixed(2));
+    const compLiters = (exactLiters > 0 && exactLiters < 0.01) ? Number(exactLiters.toFixed(4)) : Number(exactLiters.toFixed(2));
     const p = productById(c.productId);
     const colorName = c.colorName || (p ? getProductColorName(p) : 'Original Color');
     const hex = c.hex || (p ? getProductDefaultColor(p) : '');

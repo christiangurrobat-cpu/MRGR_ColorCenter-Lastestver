@@ -7,29 +7,68 @@ define('DB_USER', 'root');
 define('DB_PASS', '');
 define('DB_NAME', 'MRGR_ColorCenter');
 
-// Create database connection
-function getDBConnection() {
-    $conn = new mysqli(DB_HOST, DB_USER, DB_PASS);
+// Enable transparent gzip compression for API JSON responses when supported by client
+function mrgrEnableGzip() {
+    static $started = false;
+    if ($started || headers_sent() || PHP_SAPI === 'cli') return;
+    $started = true;
+    $accept = (string)($_SERVER['HTTP_ACCEPT_ENCODING'] ?? '');
+    if (stripos($accept, 'gzip') !== false && function_exists('ob_gzhandler') && !ini_get('zlib.output_compression')) {
+        @ob_start('ob_gzhandler');
+    }
+}
 
-    if ($conn->connect_error) {
-        throw new Exception("Connection failed: " . $conn->connect_error);
+// Create or reuse database connection (per-request singleton; avoids repeated TCP handshakes and per-request COUNT(*) scans)
+function getDBConnection($forceNew = false) {
+    static $sharedConn = null;
+
+    if (!$forceNew && $sharedConn instanceof mysqli) {
+        try {
+            if (@$sharedConn->thread_id && @$sharedConn->ping()) {
+                return $sharedConn;
+            }
+        } catch (Throwable $e) {
+            $sharedConn = null;
+        }
     }
 
+    $readyFlag = __DIR__ . '/../api/.db_ready_v1';
+    $conn = null;
     $dbExists = false;
+
+    // Fast path: connect directly to DB_NAME without separate select_db() or SELECT COUNT(*) FROM users
     try {
-        if ($conn->select_db(DB_NAME)) {
+        $conn = @new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+        if ($conn && !$conn->connect_error) {
             $dbExists = true;
         }
-    } catch (mysqli_sql_exception $e) {
+    } catch (Throwable $e) {
+        $conn = null;
         $dbExists = false;
     }
 
-    $needsSeed = !$dbExists;
-    if ($dbExists) {
+    if (!$dbExists) {
+        $conn = new mysqli(DB_HOST, DB_USER, DB_PASS);
+        if ($conn->connect_error) {
+            throw new Exception("Connection failed: " . $conn->connect_error);
+        }
         try {
-            $chkUsers = $conn->query("SELECT COUNT(*) AS cnt FROM `users`");
-            if (!$chkUsers || (int)($chkUsers->fetch_assoc()['cnt'] ?? 0) === 0) {
+            if ($conn->select_db(DB_NAME)) {
+                $dbExists = true;
+            }
+        } catch (mysqli_sql_exception $e) {
+            $dbExists = false;
+        }
+    }
+
+    $needsSeed = !$dbExists;
+    if ($dbExists && !file_exists($readyFlag)) {
+        try {
+            $chkUsers = $conn->query("SELECT 1 FROM `users` LIMIT 1");
+            if (!$chkUsers || $chkUsers->num_rows === 0) {
                 $needsSeed = true;
+            } else {
+                @file_put_contents($readyFlag, date('Y-m-d H:i:s'));
             }
         } catch (Throwable $e) {
             $needsSeed = true;
@@ -59,55 +98,53 @@ function getDBConnection() {
                 }
             }
         }
+        @file_put_contents($readyFlag, date('Y-m-d H:i:s'));
     }
 
     $conn->set_charset("utf8mb4");
+    if (!$forceNew) {
+        $sharedConn = $conn;
+    }
     return $conn;
 }
 
-// Helper function to execute queries
+// Helper function to execute queries (reuses shared per-request connection)
 function executeQuery($query, $params = []) {
     $conn = getDBConnection();
     $stmt = $conn->prepare($query);
     if (!$stmt) {
-        $err = $conn->error;
-        $conn->close();
-        throw new Exception("Prepare failed: " . $err);
+        throw new Exception("Prepare failed: " . $conn->error);
     }
-    
+
     if (!empty($params)) {
         $types = str_repeat('s', count($params));
         $stmt->bind_param($types, ...$params);
     }
-    
+
     $stmt->execute();
     $result = $stmt->get_result();
     $stmt->close();
-    $conn->close();
-    
+
     return $result;
 }
 
-// Helper function to get last insert ID
+// Helper function to get last insert ID (reuses shared per-request connection)
 function getLastInsertId($query, $params = []) {
     $conn = getDBConnection();
     $stmt = $conn->prepare($query);
     if (!$stmt) {
-        $err = $conn->error;
-        $conn->close();
-        throw new Exception("Prepare failed: " . $err);
+        throw new Exception("Prepare failed: " . $conn->error);
     }
-    
+
     if (!empty($params)) {
         $types = str_repeat('s', count($params));
         $stmt->bind_param($types, ...$params);
     }
-    
+
     $stmt->execute();
     $insertId = $conn->insert_id;
     $stmt->close();
-    $conn->close();
-    
+
     return $insertId;
 }
 ?>

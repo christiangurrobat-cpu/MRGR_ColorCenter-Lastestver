@@ -424,6 +424,10 @@ function colorLibraryFetchAll(mysqli $conn, bool $includeArchived = false): arra
                 'notes' => $fr['notes'] ?? '',
                 'pigmentFormula' => $pigmentFormula,
                 'isCustom' => (bool)$fr['is_custom'],
+                'verificationStatus' => (!empty($fr['verification_status']) && !in_array(strtoupper((string)$fr['verification_status']), ['NEEDS VERIFICATION', 'INCOMPATIBLE'], true)) ? (string)$fr['verification_status'] : 'ADMIN REVIEW',
+                'verification_status' => (!empty($fr['verification_status']) && !in_array(strtoupper((string)$fr['verification_status']), ['NEEDS VERIFICATION', 'INCOMPATIBLE'], true)) ? (string)$fr['verification_status'] : 'ADMIN REVIEW',
+                'physicalSampleTested' => !empty($fr['physical_sample_tested']),
+                'physical_sample_tested' => !empty($fr['physical_sample_tested']) ? 1 : 0,
                 'createdBy' => $fr['created_by'] ?? null,
                 'createdAt' => $fr['created_at'] ?? null,
                 'updatedAt' => $fr['updated_at'] ?? null,
@@ -867,6 +871,9 @@ function colorLibrarySaveFormula(mysqli $conn, array $input, array $actor): arra
     $notes = trim((string)($input['notes'] ?? ''));
     $colorId = trim((string)($input['colorId'] ?? '')) ?: null;
     $pigmentFormula = $input['pigmentFormula'] ?? $input['recipe'] ?? [];
+    $rawVerif = trim((string)($input['verificationStatus'] ?? $input['verification_status'] ?? 'ADMIN REVIEW'));
+    $verificationStatus = ($rawVerif !== '' && !in_array(strtoupper($rawVerif), ['NEEDS VERIFICATION', 'INCOMPATIBLE'], true)) ? $rawVerif : 'ADMIN REVIEW';
+    $physicalSampleTested = !empty($input['physicalSampleTested']) || !empty($input['physical_sample_tested']) ? 1 : 0;
 
     if ($name === '') {
         return ['status' => 400, 'success' => false, 'error' => 'Formula color name is required.'];
@@ -913,15 +920,15 @@ function colorLibrarySaveFormula(mysqli $conn, array $input, array $actor): arra
         if (!$isAdminActor) {
             return ['status' => 403, 'success' => false, 'error' => 'Access denied: Only Administrators can modify existing Mixed Color Catalog formulas. Save under a new custom name instead.'];
         }
-        $stmt = $conn->prepare("UPDATE color_formulas SET color_id = ?, name = ?, hex_reference = ?, detected_name = ?, base_type = ?, sheen = ?, notes = ?, pigment_formula = ? WHERE id = ?");
-        $stmt->bind_param('sssssssss', $colorId, $name, $hexRef, $detectedName, $baseType, $sheen, $notes, $pigmentJson, $existingId);
+        $stmt = $conn->prepare("UPDATE color_formulas SET color_id = ?, name = ?, hex_reference = ?, detected_name = ?, base_type = ?, sheen = ?, notes = ?, pigment_formula = ?, verification_status = ?, physical_sample_tested = ? WHERE id = ?");
+        $stmt->bind_param('sssssssssis', $colorId, $name, $hexRef, $detectedName, $baseType, $sheen, $notes, $pigmentJson, $verificationStatus, $physicalSampleTested, $existingId);
         $stmt->execute();
         $stmt->close();
         $id = $existingId;
     } else {
         $id = 'cf_' . bin2hex(random_bytes(5));
-        $stmt = $conn->prepare("INSERT INTO color_formulas (id, color_id, name, hex_reference, detected_name, base_type, sheen, notes, pigment_formula, is_custom, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)");
-        $stmt->bind_param('ssssssssss', $id, $colorId, $name, $hexRef, $detectedName, $baseType, $sheen, $notes, $pigmentJson, $actorName);
+        $stmt = $conn->prepare("INSERT INTO color_formulas (id, color_id, name, hex_reference, detected_name, base_type, sheen, notes, pigment_formula, is_custom, verification_status, physical_sample_tested, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)");
+        $stmt->bind_param('ssssssssssis', $id, $colorId, $name, $hexRef, $detectedName, $baseType, $sheen, $notes, $pigmentJson, $verificationStatus, $physicalSampleTested, $actorName);
         $stmt->execute();
         $stmt->close();
     }

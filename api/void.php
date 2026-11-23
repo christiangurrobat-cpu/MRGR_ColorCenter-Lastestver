@@ -7,6 +7,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 require_once __DIR__ . '/../config/database.php';
+mrgrEnableGzip();
 require_once __DIR__ . '/batch_lib.php';
 
 try {
@@ -22,6 +23,7 @@ $payload = json_decode($rawInput, true) ?: [];
 
 // Resolve authenticated user & role strictly from PHP session
 $actingUserId = (string)($_SESSION['user_id'] ?? '');
+session_write_close();
 $actingRole = '';
 $actingUser = null;
 

@@ -4,6 +4,17 @@
 const DB_KEY = 'mrgr_color_center_db';
 const SESSION_KEY = 'mrgr_color_center_session';
 const THEME_STORAGE_KEY = 'mrgr_theme';
+const BUSINESS_ADDRESS_LINES = [
+  'Blk 13 Blk 167 North Fairview Commonwealth Avenue',
+  'Greater Lagro 1159 Quezon City',
+  'NCR, Second District Philippines'
+];
+const BUSINESS_ADDRESS = BUSINESS_ADDRESS_LINES.join(' ');
+const BUSINESS_CONTACT_NUMBER = '09776344591';
+function businessAddressHtml(sep = '<br>') {
+  const esc = typeof escapeHtml === 'function' ? escapeHtml : (v => String(v));
+  return BUSINESS_ADDRESS_LINES.map(esc).join(sep);
+}
 let db = null;          // the whole "database" object
 let currentUser = null; // who is logged in right now
 let currentPage = null; // which screen we are on, e.g. 'dashboard', 'pos'
@@ -163,6 +174,15 @@ const storage = {
 
 // ---------- small helpers ----------
 function uid(prefix) { return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function mrgrDebounce(fn, wait = 160) {
+  let t = null;
+  return function (...args) {
+    if (t) clearTimeout(t);
+    t = setTimeout(() => { t = null; fn.apply(this, args); }, wait);
+  };
+}
+let _dbCacheVersion = 0;
+function bumpDbCacheVersion() { _dbCacheVersion++; }
 function peso(n) { return '₱' + (Number(n) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function toLocalISODate(d) {
   const date = (typeof d === 'string' && d.length === 10) ? new Date(d + 'T00:00:00') : (d || new Date());
@@ -578,11 +598,12 @@ if (!window._appCalListenersAttached) {
   });
 
   window.addEventListener('scroll', e => {
+    if (!document.getElementById('app-calendar-popover') && !document.getElementById('po-calendar-popover')) return;
     if (e.target && e.target.closest && (e.target.closest('#app-calendar-popover') || e.target.closest('#po-calendar-popover'))) {
       return;
     }
     closeAppMonthDayPicker();
-  }, true);
+  }, { capture: true, passive: true });
 }
 function formatDateTime(iso) {
   if (!iso) return '-';
@@ -850,10 +871,16 @@ function normalizeDbPayload(rawDb) {
   }
 
   if (Array.isArray(processed.movements)) {
+    const prodByIdMap = new Map();
+    (processed.products || []).forEach(p => {
+      if (!p) return;
+      if (p.id) prodByIdMap.set(String(p.id), p);
+      if (p.productId) prodByIdMap.set(String(p.productId), p);
+    });
     processed.movements = processed.movements.map(movement => {
       const storedName = String(movement.productName || '').trim();
       if (storedName && storedName !== '0') return movement;
-      const product = (processed.products || []).find(p => (p.productId || p.id) === movement.productId);
+      const product = movement.productId ? prodByIdMap.get(String(movement.productId)) : null;
       return { ...movement, productName: product ? product.name : (movement.type === 'colormix' ? 'Color Mix' : 'Unknown product') };
     });
   }
@@ -905,10 +932,18 @@ function normalizeDbPayload(rawDb) {
   return { db: processed, migratedDecimals };
 }
 
-// Multi-Tab Concurrency Synchronization
+// Multi-Tab Concurrency Synchronization (deduplicated across BroadcastChannel + storage event)
 const TAB_INSTANCE_ID = uid('tab');
 const DB_SYNC_CHANNEL_NAME = 'mrgr_db_sync_channel';
 let mrgrSyncChannel = null;
+let _lastHandledSyncTs = 0;
+
+function _handleExternalDbSync(ts) {
+  const numTs = Number(ts) || Date.now();
+  if (numTs <= _lastHandledSyncTs) return;
+  _lastHandledSyncTs = numTs;
+  silentRefreshFromDB();
+}
 
 if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
   try {
@@ -916,7 +951,7 @@ if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
     mrgrSyncChannel.onmessage = (event) => {
       const data = event.data;
       if (data && data.type === 'DB_UPDATED' && data.sender !== TAB_INSTANCE_ID) {
-        silentRefreshFromDB();
+        _handleExternalDbSync(data.timestamp);
       }
     };
   } catch (e) {
@@ -930,7 +965,7 @@ if (typeof window !== 'undefined') {
       try {
         const payload = JSON.parse(event.newValue);
         if (payload && payload.sender !== TAB_INSTANCE_ID) {
-          silentRefreshFromDB();
+          _handleExternalDbSync(payload.timestamp);
         }
       } catch (e) { }
     }
@@ -963,6 +998,7 @@ async function silentRefreshFromDB() {
     if (!normalized || !normalized.db) return;
 
     db = normalized.db;
+    bumpDbCacheVersion();
 
     // Cache locally
     try {
@@ -1010,6 +1046,7 @@ async function loadDB() {
         const normalized = normalizeDbPayload(data.db);
         if (normalized && normalized.db) {
           db = normalized.db;
+    bumpDbCacheVersion();
           storage.set(DB_KEY, JSON.stringify(db)); // cache locally
           if (dedupeProducts() || normalized.migratedDecimals) await saveDB();
           return;
@@ -1028,6 +1065,7 @@ async function loadDB() {
       const normalized = normalizeDbPayload(parsed);
       if (normalized && normalized.db) {
         db = normalized.db;
+    bumpDbCacheVersion();
         if (dedupeProducts() || normalized.migratedDecimals) await saveDB();
         return;
       }
@@ -1047,22 +1085,24 @@ async function saveDB() {
     });
   }
 
-  // 1. Local storage cache (safely guarded against QuotaExceededError)
+  // 1. Serialize DB once & reuse for both local cache and API POST body (avoids double JSON.stringify)
+  bumpDbCacheVersion();
+  const dbJson = JSON.stringify(db);
   try {
-    await storage.set(DB_KEY, JSON.stringify(db));
+    await storage.set(DB_KEY, dbJson);
   } catch (e) {
     console.warn('Local storage cache write failed:', e);
   }
 
   // 2. Persist to MySQL database MRGR_ColorCenter
   try {
+    const userObj = (typeof currentUser !== 'undefined' && currentUser)
+      ? { id: currentUser.id, role: currentUser.role, username: currentUser.username }
+      : null;
     const res = await fetch('api/db.php', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        db,
-        currentUser: (typeof currentUser !== 'undefined' && currentUser) ? { id: currentUser.id, role: currentUser.role, username: currentUser.username } : null
-      })
+      body: '{"db":' + dbJson + ',"currentUser":' + JSON.stringify(userObj) + '}'
     });
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
@@ -1075,8 +1115,9 @@ async function saveDB() {
       syncedFromServer = true;
     }
     if (respData && respData.syncedProducts && typeof respData.syncedProducts === 'object' && Array.isArray(db.products)) {
+      const prodMap = new Map(db.products.map(p => [String(p.id), p]));
       Object.entries(respData.syncedProducts).forEach(([pid, syncInfo]) => {
-        const prod = db.products.find(p => String(p.id) === String(pid));
+        const prod = prodMap.get(String(pid));
         if (prod && syncInfo) {
           prod.colorId = syncInfo.colorId || null;
           prod.color_id = syncInfo.colorId || null;
@@ -1096,6 +1137,7 @@ async function saveDB() {
       });
     }
     if (syncedFromServer) {
+      bumpDbCacheVersion();
       if (typeof notifyColorLibraryChanged === 'function') {
         try { notifyColorLibraryChanged('inventory_sync'); } catch (e) { }
       }
@@ -1108,7 +1150,9 @@ async function saveDB() {
     // Broadcast update to all other open tabs on this machine
     broadcastDbUpdate();
 
-    // Keep Expiration Tracking batch ledger synchronized with stock changes
+    // Keep Expiration Tracking, Near-Expiry Discounts & POS batch caches synchronized with stock changes
+    if (typeof posBatchStatusLoadedAt !== 'undefined') posBatchStatusLoadedAt = 0;
+    if (typeof DISC !== 'undefined') DISC.loaded = false;
     if (typeof EXP !== 'undefined') {
       EXP.loaded = false;
       EXP.summaryTs = 0;

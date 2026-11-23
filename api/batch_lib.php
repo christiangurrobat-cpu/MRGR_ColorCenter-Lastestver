@@ -22,7 +22,10 @@ function batchEnsureSchema(mysqli $conn): void {
     if ($done) return;
     $done = true;
 
-    // Always ensure batch_discounts exists even if .batch_schema_v1 was already created
+    $flagV2 = __DIR__ . '/.batch_schema_v2';
+    if (file_exists($flagV2)) return;
+
+    // Ensure batch_discounts exists (guarded by .batch_schema_v2 so DDL does not run on every request)
     $conn->query("CREATE TABLE IF NOT EXISTS `batch_discounts` (
         `discount_id` VARCHAR(50) NOT NULL PRIMARY KEY,
         `batch_id` VARCHAR(50) NOT NULL,
@@ -39,7 +42,10 @@ function batchEnsureSchema(mysqli $conn): void {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
     $flag = __DIR__ . '/.batch_schema_v1';
-    if (file_exists($flag)) return;
+    if (file_exists($flag)) {
+        @file_put_contents($flagV2, date('Y-m-d H:i:s'));
+        return;
+    }
 
     $conn->query("CREATE TABLE IF NOT EXISTS `inventory_batches` (
         `batch_id` VARCHAR(50) NOT NULL PRIMARY KEY,
@@ -257,11 +263,17 @@ function batchComputeDiscount(?int $daysRemaining, int $remainingQty, ?float $pr
 /** Days from today to the expiration date (negative = already expired). null when not specified. */
 function batchDaysRemaining(?string $exp): ?int {
     if ($exp === null || $exp === '' || $exp === '0000-00-00') return null;
-    $today = new DateTime(date('Y-m-d'));
-    $e = DateTime::createFromFormat('Y-m-d', substr($exp, 0, 10));
-    if (!$e) return null;
-    $e->setTime(0, 0, 0);
-    return (int)$today->diff($e)->format('%r%a');
+    static $todayTs = null;
+    static $todayYmd = '';
+    $curYmd = date('Y-m-d');
+    if ($todayTs === null || $todayYmd !== $curYmd) {
+        $todayYmd = $curYmd;
+        $todayTs = strtotime($curYmd . ' 00:00:00');
+    }
+    $expYmd = substr($exp, 0, 10);
+    $expTs = strtotime($expYmd . ' 00:00:00');
+    if ($expTs === false) return null;
+    return (int)round(($expTs - $todayTs) / 86400);
 }
 
 /** good | soon | critical | expired | none */
@@ -517,6 +529,13 @@ function batchProcessMovement(mysqli $conn, array $m, string $type, ?string $siz
 
     if ($cans > 0) {
         if ($type === 'receiving') {
+            $rawExp = $meta['expirationDate'] ?? null;
+            if ($rawExp !== null && trim((string)$rawExp) !== '') {
+                $normExp = batchNormalizeDate((string)$rawExp);
+                if ($normExp === null) {
+                    throw new Exception('Invalid expiration date format on stock receiving.');
+                }
+            }
             $bid = batchCreate($conn, [
                 'size_id' => $sizeId,
                 'product_id' => $productId,

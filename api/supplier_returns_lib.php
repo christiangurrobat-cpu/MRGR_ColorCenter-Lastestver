@@ -76,6 +76,9 @@ function supplierReturnsEnsureSchema(mysqli $conn): void {
     if ($done) return;
     $done = true;
 
+    $flag = __DIR__ . '/.supplier_returns_schema_v1';
+    if (file_exists($flag)) return;
+
     $conn->query("CREATE TABLE IF NOT EXISTS `damaged_stock_records` (
         `id` VARCHAR(50) NOT NULL PRIMARY KEY,
         `po_id` VARCHAR(50) NULL,
@@ -273,6 +276,8 @@ function supplierReturnsEnsureSchema(mysqli $conn): void {
         KEY `idx_srcpt_req` (`request_id`),
         KEY `idx_srcpt_po` (`po_id`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    @file_put_contents($flag, date('Y-m-d H:i:s'));
 }
 
 function srUid(string $prefix): string {
@@ -518,6 +523,14 @@ function srRecalcPOStatus(mysqli $conn, string $poId): void {
         $effectiveRepPending = min($repPending, max(0, $ordered - $fulfilled));
         $accountedInitial = $fulfilled + $effectiveRepPending;
         $it['receivedQty'] = min($ordered, round($accepted + $repRcvd, 2));
+        // Keep normalized purchase_order_items.received_quantity in sync with items_json
+        $upPoi = $conn->prepare("UPDATE purchase_order_items SET received_quantity = ? WHERE po_id = ? AND product_id = ? AND ABS(container_size - ?) < 0.01");
+        if ($upPoi) {
+            $syncRec = (float)$it['receivedQty'];
+            $upPoi->bind_param('dssd', $syncRec, $poId, $pid, $sz);
+            $upPoi->execute();
+            $upPoi->close();
+        }
         if ($fulfilled > 0 || $dmgTot > 0 || $effectiveRepPending > 0) $anyProgress = true;
         if ($fulfilled < $ordered) $allFulfilled = false;
         if ($accountedInitial < $ordered) $allInitialProcessed = false;
@@ -549,7 +562,7 @@ function srGenerateReplacementReceiptNo(mysqli $conn, string $type = 'confirmati
     $datePart = date('Ymd');
     $prefix = ($type === 'delivery' ? 'SRDV-' : 'SRCP-') . "{$datePart}-";
     $seq = 1;
-    $res = $conn->query("SELECT receipt_number FROM supplier_replacement_receipts WHERE receipt_number LIKE '" . $conn->real_escape_string($prefix) . "%' ORDER BY receipt_number DESC LIMIT 1");
+    $res = $conn->query("SELECT receipt_number FROM supplier_replacement_receipts WHERE receipt_number LIKE '" . $conn->real_escape_string($prefix) . "%' ORDER BY receipt_number DESC LIMIT 1 FOR UPDATE");
     if ($res && ($row = $res->fetch_assoc())) {
         $tail = (int)substr((string)$row['receipt_number'], strlen($prefix));
         if ($tail > 0) $seq = $tail + 1;

@@ -2901,18 +2901,30 @@ function renderSupplierReportSectionHtml(from, to) {
   });
 
   const allPOs = db.purchaseOrders || [];
+  // Bucket filtered POs by supplierId once (O(POs) instead of O(Suppliers * POs))
+  const posBySupplier = new Map();
+  for (let i = 0; i < allPOs.length; i++) {
+    const o = allPOs[i];
+    if (!o || !o.supplierId) continue;
+    const oDate = o.orderDate ? o.orderDate.slice(0, 10) : '';
+    if (from && oDate < from) continue;
+    if (to && oDate > to) continue;
+    let arr = posBySupplier.get(o.supplierId);
+    if (!arr) { arr = []; posBySupplier.set(o.supplierId, arr); }
+    arr.push(o);
+  }
   const suppliersData = suppliers.map(s => {
-    const sPOs = allPOs.filter(o => {
-      if (o.supplierId !== s.id) return false;
-      const oDate = o.orderDate ? o.orderDate.slice(0, 10) : '';
-      if (from && oDate < from) return false;
-      if (to && oDate > to) return false;
-      return true;
-    });
-
+    const sPOs = posBySupplier.get(s.id) || [];
     const totalOrders = sPOs.length;
-    const completedOrders = sPOs.filter(o => o.status === 'received' || o.status === 'completed').length;
-    const totalSpend = sPOs.filter(o => o.status === 'received' || o.status === 'completed').reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
+    let completedOrders = 0;
+    let totalSpend = 0;
+    for (let i = 0; i < sPOs.length; i++) {
+      const o = sPOs[i];
+      if (o.status === 'received' || o.status === 'completed') {
+        completedOrders++;
+        totalSpend += Number(o.totalAmount || 0);
+      }
+    }
 
     return {
       supplier: s,
@@ -3021,9 +3033,18 @@ function reportBodyHtml(from, to) {
     cur = new Date(end.getTime());
     cur.setDate(cur.getDate() - (maxDays - 1));
   }
+  // Bucket sales by YYYY-MM-DD once (O(S) instead of 35x full db.sales scans)
+  const salesTotalByDay = new Map();
+  for (let i = 0; i < sales.length; i++) {
+    const s = sales[i];
+    if (!s || s.status === 'voided' || s.status === 'refunded') continue;
+    const iso = (s.date || '').slice(0, 10);
+    if (!iso) continue;
+    salesTotalByDay.set(iso, (salesTotalByDay.get(iso) || 0) + (Number(s.total) || 0));
+  }
   while (cur <= end && dayList.length < maxDays) {
     const iso = toLocalISODate(cur);
-    dayList.push({ iso, total: sumSales(salesOn(iso).filter(s => (!from || s.date.slice(0, 10) >= from) && (!to || s.date.slice(0, 10) <= to))) });
+    dayList.push({ iso, total: salesTotalByDay.get(iso) || 0 });
     cur.setDate(cur.getDate() + 1);
   }
   const maxVal = Math.max(1, ...dayList.map(d => d.total));
@@ -3712,10 +3733,12 @@ function reportBodyHtml(from, to) {
   ` : '';
 
   const summaryCardsHtml = renderOverallReportSummaryCardsHtml(from, to, sales, moves);
-  const inventoryStockHtml = renderInventoryStockReportSectionHtml();
-  const poReportHtml = renderPurchaseOrderReportSectionHtml(from, to);
-  const receivingReportHtml = renderStockReceivingReportSectionHtml(from, to, moves);
-  const supplierReportHtml = renderSupplierReportSectionHtml(from, to);
+  // Lazily render only the active tab's section(s) instead of computing all 11 tabs and discarding 10
+  const isAllTabs = !['sales', 'history', 'inventory', 'low_stock', 'transactions', 'purchase_orders', 'receiving', 'supplier_report', 'previous_inventory', 'mixing', 'expiration', 'returns'].includes(reportActiveTab);
+  const inventoryStockHtml = (reportActiveTab === 'inventory' || isAllTabs) ? renderInventoryStockReportSectionHtml() : '';
+  const poReportHtml = (reportActiveTab === 'purchase_orders' || isAllTabs) ? renderPurchaseOrderReportSectionHtml(from, to) : '';
+  const receivingReportHtml = (reportActiveTab === 'receiving' || isAllTabs) ? renderStockReceivingReportSectionHtml(from, to, moves) : '';
+  const supplierReportHtml = (reportActiveTab === 'supplier_report' || isAllTabs) ? renderSupplierReportSectionHtml(from, to) : '';
 
   // Render according to active toggle menu tab
   let contentHtml = '';

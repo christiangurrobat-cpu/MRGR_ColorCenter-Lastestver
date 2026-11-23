@@ -296,7 +296,7 @@ function salesHistoryPage() {
             👤 ${escapeHtml(currentUser.name)} (Cashier)
           </span>
         ` : ''}
-        <input id="sh-search" type="text" placeholder="${isCashier ? '🔍 Search receipt #, customer, items…' : '🔍 Search receipt #, cashier, customer…'}" value="${escapeHtml(salesSearchQuery)}" style="width:250px;" oninput="salesSearchQuery=this.value; renderSalesHistoryTable()">
+        <input id="sh-search" type="text" placeholder="${isCashier ? '🔍 Search receipt #, customer, items…' : '🔍 Search receipt #, cashier, customer…'}" value="${escapeHtml(salesSearchQuery)}" style="width:250px;" oninput="onSalesSearchInput(this.value)">
         <button type="button" class="btn ghost small" onclick="resetAllSalesFilters()" title="Reset all search and date filters to current year">Reset All</button>
       </div>
     </div>
@@ -388,6 +388,16 @@ function setSalesFilter(status) {
   document.querySelectorAll('.filter-tab').forEach(btn => {
     btn.classList.toggle('active', btn.getAttribute('onclick').includes(`'${status}'`));
   });
+}
+
+let _salesSearchTimer = null;
+function onSalesSearchInput(val) {
+  salesSearchQuery = val || '';
+  if (_salesSearchTimer) clearTimeout(_salesSearchTimer);
+  _salesSearchTimer = setTimeout(() => {
+    _salesSearchTimer = null;
+    renderSalesHistoryTable();
+  }, 150);
 }
 
 function renderSalesHistoryTable(keepPage = false) {
@@ -2562,6 +2572,28 @@ async function processSaleReturn(saleId) {
   let thisRefundAmount = 0;
   let anySealedRestocked = false;
 
+  // 4b. Pre-validate all returned items before mutating any inventory or sale state
+  for (let idx = 0; idx < sale.items.length; idx++) {
+    const item = sale.items[idx];
+    const input = document.getElementById(`ret-qty-input-${idx}`);
+    const qtyToReturn = input ? Math.max(0, parseFloat(input.value) || 0) : 0;
+    if (qtyToReturn > 0) {
+      const isBlend = item.type === 'colormix';
+      const policy = getItemReturnPolicy(item, isSameDay, adminReviewApproved);
+      if (policy.restricted && !adminReviewApproved) {
+        showToast(isBlend
+          ? `"${item.name}" cannot be returned or exchanged because it is a Custom Color Mix (already tinted). Administrator Review authorization is required for formula mixing errors.`
+          : `Return of "${item.name}" is restricted after purchase day. Admin Review approval is required.`, 'error');
+        return;
+      }
+      const returnable = Math.max(0, Number(((item.qty || 0) - (item.returnedQty || 0)).toFixed(2)));
+      if (qtyToReturn > returnable + 0.0001) {
+        showToast(`Return quantity for "${item.name}" (${qtyToReturn}) exceeds remaining returnable quantity (${returnable}).`, 'error');
+        return;
+      }
+    }
+  }
+
   // 5. Process Each Returned Item
   for (let idx = 0; idx < sale.items.length; idx++) {
     const item = sale.items[idx];
@@ -2864,7 +2896,11 @@ async function processSaleReturn(saleId) {
     }
   );
 
-  await saveDB();
+  const saved = await saveDB();
+  if (!saved) {
+    if (typeof loadDB === 'function') await loadDB();
+    return;
+  }
   closeModal();
 
   showToast(
@@ -3012,7 +3048,9 @@ function showReturnVoucherModal(saleId, voucherId) {
       <div style="text-align:center; padding-bottom:12px; border-bottom:1px dashed var(--line); margin-bottom:12px;">
         <img src="assets/images/logo.png" alt="MRGR Logo" style="width:44px; height:44px; border-radius:50%; margin:0 auto 8px auto; display:block; object-fit:cover;">
         <div style="font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif; font-weight:700; font-size:16px; letter-spacing:-0.01em;">MRGR COLOR CENTER</div>
-        <div class="muted small">Official Return, Refund &amp; Exchange Slip</div>
+        <div class="muted small" style="font-size:11px; line-height:1.35; margin-top:3px;">${businessAddressHtml()}</div>
+        <div class="muted small" style="font-size:11px; margin-top:2px;">Contact Number: ${escapeHtml(BUSINESS_CONTACT_NUMBER)}</div>
+        <div class="muted small" style="margin-top:3px; font-weight:600;">Official Return, Refund &amp; Exchange Slip</div>
         <div style="display:inline-block; margin-top:8px; padding:4px 12px; background:var(--danger-bg); border:1px solid var(--danger-border); border-radius:4px; font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif; font-weight:700; font-size:13px; color:var(--danger);">
           Voucher #: <span>${escapeHtml(voucher.voucherNo || voucher.id)}</span>
         </div>

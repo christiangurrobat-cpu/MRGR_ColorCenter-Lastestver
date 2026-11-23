@@ -742,6 +742,9 @@ async function submitPostReceivingDamage() {
       return;
     }
     applySupplierReturnsPayload(json);
+    if (typeof posBatchStatusLoadedAt !== 'undefined') posBatchStatusLoadedAt = 0;
+    if (typeof DISC !== 'undefined') DISC.loaded = false;
+    if (typeof EXP !== 'undefined') { EXP.loaded = false; EXP.summaryTs = 0; }
     if (typeof loadDB === 'function') await loadDB();
     closeModal();
     showToast(`Quarantined ${qty} damaged unit(s) and deducted from sellable inventory.`, 'ok');
@@ -1196,6 +1199,9 @@ async function submitReceiveReplacement(returnId) {
       return;
     }
     applySupplierReturnsPayload(json);
+    if (typeof posBatchStatusLoadedAt !== 'undefined') posBatchStatusLoadedAt = 0;
+    if (typeof DISC !== 'undefined') DISC.loaded = false;
+    if (typeof EXP !== 'undefined') { EXP.loaded = false; EXP.summaryTs = 0; }
     if (typeof loadDB === 'function') await loadDB();
     closeModal();
     showToast(`Received ${json.receivedQty} replacement unit(s) into sellable inventory & FIFO batches!`, 'ok');
@@ -1506,6 +1512,9 @@ async function submitCreateReplacementRequest() {
       return;
     }
     applySupplierReturnsPayload(json);
+    if (typeof posBatchStatusLoadedAt !== 'undefined') posBatchStatusLoadedAt = 0;
+    if (typeof DISC !== 'undefined') DISC.loaded = false;
+    if (typeof EXP !== 'undefined') { EXP.loaded = false; EXP.summaryTs = 0; }
     if (typeof loadDB === 'function') await loadDB();
     closeModal();
     showToast(`Replacement Request ${json.requestRef} created and linked to ${d.poNumber}.`, 'ok');
@@ -1693,6 +1702,9 @@ async function submitConfirmSupplierReplacement(requestId) {
       return;
     }
     applySupplierReturnsPayload(json);
+    if (typeof posBatchStatusLoadedAt !== 'undefined') posBatchStatusLoadedAt = 0;
+    if (typeof DISC !== 'undefined') DISC.loaded = false;
+    if (typeof EXP !== 'undefined') { EXP.loaded = false; EXP.summaryTs = 0; }
     if (typeof loadDB === 'function') await loadDB();
     closeModal();
     const rcptNo = json.receipt ? json.receipt.receiptNumber : '';
@@ -1727,11 +1739,11 @@ function buildReplacementReceiptHtml(rcpt, isReprint = false) {
       <table style="width:100%; border-collapse:collapse; margin-top:8px; font-size:12px;">
         <thead>
           <tr>
-            <th style="text-align:left; border-bottom:1.5px solid #222; padding:5px 4px;">Product</th>
-            <th style="text-align:left; border-bottom:1.5px solid #222; padding:5px 4px;">Size</th>
-            <th style="text-align:right; border-bottom:1.5px solid #222; padding:5px 4px;">Delivered</th>
-            <th style="text-align:right; border-bottom:1.5px solid #222; padding:5px 4px;">Accepted</th>
-            <th style="text-align:right; border-bottom:1.5px solid #222; padding:5px 4px;">Damaged</th>
+            <th style="text-align:left; background:#F7F5F2; color:#26211C; border-bottom:1.5px solid #222; padding:5px 4px;">Product</th>
+            <th style="text-align:left; background:#F7F5F2; color:#26211C; border-bottom:1.5px solid #222; padding:5px 4px;">Size</th>
+            <th style="text-align:right; background:#F7F5F2; color:#26211C; border-bottom:1.5px solid #222; padding:5px 4px;">Delivered</th>
+            <th style="text-align:right; background:#F7F5F2; color:#26211C; border-bottom:1.5px solid #222; padding:5px 4px;">Accepted</th>
+            <th style="text-align:right; background:#F7F5F2; color:#26211C; border-bottom:1.5px solid #222; padding:5px 4px;">Damaged</th>
           </tr>
         </thead>
         <tbody>
@@ -1750,10 +1762,10 @@ function buildReplacementReceiptHtml(rcpt, isReprint = false) {
       <table style="width:100%; border-collapse:collapse; margin-top:8px; font-size:12px;">
         <thead>
           <tr>
-            <th style="text-align:left; border-bottom:1.5px solid #222; padding:5px 4px;">Product</th>
-            <th style="text-align:left; border-bottom:1.5px solid #222; padding:5px 4px;">Size</th>
-            <th style="text-align:right; border-bottom:1.5px solid #222; padding:5px 4px;">Damaged Qty</th>
-            <th style="text-align:right; border-bottom:1.5px solid #222; padding:5px 4px;">Replacement Qty</th>
+            <th style="text-align:left; background:#F7F5F2; color:#26211C; border-bottom:1.5px solid #222; padding:5px 4px;">Product</th>
+            <th style="text-align:left; background:#F7F5F2; color:#26211C; border-bottom:1.5px solid #222; padding:5px 4px;">Size</th>
+            <th style="text-align:right; background:#F7F5F2; color:#26211C; border-bottom:1.5px solid #222; padding:5px 4px;">Damaged Qty</th>
+            <th style="text-align:right; background:#F7F5F2; color:#26211C; border-bottom:1.5px solid #222; padding:5px 4px;">Replacement Qty</th>
           </tr>
         </thead>
         <tbody>
@@ -1773,6 +1785,8 @@ function buildReplacementReceiptHtml(rcpt, isReprint = false) {
       <div class="pos-receipt-header" style="text-align:center; border-bottom:2px dashed #222; padding-bottom:10px; margin-bottom:12px;">
         <div class="pos-receipt-title" style="font-size:17px; font-weight:800; letter-spacing:0.03em;">${escapeHtml(s.businessName || 'MRGR COLOR CENTER')}</div>
         <div class="pos-receipt-sub" style="font-size:11px; color:#555;">${escapeHtml(s.businessSubtitle || 'Paint & Hardware Supply · Sales & Inventory')}</div>
+        <div class="pos-receipt-sub" style="font-size:10.5px; color:#555; line-height:1.35; margin-top:3px;">${s.businessAddress && s.businessAddress !== BUSINESS_ADDRESS ? escapeHtml(s.businessAddress) : businessAddressHtml()}</div>
+        <div class="pos-receipt-sub" style="font-size:10.5px; color:#555; margin-top:2px;">Contact Number: ${escapeHtml(s.businessContact || BUSINESS_CONTACT_NUMBER)}</div>
         <div style="font-size:12px; font-weight:800; margin-top:6px; letter-spacing:0.03em;">${escapeHtml(title)}</div>
         <div class="pos-receipt-badge" style="display:inline-block; padding:3px 10px; border:1.5px solid #222; margin-top:6px; font-weight:700; font-family:monospace; font-size:13px;">${escapeHtml(rcpt.receiptNumber)}</div>
         ${isReprint || rcpt.reprintCount > 0 ? `<div style="font-size:10.5px; font-weight:700; margin-top:4px; color:#555;">*** REPRINT COPY${rcpt.reprintCount > 0 ? ` (#${rcpt.reprintCount})` : ''} ***</div>` : ''}
@@ -1804,8 +1818,8 @@ function buildReplacementReceiptHtml(rcpt, isReprint = false) {
 
       <div class="pos-receipt-footer" style="text-align:center; font-size:10.5px; color:#444; margin-top:14px; border-top:1px dashed #222; padding-top:10px; line-height:1.45;">
         ${isDelivery
-          ? `<div>Physical inspection completed. Only accepted replacement quantities have been posted to sellable inventory and FIFO batches.</div>`
-          : `<div><b>The supplier has confirmed agreement to replace the damaged items listed above.</b></div>
+      ? `<div>Physical inspection completed. Only accepted replacement quantities have been posted to sellable inventory and FIFO batches.</div>`
+      : `<div><b>The supplier has confirmed agreement to replace the damaged items listed above.</b></div>
              <div>Items are still awaiting physical delivery and inspection. This is NOT a sales receipt, payment receipt, or proof of actual delivery.</div>`}
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:22px; text-align:center; font-size:10.5px;">
           <div>
@@ -1834,6 +1848,8 @@ function buildThermalReplacementReceiptHtml(rcpt, isReprint = false) {
       <div class="th-center">
         <div class="th-title">${escapeHtml(s.businessName || 'MRGR COLOR CENTER')}</div>
         <div class="th-sub">${escapeHtml(s.businessSubtitle || 'Paint & Hardware Supply')}</div>
+        <div class="th-sub" style="font-size:9.5px; line-height:1.3; margin:2px 0; word-break:break-word;">${s.businessAddress && s.businessAddress !== BUSINESS_ADDRESS ? escapeHtml(s.businessAddress) : businessAddressHtml()}</div>
+        <div class="th-sub" style="font-size:9.5px; margin-bottom:2px;">Contact Number: ${escapeHtml(s.businessContact || BUSINESS_CONTACT_NUMBER)}</div>
         <div class="th-bold" style="margin-top:4px; font-size:10.5px;">${escapeHtml(title)}</div>
         <div class="th-receipt-no">${escapeHtml(rcpt.receiptNumber)}</div>
         ${isReprint || rcpt.reprintCount > 0 ? `<div class="th-sub th-bold" style="margin-top:2px;">*** REPRINT COPY ***</div>` : ''}
@@ -1849,12 +1865,12 @@ function buildThermalReplacementReceiptHtml(rcpt, isReprint = false) {
       ${sup.contact ? `<div class="th-meta-line">Attn: ${escapeHtml(sup.contact)}</div>` : ''}
       <div class="th-divider"></div>
       ${items.map(it => isDelivery
-        ? `<div class="th-item">
+    ? `<div class="th-item">
              <div class="th-bold">${escapeHtml(it.productName)} (${it.containerSize}L)</div>
              <div class="th-sub-row"><span>Delivered: ${it.deliveredQty} · Accepted: ${it.acceptedQty}</span><span>Dmg: ${it.damagedQty}</span></div>
              ${it.batchNumber ? `<div class="th-meta-line">Batch: ${escapeHtml(it.batchNumber)}</div>` : ''}
            </div>`
-        : `<div class="th-item">
+    : `<div class="th-item">
              <div class="th-bold">${escapeHtml(it.productName)} (${it.containerSize}L)</div>
              <div class="th-sub-row"><span>Damaged: ${it.damagedQty}</span><span class="th-bold">Replace: ${it.replacementQty}</span></div>
            </div>`).join('')}
@@ -1866,8 +1882,8 @@ function buildThermalReplacementReceiptHtml(rcpt, isReprint = false) {
       <div class="th-center th-bold" style="font-size:10px;">${escapeHtml(s.status || 'CONFIRMED BY SUPPLIER – AWAITING DELIVERY')}</div>
       <div class="th-footer th-center">
         ${isDelivery
-          ? 'Physical inspection completed. Accepted units posted to inventory.'
-          : 'Supplier confirmed replacement agreement. Awaiting physical delivery & inspection. NOT a sales or delivery receipt.'}
+      ? 'Physical inspection completed. Accepted units posted to inventory.'
+      : 'Supplier confirmed replacement agreement. Awaiting physical delivery & inspection. NOT a sales or delivery receipt.'}
       </div>
       <div class="th-divider"></div>
       <div class="th-center th-meta-line" style="margin-top:16px;">__________________________<br>${escapeHtml(rcpt.confirmedBy)} (Authorized Staff)</div>
@@ -1965,6 +1981,9 @@ async function submitCancelReplacementRequest(requestId, targetStatus = 'Cancell
       return;
     }
     applySupplierReturnsPayload(json);
+    if (typeof posBatchStatusLoadedAt !== 'undefined') posBatchStatusLoadedAt = 0;
+    if (typeof DISC !== 'undefined') DISC.loaded = false;
+    if (typeof EXP !== 'undefined') { EXP.loaded = false; EXP.summaryTs = 0; }
     if (typeof loadDB === 'function') await loadDB();
     closeModal();
     showToast(`Replacement request marked as ${targetStatus}.`, 'ok');
@@ -1998,6 +2017,9 @@ async function submitUpdateReplacementRequest(requestId, recordCredit = false) {
       return;
     }
     applySupplierReturnsPayload(json);
+    if (typeof posBatchStatusLoadedAt !== 'undefined') posBatchStatusLoadedAt = 0;
+    if (typeof DISC !== 'undefined') DISC.loaded = false;
+    if (typeof EXP !== 'undefined') { EXP.loaded = false; EXP.summaryTs = 0; }
     if (typeof loadDB === 'function') await loadDB();
     closeModal();
     showToast(recordCredit ? 'Supplier credit/refund recorded & replacement request resolved.' : 'Replacement request updated.', 'ok');
@@ -2144,6 +2166,9 @@ async function submitReceiveReplacementDelivery(requestId) {
       return;
     }
     applySupplierReturnsPayload(json);
+    if (typeof posBatchStatusLoadedAt !== 'undefined') posBatchStatusLoadedAt = 0;
+    if (typeof DISC !== 'undefined') DISC.loaded = false;
+    if (typeof EXP !== 'undefined') { EXP.loaded = false; EXP.summaryTs = 0; }
     if (typeof loadDB === 'function') await loadDB();
     closeModal();
     const fuMsg = json.autoFollowUpRef ? ` · Follow-up Replacement Request ${json.autoFollowUpRef} auto-generated` : '';

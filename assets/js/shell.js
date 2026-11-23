@@ -327,7 +327,7 @@ function shell() {
     const isVisible = count > 0;
     const displayCount = count > 99 ? '99+' : count;
     return `
-<button class="nav-item ${currentPage === it.id ? 'active' : ''}" onclick="goTo('${it.id}', { fromSidebar: true })" title="${it.label}">
+<button class="nav-item ${currentPage === it.id ? 'active' : ''}" data-nav-id="${it.id}" onclick="goTo('${it.id}', { fromSidebar: true })" title="${it.label}">
   <span class="nav-icon" aria-hidden="true">${it.icon || '•'}</span>
   <span class="nav-label">${it.label}</span>
   <span id="nav-badge-${it.id}" class="nav-badge ${isVisible ? '' : 'hidden'}" style="${isVisible ? 'display:inline-flex;' : 'display:none;'}" title="${count} notification${count === 1 ? '' : 's'}">${displayCount}</span>
@@ -1658,7 +1658,19 @@ function goTo(page, options = {}) {
     push: options.push !== undefined ? Boolean(options.push) : true,
     replace: Boolean(options.replace)
   });
-  renderApp();
+
+  // Fast navigation: reuse existing app shell when already mounted for logged-in user
+  const existingShell = document.querySelector('.shell');
+  const pageContentEl = document.getElementById('page-content');
+  if (currentUser && existingShell && pageContentEl) {
+    existingShell.querySelectorAll('.nav-item[data-nav-id]').forEach(btn => {
+      btn.classList.toggle('active', btn.getAttribute('data-nav-id') === currentPage);
+    });
+    renderPage();
+    updateNavBadges();
+  } else {
+    renderApp();
+  }
   return true;
 }
 
@@ -1673,9 +1685,11 @@ function goToReportsTab(tab) {
   if (tab === 'history' && typeof resetReportsSalesHistoryPagination === 'function') {
     resetReportsSalesHistoryPagination();
   }
-  goTo('reports');
-  if (typeof setReportTab === 'function') {
-    setReportTab(tab);
+  if (currentPage === 'reports') {
+    if (typeof setReportTab === 'function') setReportTab(tab);
+  } else {
+    // reportActiveTab is already set above, so goTo('reports') renders the target tab in a single pass
+    goTo('reports');
   }
   if (typeof window !== 'undefined' && window.scrollTo) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2675,9 +2689,29 @@ function formatMixConsumptionNote(plan) {
   return parts.length ? ` [${parts.join('; ')}]` : '';
 }
 
+let _prodByIdMap = null;
+let _prodByIdRef = null;
+let _prodByIdLen = -1;
+let _prodByIdVer = -1;
+
 function productById(id) {
   if (!id || !db || !Array.isArray(db.products)) return null;
-  return db.products.find(p => p.id === id || p.productId === id || p.product_id === id);
+  const ver = typeof _dbCacheVersion !== 'undefined' ? _dbCacheVersion : 0;
+  if (_prodByIdRef !== db.products || _prodByIdLen !== db.products.length || _prodByIdVer !== ver || !_prodByIdMap) {
+    _prodByIdMap = new Map();
+    const list = db.products;
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
+      if (!p) continue;
+      if (p.id != null) _prodByIdMap.set(String(p.id), p);
+      if (p.productId != null) _prodByIdMap.set(String(p.productId), p);
+      if (p.product_id != null) _prodByIdMap.set(String(p.product_id), p);
+    }
+    _prodByIdRef = db.products;
+    _prodByIdLen = db.products.length;
+    _prodByIdVer = ver;
+  }
+  return _prodByIdMap.get(String(id)) || null;
 }
 
 /* ============================================================
@@ -2842,6 +2876,9 @@ function syncProductVariants(p) {
       if (openedMap[s] !== undefined) {
         variant.remainingVolume = Math.max(0, Number((Number(openedMap[s]) || 0).toFixed(2)));
         variant.openedQuantity = variant.remainingVolume > 0 ? 1 : 0;
+      } else if (p.openedBySize && typeof p.openedBySize === 'object') {
+        variant.remainingVolume = 0;
+        variant.openedQuantity = 0;
       }
     }
   });
@@ -2879,7 +2916,27 @@ function movementProductLabel(movement) {
   if (product) return productOptionLabel(product);
   return movement.productName || (movement.type === 'colormix' ? 'Color Mix' : 'Unknown product');
 }
-function supplierById(id) { return (db.suppliers || []).find(s => s.id === id); }
+let _supByIdMap = null;
+let _supByIdRef = null;
+let _supByIdLen = -1;
+let _supByIdVer = -1;
+
+function supplierById(id) {
+  if (!id || !db || !Array.isArray(db.suppliers)) return undefined;
+  const ver = typeof _dbCacheVersion !== 'undefined' ? _dbCacheVersion : 0;
+  if (_supByIdRef !== db.suppliers || _supByIdLen !== db.suppliers.length || _supByIdVer !== ver || !_supByIdMap) {
+    _supByIdMap = new Map();
+    const list = db.suppliers;
+    for (let i = 0; i < list.length; i++) {
+      const s = list[i];
+      if (s && s.id != null) _supByIdMap.set(String(s.id), s);
+    }
+    _supByIdRef = db.suppliers;
+    _supByIdLen = db.suppliers.length;
+    _supByIdVer = ver;
+  }
+  return _supByIdMap.get(String(id));
+}
 
 function getSupplierProductIds(supplierOrId) {
   const s = typeof supplierOrId === 'string' ? supplierById(supplierOrId) : supplierOrId;

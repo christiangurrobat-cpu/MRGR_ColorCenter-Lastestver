@@ -668,7 +668,7 @@ function poListPage() {
 
     <div class="po-list-search">
       <span style="font-size:15px; color:var(--ink-soft);">🔍</span>
-      <input id="po-search-input" type="text" placeholder="Search by PO number, supplier, or notes…" value="${escapeHtml(poSearch)}" oninput="poSearch=this.value; renderPOListRows()" autocomplete="off">
+      <input id="po-search-input" type="text" placeholder="Search by PO number, supplier, or notes…" value="${escapeHtml(poSearch)}" oninput="onPOListSearchInput(this.value)" autocomplete="off">
       <button id="po-search-clear-btn" class="btn ghost small" onclick="poSearch=''; document.getElementById('po-search-input').value=''; renderPOListRows()" title="Clear search" style="display:${poSearch ? 'inline-flex' : 'none'};">✕</button>
       <div style="display:flex; gap:6px; margin-left:8px; flex-wrap:wrap;">
         ${['all', 'pending', 'ordered', 'partial', 'received', 'cancelled'].map(s => {
@@ -724,6 +724,18 @@ function renderPOListRowsHTML(filtered) {
     </div>`;
   }).join('');
   return rowsHtml + pag.html;
+}
+
+let _poListSearchTimer = null;
+function onPOListSearchInput(val) {
+  poSearch = val || '';
+  const clr = document.getElementById('po-search-clear-btn');
+  if (clr) clr.style.display = poSearch ? 'inline-flex' : 'none';
+  if (_poListSearchTimer) clearTimeout(_poListSearchTimer);
+  _poListSearchTimer = setTimeout(() => {
+    _poListSearchTimer = null;
+    renderPOListRows();
+  }, 150);
 }
 
 function renderPOListRows(keepPage = false) {
@@ -957,7 +969,11 @@ async function approvePO(id) {
     referenceNo: po.poNumber,
     reason: po.notes || `Authorized order for ${po.supplierName}`
   });
-  await saveDB();
+  const saved = await saveDB();
+  if (!saved) {
+    if (typeof loadDB === 'function') await loadDB();
+    return null;
+  }
   showToast(`PO ${po.poNumber} approved and marked as Ordered.`, 'ok');
   renderPage();
 }
@@ -1151,7 +1167,11 @@ async function completePOReceiving(po, refNote = '', batchQtys = null, batchMeta
     });
   }
 
-  await saveDB();
+  const saved = await saveDB();
+  if (!saved) {
+    if (typeof loadDB === 'function') await loadDB();
+    return null;
+  }
 
   let damagedRecorded = false;
   let autoReturnRef = null;
@@ -1213,7 +1233,11 @@ async function cancelPO(id) {
     referenceNo: po.poNumber,
     reason: po.notes || `${actionVerb} by ${(currentUser && currentUser.name) || 'User'}`
   });
-  await saveDB();
+  const saved = await saveDB();
+  if (!saved) {
+    if (typeof loadDB === 'function') await loadDB();
+    return null;
+  }
   showToast(`PO ${po.poNumber} cancelled.`, 'ok');
   renderPage();
 }
@@ -1242,8 +1266,10 @@ function printPO(id) {
     <div style="display:flex; align-items:center; gap:14px; margin-bottom:16px;">
       <img src="assets/images/logo.png" alt="MRGR Logo" style="width:50px; height:50px; border-radius:50%; object-fit:cover;">
       <div>
-        <h1 style="margin:0 0 4px;">Purchase Order: ${escapeHtml(po.poNumber)}</h1>
-        <h2 style="margin:0; font-size:14px; color:var(--ink-soft); font-weight:500;">MRGR Color Center</h2>
+        <h2 style="margin:0; font-size:15px; color:#26211C; font-weight:700;">MRGR COLOR CENTER</h2>
+        <div style="font-size:11.5px; color:#6B6259; line-height:1.4; margin-top:2px;">${businessAddressHtml('<br>')}</div>
+        <div style="font-size:11.5px; color:#6B6259; margin-top:1px;">Contact Number: ${escapeHtml(BUSINESS_CONTACT_NUMBER)}</div>
+        <h1 style="margin:6px 0 0; font-size:19px;">Purchase Order: ${escapeHtml(po.poNumber)}</h1>
       </div>
     </div>
     <div class="meta">
@@ -2669,7 +2695,11 @@ async function submitPO(e) {
       );
     }
 
-    await saveDB();
+    const saved = await saveDB();
+  if (!saved) {
+    if (typeof loadDB === 'function') await loadDB();
+    return null;
+  }
 
     showToast(
       isAdmin
@@ -2833,7 +2863,11 @@ window.openManageProductSuppliersModal = openManageProductSuppliersModal;
 
 window.removeProductSupplierInModal = async function (relId, productId, targetSize) {
   deleteProductSupplierRelationship(relId);
-  await saveDB();
+  const saved = await saveDB();
+  if (!saved) {
+    if (typeof loadDB === 'function') await loadDB();
+    return null;
+  }
   openManageProductSuppliersModal(productId, targetSize);
   renderPage();
   showToast('Supplier link removed.', 'ok');
@@ -2870,7 +2904,11 @@ window.submitProductSupplierInModal = async function (productId, targetSize) {
     notes: 'Configured by Admin'
   });
 
-  await saveDB();
+  const saved = await saveDB();
+  if (!saved) {
+    if (typeof loadDB === 'function') await loadDB();
+    return null;
+  }
   openManageProductSuppliersModal(productId, targetSize);
   renderPage();
   showToast('Supplier relationship saved.', 'ok');
@@ -3280,7 +3318,11 @@ async function confirmUnlinkedSupplierAndCreate() {
   prods.forEach(p => {
     if (!supplier.productIds.includes(p.id)) supplier.productIds.push(p.id);
   });
-  await saveDB();
+  const saved = await saveDB();
+  if (!saved) {
+    if (typeof loadDB === 'function') await loadDB();
+    return null;
+  }
   closeModal();
 
   createPOFromSelectedLowStock(window._pendingAllIds, window._pendingTargetSize ?? null);

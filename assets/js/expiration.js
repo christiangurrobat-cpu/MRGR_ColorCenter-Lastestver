@@ -77,7 +77,7 @@ function expIsAdmin() { return !!(currentUser && currentUser.role === 'admin'); 
 function expIsStaff() { return !!(currentUser && currentUser.role === 'staff'); }
 
 function expCanEdit() {
-  return EXP.data && EXP.data.permissions ? !!EXP.data.permissions.canEdit : (expIsAdmin() || expIsStaff());
+  return EXP.data && EXP.data.permissions ? !!EXP.data.permissions.canEdit : expIsAdmin();
 }
 
 function expCanAdjust() {
@@ -927,6 +927,7 @@ function expRenderDetail() {
       ${tabBtn('movements', `📜 Stock Movement History (${(d.stockMovements || []).length})`)}
       ${tabBtn('fifo', `➖ FIFO Deduction History (${(d.fifoDeductions || []).length})`)}
       ${tabBtn('ledger', `🧾 Batch Ledger (${(d.ledger || []).length})`)}
+      ${tabBtn('corrections', `✏️ Correction History (${(d.correctionHistory || []).length})`)}
     </div>
     ${pane('movements', (d.stockMovements || []).length
     ? `<div class="table-scroll exp-hist"><table class="exp-table small"><thead><tr><th>Date</th><th>Type</th><th class="right">Qty (liters)</th><th>Staff</th><th>Details</th></tr></thead><tbody>${movRows}</tbody></table></div><div class="muted small" style="margin-top:6px;">Central stock-movement log for this container size since this batch was received (all batches of ${fmtSize(b.containerSize)}).</div>`
@@ -936,12 +937,15 @@ function expRenderDetail() {
       : empty('No FIFO deductions have drawn from this batch yet.'))}
     ${pane('ledger', (d.ledger || []).length
         ? `<div class="table-scroll exp-hist"><table class="exp-table small"><thead><tr><th>Date</th><th>Event</th><th class="right">Change</th><th class="right">Balance</th><th>Staff</th><th>Details</th></tr></thead><tbody>${ledgerRows}</tbody></table></div>`
-        : empty('No ledger entries.'))}`;
+        : empty('No ledger entries.'))}
+    ${pane('corrections', (d.correctionHistory || []).length
+        ? `<div class="table-scroll exp-hist"><table class="exp-table small"><thead><tr><th>Date &amp; Time</th><th>Previous Date</th><th>Corrected Date</th><th>Admin Responsible</th><th>Reason</th></tr></thead><tbody>${(d.correctionHistory || []).map(ch => `<tr><td>${expFmtDateTime(ch.date)}</td><td>${escapeHtml(ch.previousDate)}</td><td><b>${escapeHtml(ch.correctedDate)}</b></td><td>${escapeHtml(ch.adminName || 'Admin')}</td><td class="exp-note">${escapeHtml(ch.reason || '—')}</td></tr>`).join('')}</tbody></table></div><div class="muted small" style="margin-top:6px;">Permanent append-only audit trail of Administrator expiration date corrections for batch ${escapeHtml(b.batchNumber)}.</div>`
+        : empty('No expiration date corrections have been made to this batch.'))}`;
 
   const canAdjust = !!(d.permissions && d.permissions.canAdjust !== undefined ? d.permissions.canAdjust : expCanAdjust());
   const foot = `
     <button class="btn secondary" onclick="closeModal()">Close</button>
-    ${canEdit ? `<button class="btn secondary" onclick="expOpenEdit('${escapeAttr(b.batchId)}')">✏️ Edit Expiration Date</button>` : ''}
+    ${canEdit ? `<button class="btn secondary" onclick="expOpenEdit('${escapeAttr(b.batchId)}')">✏️ Correct Expiration Date</button>` : ''}
     ${canAdjust ? `<button class="btn" onclick="expOpenAdjust('${escapeAttr(b.batchId)}')">± Record Adjustment</button>` : ''}`;
   openModal(`🗓️ Batch ${escapeHtml(b.batchNumber)} — ${escapeHtml(p.name || b.productName)} (${fmtSize(b.containerSize)})`, body, foot, 'wide');
 }
@@ -1039,19 +1043,25 @@ function expOpenEdit(batchId) {
     </div>
 
     <div class="exp-edit-section">
-      <div class="exp-edit-sec-title">2. Expiration Date &amp; Audit Reason</div>
-      <div class="field">
-        <label for="exp-e-exp">Expiration Date <span class="muted">(empty = Not Specified)</span></label>
-        <div class="exp-input-with-btn">
-          <input type="date" id="exp-e-exp" value="${escapeAttr(origExp)}" ${origRecv ? `min="${escapeAttr(origRecv)}"` : ''} oninput="expEditPreviewExp()" onchange="expEditPreviewExp()">
-          <button type="button" class="btn secondary small" onclick="expClearExpirationInput()" title="Clear expiration date and mark as Not Specified">✕ Clear</button>
+      <div class="exp-edit-sec-title">2. Admin Expiration Date Correction &amp; Audit Reason</div>
+      <div class="exp-form-grid" style="margin-bottom:8px;">
+        <div class="field">
+          <label>Existing Expiration Date <span class="exp-ro-tag">READ-ONLY</span></label>
+          <input type="text" class="exp-readonly" value="${escapeAttr(origExp ? expFmtDate(origExp) + ' (' + origExp + ')' : 'Not Specified')}" readonly tabindex="-1">
         </div>
-        <div id="exp-e-exp-preview" class="exp-exp-preview"></div>
-        <div id="exp-e-err-exp" class="exp-field-err"></div>
+        <div class="field">
+          <label for="exp-e-exp">New Expiration Date <span class="muted">(or Clear to mark Not Specified)</span></label>
+          <div class="exp-input-with-btn">
+            <input type="date" id="exp-e-exp" value="${escapeAttr(origExp)}" ${origRecv ? `min="${escapeAttr(origRecv)}"` : ''} oninput="expEditPreviewExp()" onchange="expEditPreviewExp()">
+            <button type="button" class="btn secondary small" onclick="expClearExpirationInput()" title="Clear expiration date and mark as Not Specified">✕ Clear</button>
+          </div>
+          <div id="exp-e-exp-preview" class="exp-exp-preview"></div>
+          <div id="exp-e-err-exp" class="exp-field-err"></div>
+        </div>
       </div>
       <div class="field" style="margin-top:8px;">
-        <label for="exp-e-reason">Reason for Change * <span class="muted">(required for Audit Log)</span></label>
-        <textarea id="exp-e-reason" rows="2" maxlength="300" placeholder="e.g. Corrected expiration date from supplier delivery receipt"></textarea>
+        <label for="exp-e-reason">Reason for Correction * <span class="muted">(required for permanent Correction History &amp; Audit Log)</span></label>
+        <textarea id="exp-e-reason" rows="2" maxlength="300" placeholder="e.g. Corrected misread expiration date printed on paint can label"></textarea>
         <div id="exp-e-err-reason" class="exp-field-err"></div>
       </div>
     </div>
@@ -1089,9 +1099,28 @@ async function expSaveEdit(batchId) {
     hasErr = true;
   };
 
+  if (exp && !/^\d{4}-\d{2}-\d{2}$/.test(exp)) fail('exp', 'Invalid expiration date format.');
   if (exp && origRecv && exp < origRecv) fail('exp', 'Expiration date cannot be earlier than the date received.');
-  if (!reason || reason.length < 5) fail('reason', 'Please enter a reason for change (at least 5 characters).');
+  if (!reason || reason.length < 5) fail('reason', 'Please enter a reason for correction (at least 5 characters).');
   if (hasErr) return;
+
+  const oldExpLabel = (b && b.expirationDate) ? String(b.expirationDate).slice(0, 10) : 'Not Specified';
+  const newExpLabel = exp || 'Not Specified';
+  if (oldExpLabel === newExpLabel) {
+    showToast('No changes to save — expiration date is unchanged.', 'info');
+    return;
+  }
+
+  const confirmed = await showConfirmDialog({
+    title: 'Confirm Expiration Date Correction',
+    message: `Update expiration date for <b>${escapeHtml(b ? b.productName : '')}</b> (Batch <code>${escapeHtml(b ? b.batchNumber : batchId)}</code>)?<br><br>`
+      + `<b>Previous Date:</b> ${escapeHtml(oldExpLabel)}<br>`
+      + `<b>New Date:</b> ${escapeHtml(newExpLabel)}<br>`
+      + `<b>Reason:</b> ${escapeHtml(reason)}<br><br>`
+      + `<span class="muted small">Quantities, costs, prices, and receiving date will remain unchanged. This correction will be permanently recorded.</span>`,
+    confirmText: 'Confirm Correction'
+  });
+  if (!confirmed) return;
 
   _expSavingEdit = true;
   const btn = document.getElementById('exp-e-save');
@@ -1101,8 +1130,10 @@ async function expSaveEdit(batchId) {
 
   try {
     const res = await expApi('update_batch', { body: payload });
+    if (typeof posBatchStatusLoadedAt !== 'undefined') posBatchStatusLoadedAt = 0;
+    if (typeof DISC !== 'undefined') DISC.loaded = false;
     closeModal();
-    showToast(res.unchanged ? 'No changes to save.' : '✓ Expiration date updated.', res.unchanged ? 'info' : 'ok');
+    showToast(res.unchanged ? 'No changes to save.' : '✓ Expiration date corrected and logged.', res.unchanged ? 'info' : 'ok');
     EXP.summaryTs = 0;
     await expLoad(true);
     expRefreshSummary(true);

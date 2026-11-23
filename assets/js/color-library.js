@@ -824,10 +824,15 @@ function onColorLibraryTabSwitch(tab) {
   }
 }
 
+let _clMixedSearchTimer = null;
 function onMixedCatalogSearch(val) {
   colorLibraryUiState.mixedSearch = val;
-  const grid = document.getElementById('cl-mixed-grid-container');
-  if (grid) grid.innerHTML = renderMixedColorCatalogGridHtml();
+  if (_clMixedSearchTimer) clearTimeout(_clMixedSearchTimer);
+  _clMixedSearchTimer = setTimeout(() => {
+    _clMixedSearchTimer = null;
+    const grid = document.getElementById('cl-mixed-grid-container');
+    if (grid) grid.innerHTML = renderMixedColorCatalogGridHtml();
+  }, 140);
 }
 
 function onMixedCatalogCategorySelect(cat) {
@@ -1773,10 +1778,15 @@ function collapseAllColorSections() {
   if (gridEl) gridEl.innerHTML = renderColorLibrarySectionsHtml();
 }
 
+let _clBaseSearchTimer = null;
 function onColorLibrarySearch(val) {
   colorLibraryUiState.search = val;
-  const gridEl = document.getElementById('cl-grid-container');
-  if (gridEl) gridEl.innerHTML = renderColorLibrarySectionsHtml();
+  if (_clBaseSearchTimer) clearTimeout(_clBaseSearchTimer);
+  _clBaseSearchTimer = setTimeout(() => {
+    _clBaseSearchTimer = null;
+    const gridEl = document.getElementById('cl-grid-container');
+    if (gridEl) gridEl.innerHTML = renderColorLibrarySectionsHtml();
+  }, 140);
 }
 
 function onColorClassificationSelect(cls) {

@@ -3,10 +3,10 @@ logs/*.log
 
 # Runtime Migration Flags
 api/.schema_migrated
-api/.batch_schema_v1
-api/.color_library_v4
-api/.base_colors_synced_v1
-api/.color_sync_v1
+api/.*_v*
+
+# Local Database Backups
+backups/
 
 # Operating System Files
 Thumbs.db

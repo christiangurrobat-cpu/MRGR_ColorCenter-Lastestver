@@ -21,16 +21,21 @@ function setAlertTab(tab) {
   renderPage();
 }
 
+let _alertSearchTimer = null;
 function setAlertSearch(q) {
   alertSearchQuery = (q || '').trim();
   resetPaginationPage('low_stock_alerts');
-  renderPage();
-  const input = document.getElementById('alerts-search-input');
-  if (input) {
-    input.focus();
-    const len = input.value.length;
-    try { input.setSelectionRange(len, len); } catch (e) { }
-  }
+  if (_alertSearchTimer) clearTimeout(_alertSearchTimer);
+  _alertSearchTimer = setTimeout(() => {
+    _alertSearchTimer = null;
+    renderPage();
+    const input = document.getElementById('alerts-search-input');
+    if (input) {
+      input.focus();
+      const len = input.value.length;
+      try { input.setSelectionRange(len, len); } catch (e) { }
+    }
+  }, 160);
 }
 
 function setAlertSupplierFilter(supId) {
@@ -74,18 +79,22 @@ function resetAlertFilters() {
 function getProductAlertMatchingSizes(p) {
   if (!p) return [];
   const rawSizes = (productSizes(p) || []).slice().sort((a, b) => Number(a) - Number(b));
-  return rawSizes.filter(s => {
+  const matchesTab = s => {
     const st = LowStockService.getVariantStockStatus(p, s);
     const variant = productSizeVariantBySize(p, s);
     const poSt = LowStockService.getVariantPOStatus(p, s, variant ? variant.sizeId : null);
-
-    if (alertContainerSizeFilter !== 'all' && normalizeCanSize(s) !== normalizeCanSize(alertContainerSizeFilter)) return false;
-    if (alertStockStatusFilter !== 'all' && st !== alertStockStatusFilter) return false;
-
-    if (alertSizeFilter === 'all') return true;
     if (alertTab === 'needing_po') return (st === 'low' || st === 'out') && poSt.status !== 'on_order';
     if (alertTab === 'on_order') return poSt.status === 'on_order';
     return st === 'low' || st === 'out';
+  };
+  if (alertSizeFilter === 'all' && !rawSizes.some(matchesTab)) return [];
+
+  return rawSizes.filter(s => {
+    const st = LowStockService.getVariantStockStatus(p, s);
+    if (alertContainerSizeFilter !== 'all' && normalizeCanSize(s) !== normalizeCanSize(alertContainerSizeFilter)) return false;
+    if (alertStockStatusFilter !== 'all' && st !== alertStockStatusFilter) return false;
+    if (alertSizeFilter === 'all') return true;
+    return matchesTab(s);
   });
 }
 

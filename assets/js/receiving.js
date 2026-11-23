@@ -687,10 +687,15 @@ function updateReceivingPOGridOnly() {
   }
 }
 
+let _rcvPOSearchTimer = null;
 function onReceivingPOSearchInput(val) {
   receivingPOSearchQuery = val || '';
   receivingPOVisibleLimit = 6;
-  updateReceivingPOGridOnly();
+  if (_rcvPOSearchTimer) clearTimeout(_rcvPOSearchTimer);
+  _rcvPOSearchTimer = setTimeout(() => {
+    _rcvPOSearchTimer = null;
+    updateReceivingPOGridOnly();
+  }, 150);
 }
 
 function onReceivingPOSortChange(val) {
@@ -902,14 +907,14 @@ function renderReceivingPOPreview() {
         <div class="rcv-batch-header">
           <div class="rcv-batch-title">
             <span>Expiration &amp; Restocking Details</span>
-            <span class="rcv-optional-tag">Optional</span>
+            <span class="rcv-optional-tag" style="background:var(--warning-bg); color:var(--warning-text); border-color:var(--warning-border);">Required</span>
           </div>
-          <span class="hint">🏷️ Batch/Lot No. is auto-generated · Leave date empty to track as “Not Specified”</span>
+          <span class="hint">🏷️ Batch/Lot No. is auto-generated · Enter the exact expiration date printed on the container</span>
         </div>
         <div class="rcv-batch-grid">
           <label>
-            <span>Expiration Date</span>
-            <input type="date" id="rcv-exp-input-${i}" value="${escapeAttr(rcvBatchDraft[i] ? rcvBatchDraft[i].expirationDate : '')}" onchange="rcvBatchDraftSet(${i}, 'expirationDate', this.value)">
+            <span>Expiration Date *</span>
+            <input type="date" id="rcv-exp-input-${i}" min="${todayISO()}" value="${escapeAttr(rcvBatchDraft[i] ? rcvBatchDraft[i].expirationDate : '')}" onchange="rcvBatchDraftSet(${i}, 'expirationDate', this.value)" required>
           </label>
           <label class="rcv-batch-notes-label">
             <span>Restocking Notes</span>
@@ -2687,19 +2692,37 @@ async function submitMovement(e) {
 
       const exEl = document.getElementById(`rcv-exp-input-${i}`);
       const ntEl = document.getElementById(`rcv-note-input-${i}`);
-      const expVal = exEl ? exEl.value : '';
-      if (valAccepted > 0 && expVal && expVal < todayISO()) {
-        const ok = await showConfirmDialog({
-          title: 'Expiration date is in the past',
-          message: `<b>${escapeHtml(items[i].productName || 'Item')}</b> is being received with an expiration date of <b>${escapeHtml(expVal)}</b>, which has already passed. It will be tracked as <b>Expired</b>. Continue?`,
-          confirmText: 'Receive anyway', danger: true
-        });
-        if (!ok) return false;
+      const expVal = exEl ? (exEl.value || '').trim() : '';
+      const noteText = ntEl ? ntEl.value.trim() : '';
+
+      if (valAccepted > 0) {
+        if (!expVal) {
+          showToast(`Expiration Date is required for "${items[i].productName || 'Item'}" before confirming accepted stock.`, 'error');
+          if (exEl) exEl.focus();
+          return false;
+        }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(expVal)) {
+          showToast(`Invalid expiration date format for "${items[i].productName || 'Item'}".`, 'error');
+          if (exEl) exEl.focus();
+          return false;
+        }
+        const [ey, em, ed] = expVal.split('-').map(Number);
+        const chkD = new Date(ey, em - 1, ed);
+        if (chkD.getFullYear() !== ey || chkD.getMonth() !== (em - 1) || chkD.getDate() !== ed) {
+          showToast(`Invalid calendar date for "${items[i].productName || 'Item'}".`, 'error');
+          if (exEl) exEl.focus();
+          return false;
+        }
+        if (expVal < todayISO()) {
+          showToast(`Expiration date (${expVal}) for "${items[i].productName || 'Item'}" cannot be earlier than the receiving date (${todayISO()}).`, 'error');
+          if (exEl) exEl.focus();
+          return false;
+        }
       }
       batchMeta[i] = {
         batchNumber: '',
         expirationDate: expVal || '',
-        notes: ntEl ? ntEl.value.trim() : ''
+        notes: noteText
       };
     }
 

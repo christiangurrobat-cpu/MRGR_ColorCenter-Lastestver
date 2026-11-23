@@ -6,6 +6,7 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 require_once __DIR__ . '/../config/database.php';
+mrgrEnableGzip();
 
 /**
  * Mask or scrub any sensitive credentials (passwords, hashes, tokens) from audit strings.
@@ -329,51 +330,56 @@ try {
     }
 
     $conn = getDBConnection();
-    $conn->query("CREATE TABLE IF NOT EXISTS audit_logs (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        created_at DATETIME NOT NULL,
-        user_id VARCHAR(64) NULL,
-        user_name VARCHAR(255) NULL,
-        user_role VARCHAR(32) NULL,
-        action VARCHAR(64) NOT NULL,
-        entity VARCHAR(64) NULL,
-        product_id VARCHAR(64) NULL,
-        details TEXT NULL,
-        ip_address VARCHAR(64) NULL,
-        INDEX idx_created (created_at),
-        INDEX idx_action (action),
-        INDEX idx_user (user_name),
-        INDEX idx_product (product_id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    $auditSchemaFlag = __DIR__ . '/.audit_schema_v1';
+    if (!file_exists($auditSchemaFlag)) {
+        $conn->query("CREATE TABLE IF NOT EXISTS audit_logs (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            created_at DATETIME NOT NULL,
+            user_id VARCHAR(64) NULL,
+            user_name VARCHAR(255) NULL,
+            user_role VARCHAR(32) NULL,
+            action VARCHAR(64) NOT NULL,
+            entity VARCHAR(64) NULL,
+            product_id VARCHAR(64) NULL,
+            details TEXT NULL,
+            ip_address VARCHAR(64) NULL,
+            INDEX idx_created (created_at),
+            INDEX idx_action (action),
+            INDEX idx_user (user_name),
+            INDEX idx_product (product_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-    // Backwards-compatible non-destructive schema migration for detailed before/after value tracking
-    $existingCols = [];
-    $colRes = $conn->query("SHOW COLUMNS FROM audit_logs");
-    if ($colRes) {
-        while ($c = $colRes->fetch_assoc()) {
-            $existingCols[$c['Field']] = true;
+        // Backwards-compatible non-destructive schema migration for detailed before/after value tracking
+        $existingCols = [];
+        $colRes = $conn->query("SHOW COLUMNS FROM audit_logs");
+        if ($colRes) {
+            while ($c = $colRes->fetch_assoc()) {
+                $existingCols[$c['Field']] = true;
+            }
         }
-    }
 
-    $migrations = [
-        'product_id'    => "ALTER TABLE audit_logs ADD COLUMN product_id VARCHAR(64) NULL AFTER entity",
-        'entity_name'   => "ALTER TABLE audit_logs ADD COLUMN entity_name VARCHAR(255) NULL AFTER product_id",
-        'field_changed' => "ALTER TABLE audit_logs ADD COLUMN field_changed VARCHAR(255) NULL AFTER entity_name",
-        'old_value'     => "ALTER TABLE audit_logs ADD COLUMN old_value TEXT NULL AFTER field_changed",
-        'new_value'     => "ALTER TABLE audit_logs ADD COLUMN new_value TEXT NULL AFTER old_value",
-        'reference_no'  => "ALTER TABLE audit_logs ADD COLUMN reference_no VARCHAR(128) NULL AFTER new_value",
-        'reason'        => "ALTER TABLE audit_logs ADD COLUMN reason TEXT NULL AFTER reference_no",
-        'meta_json'     => "ALTER TABLE audit_logs ADD COLUMN meta_json LONGTEXT NULL AFTER reason",
-        'event_key'     => "ALTER TABLE audit_logs ADD COLUMN event_key VARCHAR(128) NULL AFTER ip_address"
-    ];
-    foreach ($migrations as $colName => $alterSql) {
-        if (!isset($existingCols[$colName])) {
-            $conn->query($alterSql);
+        $migrations = [
+            'product_id'    => "ALTER TABLE audit_logs ADD COLUMN product_id VARCHAR(64) NULL AFTER entity",
+            'entity_name'   => "ALTER TABLE audit_logs ADD COLUMN entity_name VARCHAR(255) NULL AFTER product_id",
+            'field_changed' => "ALTER TABLE audit_logs ADD COLUMN field_changed VARCHAR(255) NULL AFTER entity_name",
+            'old_value'     => "ALTER TABLE audit_logs ADD COLUMN old_value TEXT NULL AFTER field_changed",
+            'new_value'     => "ALTER TABLE audit_logs ADD COLUMN new_value TEXT NULL AFTER old_value",
+            'reference_no'  => "ALTER TABLE audit_logs ADD COLUMN reference_no VARCHAR(128) NULL AFTER new_value",
+            'reason'        => "ALTER TABLE audit_logs ADD COLUMN reason TEXT NULL AFTER reference_no",
+            'meta_json'     => "ALTER TABLE audit_logs ADD COLUMN meta_json LONGTEXT NULL AFTER reason",
+            'event_key'     => "ALTER TABLE audit_logs ADD COLUMN event_key VARCHAR(128) NULL AFTER ip_address"
+        ];
+        foreach ($migrations as $colName => $alterSql) {
+            if (!isset($existingCols[$colName])) {
+                $conn->query($alterSql);
+            }
         }
+        @file_put_contents($auditSchemaFlag, date('Y-m-d H:i:s'));
     }
 
     if ($method === 'POST') {
         $sessionUserId = (string)($_SESSION['user_id'] ?? '');
+        session_write_close();
         if ($sessionUserId === '') {
             http_response_code(401);
             echo json_encode(['success' => false, 'error' => 'Authentication required.']);
@@ -517,6 +523,7 @@ try {
 
     // RBAC: Verify user role for accessing the Audit Log (Administrator Only)
     $reqUserId = trim((string)($_SESSION['user_id'] ?? ''));
+    session_write_close();
     $isAdminAuthorized = false;
     if ($reqUserId !== '') {
         $uChk = $conn->prepare("SELECT role, status FROM users WHERE id = ? LIMIT 1");
@@ -669,17 +676,19 @@ try {
 
     $whereSql = $where ? ' WHERE ' . implode(' AND ', $where) : '';
 
-    // 1. Calculate total matching records and aggregate summary stats on the server
+    // 1. Calculate total matching records and aggregate summary stats on the server (sargable date range)
     $todayDate = date('Y-m-d');
+    $todayStart = $todayDate . ' 00:00:00';
+    $tomorrowStart = date('Y-m-d', strtotime($todayDate . ' +1 day')) . ' 00:00:00';
     $countSql = "SELECT 
         COUNT(*) AS total,
-        SUM(CASE WHEN DATE(created_at) = ? THEN 1 ELSE 0 END) AS today_in_period,
+        SUM(CASE WHEN created_at >= ? AND created_at < ? THEN 1 ELSE 0 END) AS today_in_period,
         COUNT(DISTINCT CASE WHEN user_name IS NOT NULL AND user_name != '' THEN user_name ELSE NULL END) AS active_users,
         SUM(CASE WHEN action IN ('SALE', 'SALE_COMPLETE') THEN 1 ELSE 0 END) AS sales_count
         FROM audit_logs" . $whereSql;
     $countSt = $conn->prepare($countSql);
-    $countTypes = 's' . $types;
-    $countParams = array_merge([$todayDate], $params);
+    $countTypes = 'ss' . $types;
+    $countParams = array_merge([$todayStart, $tomorrowStart], $params);
     $countSt->bind_param($countTypes, ...$countParams);
     $countSt->execute();
     $statsRow = $countSt->get_result()->fetch_assoc() ?: [];
@@ -688,24 +697,31 @@ try {
     $total = (int)($statsRow['total'] ?? 0);
     $todayCount = (int)($statsRow['today_in_period'] ?? 0);
 
-    // If the date range includes today (or no date range), today_in_period is exact.
-    // Also compute today's count across non-date filters so "Entries Today" is always accurate for today.
-    $todayWhere = $nonDateWhere;
-    $todayWhere[] = 'DATE(created_at) = ?';
-    $todaySql = 'SELECT COUNT(*) AS cnt FROM audit_logs WHERE ' . implode(' AND ', $todayWhere);
-    $todaySt = $conn->prepare($todaySql);
-    $todayBindTypes = $nonDateTypes . 's';
-    $todayBindParams = array_merge($nonDateParams, [$todayDate]);
-    $todaySt->bind_param($todayBindTypes, ...$todayBindParams);
-    $todaySt->execute();
-    $todayGlobalRow = $todaySt->get_result()->fetch_assoc() ?: [];
-    $todaySt->close();
-    $todayGlobalCount = (int)($todayGlobalRow['cnt'] ?? 0);
+    // If no date range filter is applied, today_in_period already equals todayGlobalCount (avoid redundant query)
+    if (!$from && !$to) {
+        $todayGlobalCount = $todayCount;
+    } else {
+        $todayWhere = $nonDateWhere;
+        $todayWhere[] = 'created_at >= ? AND created_at < ?';
+        $todaySql = 'SELECT COUNT(*) AS cnt FROM audit_logs WHERE ' . implode(' AND ', $todayWhere);
+        $todaySt = $conn->prepare($todaySql);
+        $todayBindTypes = $nonDateTypes . 'ss';
+        $todayBindParams = array_merge($nonDateParams, [$todayStart, $tomorrowStart]);
+        $todaySt->bind_param($todayBindTypes, ...$todayBindParams);
+        $todaySt->execute();
+        $todayGlobalRow = $todaySt->get_result()->fetch_assoc() ?: [];
+        $todaySt->close();
+        $todayGlobalCount = (int)($todayGlobalRow['cnt'] ?? 0);
+    }
 
-    // Total records in the entire audit_logs table (unfiltered)
-    $dbTotalRes = $conn->query("SELECT COUNT(*) AS cnt FROM audit_logs");
-    $dbTotalRow = $dbTotalRes ? ($dbTotalRes->fetch_assoc() ?: []) : [];
-    $dbTotal = (int)($dbTotalRow['cnt'] ?? 0);
+    // Total records in the entire audit_logs table (unfiltered) — reuse $total when no filters are active
+    if (empty($where)) {
+        $dbTotal = $total;
+    } else {
+        $dbTotalRes = $conn->query("SELECT COUNT(*) AS cnt FROM audit_logs");
+        $dbTotalRow = $dbTotalRes ? ($dbTotalRes->fetch_assoc() ?: []) : [];
+        $dbTotal = (int)($dbTotalRow['cnt'] ?? 0);
+    }
 
     // 2. Apply server-side LIMIT and OFFSET pagination
     $isExport = !empty($_GET['export']);

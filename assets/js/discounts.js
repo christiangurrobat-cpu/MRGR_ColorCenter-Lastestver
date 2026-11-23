@@ -114,7 +114,8 @@ function discBaseList(ignoreTabAndStatus) {
   const q = discSearchQuery.trim().toLowerCase();
   return all.filter(b => {
     const isUnavailable = b.depleted || b.expiryStatus === 'expired' || !b.expirationDate;
-    if (!discShowUnavailable && isUnavailable) return false;
+    const explicitUnavailFilter = !ignoreTabAndStatus && ['expired', 'depleted', 'ineligible'].includes(discStatusFilter);
+    if (!discShowUnavailable && !explicitUnavailFilter && isUnavailable) return false;
     if (q) {
       const hay = `${b.productName} ${b.brand} ${b.color} ${b.batchNumber} ${b.supplierName}`.toLowerCase();
       if (!hay.includes(q)) return false;
@@ -696,6 +697,7 @@ async function discSaveSchedule() {
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
   try {
     await discApi('save_discount_settings', { body: { enabled, tiers, reason } });
+    if (typeof posBatchStatusLoadedAt !== 'undefined') posBatchStatusLoadedAt = 0;
     closeModal();
     showToast('✓ Near-expiry discount schedule saved.', 'ok');
     await discLoad(true);

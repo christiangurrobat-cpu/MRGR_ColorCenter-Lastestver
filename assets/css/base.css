@@ -964,7 +964,7 @@ textarea,
   position: relative;
 }
 
-/* Dark Mode Only: Subtle neon glow ring around the outer perimeter border */
+/* Dark Mode Only: Subtle static neon glow ring around the outer perimeter border (no continuous 60fps repaint) */
 html[data-theme="dark"] .shell::before,
 html.dark-mode .shell::before,
 body.dark-mode .shell::before {
@@ -972,7 +972,7 @@ body.dark-mode .shell::before {
   position: fixed;
   inset: 0;
   padding: var(--rgb-perimeter-glow-width, 1px);
-  background: conic-gradient(from var(--rgb-perimeter-angle, 0deg) at 50% 50%,
+  background: conic-gradient(from 45deg at 50% 50%,
       #ff0040 0deg,
       #ff7a00 45deg,
       #ffe600 90deg,
@@ -986,11 +986,9 @@ body.dark-mode .shell::before {
   -webkit-mask-composite: xor;
   mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   mask-composite: exclude;
-  filter: blur(1px);
   opacity: var(--rgb-perimeter-glow-opacity, 0.18);
   pointer-events: none;
   z-index: 9994;
-  animation: rgbPerimeterRotate var(--rgb-perimeter-speed, 4s) linear infinite !important;
 }
 
 /* Dark Mode Only: Crisp, thin, continuous 4-sided outer perimeter RGB border */
@@ -1002,7 +1000,7 @@ body.dark-mode .shell::after {
   inset: 0;
   padding: var(--rgb-perimeter-width, 0.65px);
   opacity: 0.88;
-  background: conic-gradient(from var(--rgb-perimeter-angle, 0deg) at 50% 50%,
+  background: conic-gradient(from 45deg at 50% 50%,
       #ff0040 0deg,
       #ff7a00 45deg,
       #ffe600 90deg,
@@ -1018,8 +1016,6 @@ body.dark-mode .shell::after {
   mask-composite: exclude;
   pointer-events: none;
   z-index: 9995;
-  will-change: filter;
-  animation: rgbPerimeterRotate var(--rgb-perimeter-speed, 4s) linear infinite !important;
 }
 
 /* Light Mode Guarantee: completely disable outer perimeter ARGB border & glow */

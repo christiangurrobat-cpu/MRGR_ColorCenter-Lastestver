@@ -223,7 +223,7 @@ function inventoryPage() {
   <div class="inv-filter-toolbar">
     <div class="inv-search-wrap">
       <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-      <input id="inv-search" class="inv-input" type="text" placeholder="Search by name, brand, supplier, type, color…" value="${escapeHtml(invSearchQuery)}" oninput="renderInventoryTable()" onchange="renderInventoryTable()">
+      <input id="inv-search" class="inv-input" type="text" placeholder="Search by name, brand, supplier, type, color…" value="${escapeHtml(invSearchQuery)}" oninput="onInventorySearchInput(this.value)" onchange="renderInventoryTable()">
       <button type="button" id="inv-search-clear-btn" class="inv-search-clear" onclick="clearInventorySearch()" title="Clear search" style="display:${invSearchQuery ? 'inline-flex' : 'none'};">&times;</button>
     </div>
     <div class="inv-filter-controls">
@@ -290,6 +290,18 @@ function inventoryPage() {
   ${inventoryMovementsSectionHtml()}
 </div>
   </div>`;
+}
+
+let _invSearchTimer = null;
+function onInventorySearchInput(val) {
+  invSearchQuery = val || '';
+  const clr = document.getElementById('inv-search-clear-btn');
+  if (clr) clr.style.display = invSearchQuery ? 'inline-flex' : 'none';
+  if (_invSearchTimer) clearTimeout(_invSearchTimer);
+  _invSearchTimer = setTimeout(() => {
+    _invSearchTimer = null;
+    renderInventoryTable();
+  }, 150);
 }
 
 function renderInventoryTable(keepPage = false) {

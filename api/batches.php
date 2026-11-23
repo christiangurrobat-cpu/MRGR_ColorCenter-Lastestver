@@ -18,6 +18,7 @@ header('Cache-Control: no-store');
 if (session_status() === PHP_SESSION_NONE) session_start();
 
 require_once __DIR__ . '/../config/database.php';
+mrgrEnableGzip();
 require_once __DIR__ . '/batch_lib.php';
 
 function bx_fail(int $code, string $msg): void {
@@ -35,6 +36,7 @@ try {
 
 // ---- Authentication / RBAC (admin + staff may view & edit expiration date) ------------------
 $uid = (string)($_SESSION['user_id'] ?? '');
+session_write_close();
 if ($uid === '') bx_fail(401, 'Authentication required.');
 $st = $conn->prepare("SELECT id, name, role, status FROM users WHERE id = ? LIMIT 1");
 $st->bind_param('s', $uid);
@@ -313,7 +315,7 @@ try {
                 $supplierOptions[] = ['id' => $sr['id'], 'name' => $sr['name']];
             }
         }
-        $canEditAny = in_array($role, ['admin', 'staff'], true);
+        $canEditAny = $isAdmin;
         echo json_encode([
             'success' => true,
             'today' => date('Y-m-d'),
@@ -410,11 +412,38 @@ try {
         }
         $st->close();
 
-        $canEditAny = in_array($role, ['admin', 'staff'], true);
+        // Append-only Expiration Date Correction History from audit_logs (never overwritten)
+        $corrections = [];
+        $cSt = $conn->prepare("SELECT id, created_at, user_name, user_role, old_value, new_value, reason, details
+            FROM audit_logs
+            WHERE action = 'BATCH_EDIT' AND (reference_no = ? OR entity_name = ?)
+            ORDER BY created_at DESC, id DESC LIMIT 100");
+        if ($cSt) {
+            $bNum = (string)$batch['batchNumber'];
+            $cSt->bind_param('ss', $bNum, $bNum);
+            $cSt->execute();
+            $cRs = $cSt->get_result();
+            while ($cr = $cRs->fetch_assoc()) {
+                $corrections[] = [
+                    'id' => (int)$cr['id'],
+                    'date' => $cr['created_at'],
+                    'adminName' => $cr['user_name'],
+                    'adminRole' => $cr['user_role'],
+                    'previousDate' => $cr['old_value'] ?: 'Not specified',
+                    'correctedDate' => $cr['new_value'] ?: 'Not specified',
+                    'reason' => $cr['reason'] ?: '',
+                    'details' => $cr['details'] ?: '',
+                ];
+            }
+            $cSt->close();
+        }
+
+        $canEditAny = $isAdmin;
         echo json_encode([
             'success' => true, 'batch' => $batch, 'product' => $product,
             'inventory' => ['sealedQuantity' => (int)$inv['sealed_quantity'], 'batchedQuantity' => (int)$inv['batched'], 'openBatches' => (int)$inv['open_batches']],
             'ledger' => $ledger, 'fifoDeductions' => $fifo, 'fifoTotal' => $totalDeducted, 'stockMovements' => $mv,
+            'correctionHistory' => $corrections,
             'thresholds' => $thresholds,
             'permissions' => ['canEdit' => $canEditAny, 'canEditFull' => false, 'canEditExpiryOnly' => $canEditAny, 'canAdjust' => $isAdmin, 'role' => $role],
         ]);
@@ -422,8 +451,8 @@ try {
     }
 
     if ($method === 'POST' && $action === 'update_batch') {
-        if (!in_array($role, ['admin', 'staff'], true)) {
-            bx_fail(403, 'Access denied: you do not have permission to edit expiration dates.');
+        if (!$isAdmin) {
+            bx_fail(403, 'Access denied: Only Administrators may correct confirmed expiration dates.');
         }
         $rawBody = file_get_contents('php://input');
         $d = json_decode($rawBody, true);

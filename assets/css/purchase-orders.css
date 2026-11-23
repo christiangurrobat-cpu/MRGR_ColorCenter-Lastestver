@@ -392,8 +392,8 @@
   background: #C1443D; border-color: #C1443D; color: #fff;
 }
 @keyframes pulse-teal {
-  0%, 100% { box-shadow: 0 0 0 4px rgba(31,111,107,.12); }
-  50%       { box-shadow: 0 0 0 7px rgba(31,111,107,.06); }
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%       { transform: scale(1.08); opacity: 0.88; }
 }
 .po-timeline-label { font-size: 11px; font-weight: 600; margin-top: 6px; color: var(--ink-soft); }
 .po-timeline-step.done .po-timeline-label    { color: var(--teal-dark); }

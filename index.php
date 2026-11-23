@@ -36,6 +36,9 @@ function serveAllowedStaticOrPhp($baseDir, $relPath, $mimes) {
     if (isset($mimes[$ext])) {
         header('Content-Type: ' . $mimes[$ext]);
     }
+    if (!empty($_GET['v']) || in_array($ext, ['woff', 'woff2', 'ttf', 'png', 'jpg', 'jpeg', 'svg', 'ico'], true)) {
+        header('Cache-Control: public, max-age=604800');
+    }
     readfile($targetReal);
     exit;
 }

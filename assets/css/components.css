@@ -717,6 +717,11 @@ tbody tr:hover {
   background: var(--surface-2);
 }
 
+#printable-sr-receipt tbody tr:hover {
+  background: #F7F5F2 !important;
+  color: #26211C !important;
+}
+
 .table-scroll {
   overflow-x: auto;
 }

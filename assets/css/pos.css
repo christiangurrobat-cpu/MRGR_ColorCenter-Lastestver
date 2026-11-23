@@ -2176,17 +2176,14 @@
 @keyframes cmAgitate {
   0% {
     transform: scale(1);
-    filter: contrast(1);
   }
 
   50% {
-    transform: scale(1.015);
-    filter: contrast(1.08) brightness(1.03);
+    transform: scale(1.012);
   }
 
   100% {
     transform: scale(1);
-    filter: contrast(1);
   }
 }
 
@@ -2263,8 +2260,7 @@
   position: absolute;
   top: 8px;
   right: 10px;
-  background: rgba(0, 0, 0, 0.68);
-  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.78);
   color: #fff;
   font-size: 10px;
   font-weight: 700;
@@ -2302,9 +2298,7 @@
   position: absolute;
   bottom: 8px;
   left: 8px;
-  background: rgba(18, 14, 11, 0.62);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: rgba(18, 14, 11, 0.82);
   color: #fff;
   padding: 4px 10px;
   border-radius: 16px;
@@ -2471,7 +2465,7 @@
 /* Can Size Selection Grid */
 .cm-can-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
   margin-top: 6px;
 }

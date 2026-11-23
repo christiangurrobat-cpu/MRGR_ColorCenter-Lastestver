@@ -17,6 +17,7 @@ header('Cache-Control: no-store');
 if (session_status() === PHP_SESSION_NONE) session_start();
 
 require_once __DIR__ . '/../config/database.php';
+mrgrEnableGzip();
 require_once __DIR__ . '/batch_lib.php';
 require_once __DIR__ . '/supplier_returns_lib.php';
 
@@ -36,6 +37,7 @@ try {
 
 // ---- Authentication & RBAC (Admin & Inventory Staff only) ----
 $uid = (string)($_SESSION['user_id'] ?? '');
+session_write_close();
 if ($uid === '') sr_fail(401, 'Authentication required.');
 $st = $conn->prepare("SELECT id, name, role, status FROM users WHERE id = ? LIMIT 1");
 $st->bind_param('s', $uid);
@@ -1050,6 +1052,9 @@ try {
         if ($newResolution !== '' && !in_array($newResolution, SR_RESOLUTION_TYPES, true)) {
             sr_fail(400, 'Invalid resolution type selected.');
         }
+        if ($creditAmount !== null && $creditAmount <= 0) {
+            sr_fail(400, 'Credit or refund amount must be greater than zero.');
+        }
 
         $now = date('Y-m-d H:i:s');
         $conn->begin_transaction();
@@ -1550,9 +1555,12 @@ try {
                 );
             } else {
                 $finalStatus = $newStatus !== '' ? $newStatus : $oldStatus;
-                if ($finalStatus === 'Cancelled' && !$isAdmin) {
+                if (in_array($finalStatus, ['Cancelled', 'Supplier Declined'], true) && !$isAdmin) {
                     $conn->rollback();
-                    sr_fail(403, 'Access denied: Only Administrators may cancel replacement requests.');
+                    sr_fail(403, "Access denied: Only Administrators may set replacement status to '{$finalStatus}'.");
+                }
+                if ($finalStatus === 'Confirmed by Supplier – Awaiting Delivery' && (int)$req['supplier_confirmed'] !== 1) {
+                    throw new Exception('Use Confirm Supplier Replacement to confirm the request and issue a Confirmation Receipt.');
                 }
                 if ($finalStatus === 'Completed' && (int)$req['received_qty'] < (int)$req['requested_qty']) {
                     throw new Exception('Cannot mark Completed while replacement units remain undelivered. Receive replacement delivery or record a supplier credit/refund.');
@@ -1665,7 +1673,7 @@ try {
             if (in_array($req['status'], SR_REPLACEMENT_RESOLVED_STATUSES, true)) {
                 throw new Exception("Replacement request {$req['request_ref']} is already {$req['status']}.");
             }
-            if ((int)$req['supplier_confirmed'] !== 1 && $req['status'] === 'Awaiting Supplier Confirmation') {
+            if ((int)$req['supplier_confirmed'] !== 1) {
                 throw new Exception("Replacement request {$req['request_ref']} must be confirmed by the supplier before receiving a replacement delivery.");
             }
 
@@ -1844,6 +1852,8 @@ try {
             $delSnapshot = [
                 'businessName' => 'MRGR COLOR CENTER',
                 'businessSubtitle' => 'Paint & Hardware Supply · Sales & Inventory',
+                'businessAddress' => 'Blk 13 Blk 167 North Fairview Commonwealth Avenue Greater Lagro 1159 Quezon City NCR, Second District Philippines',
+                'businessContact' => '09776344591',
                 'receiptTitle' => 'SUPPLIER REPLACEMENT RECEIVING RECEIPT',
                 'receiptNumber' => $delReceiptNo,
                 'receiptType' => 'delivery',
@@ -1893,7 +1903,7 @@ try {
                 $reqRef,
                 'Replacement Delivery Inspected',
                 "{$oldStatus} ({$req['received_qty']}/{$req['requested_qty']})",
-                "{$newStatus} ({$newRcvd}/{$req['requested_qty']})",
+                "{$newStatus} ({$newRcvd}/{$effectiveRequested})",
                 $reqRef,
                 $damagedQty > 0 ? $damageReason : ($inspectionNotes !== '' ? $inspectionNotes : "Replacement Delivery for {$reqRef}")
             );
@@ -1972,6 +1982,8 @@ try {
             $snapshot = [
                 'businessName' => 'MRGR COLOR CENTER',
                 'businessSubtitle' => 'Paint & Hardware Supply · Sales & Inventory',
+                'businessAddress' => 'Blk 13 Blk 167 North Fairview Commonwealth Avenue Greater Lagro 1159 Quezon City NCR, Second District Philippines',
+                'businessContact' => '09776344591',
                 'receiptTitle' => 'SUPPLIER REPLACEMENT CONFIRMATION RECEIPT',
                 'receiptNumber' => $receiptNo,
                 'receiptType' => 'confirmation',
@@ -2069,33 +2081,43 @@ try {
         $receiptId = trim((string)($body['receiptId'] ?? ''));
         if ($receiptId === '') sr_fail(400, 'Receipt ID is required.');
         $now = date('Y-m-d H:i:s');
-        $st = $conn->prepare("SELECT * FROM supplier_replacement_receipts WHERE id = ? LIMIT 1");
-        $st->bind_param('s', $receiptId);
-        $st->execute();
-        $rc = $st->get_result()->fetch_assoc();
-        $st->close();
-        if (!$rc) sr_fail(404, 'Confirmation receipt not found.');
+        $conn->begin_transaction();
+        try {
+            $st = $conn->prepare("SELECT * FROM supplier_replacement_receipts WHERE id = ? LIMIT 1 FOR UPDATE");
+            $st->bind_param('s', $receiptId);
+            $st->execute();
+            $rc = $st->get_result()->fetch_assoc();
+            $st->close();
+            if (!$rc) {
+                $conn->rollback();
+                sr_fail(404, 'Supplier replacement receipt not found.');
+            }
 
-        $newCount = (int)$rc['reprint_count'] + 1;
-        $up = $conn->prepare("UPDATE supplier_replacement_receipts SET reprint_count = ?, last_reprinted_at = ? WHERE id = ?");
-        $up->bind_param('iss', $newCount, $now, $receiptId);
-        $up->execute();
-        $up->close();
+            $newCount = (int)$rc['reprint_count'] + 1;
+            $up = $conn->prepare("UPDATE supplier_replacement_receipts SET reprint_count = ?, last_reprinted_at = ? WHERE id = ?");
+            $up->bind_param('iss', $newCount, $now, $receiptId);
+            $up->execute();
+            $up->close();
 
-        srWriteAudit(
-            $conn,
-            $actor,
-            'REPLACEMENT_RECEIPT_REPRINT',
-            'Purchase Order',
-            "Reprinted Supplier Replacement Receipt {$rc['receipt_number']} (Request: {$rc['request_ref']}, PO: {$rc['po_number']}, Reprint #{$newCount}).",
-            null,
-            (string)$rc['receipt_number'],
-            'Receipt Reprint',
-            "Reprint #" . ($newCount - 1),
-            "Reprint #{$newCount}",
-            (string)$rc['receipt_number'],
-            "Reprinted by {$actorName}"
-        );
+            srWriteAudit(
+                $conn,
+                $actor,
+                'REPLACEMENT_RECEIPT_REPRINT',
+                'Purchase Order',
+                "Reprinted Supplier Replacement Receipt {$rc['receipt_number']} (Request: {$rc['request_ref']}, PO: {$rc['po_number']}, Reprint #{$newCount}).",
+                null,
+                (string)$rc['receipt_number'],
+                'Receipt Reprint',
+                "Reprint #" . ($newCount - 1),
+                "Reprint #{$newCount}",
+                (string)$rc['receipt_number'],
+                "Reprinted by {$actorName}"
+            );
+            $conn->commit();
+        } catch (Throwable $e) {
+            $conn->rollback();
+            sr_fail(500, 'Failed to log receipt reprint: ' . $e->getMessage());
+        }
 
         echo json_encode(['success' => true, 'reprintCount' => $newCount, 'receiptNumber' => $rc['receipt_number']] + sr_load_all($conn));
         exit;
