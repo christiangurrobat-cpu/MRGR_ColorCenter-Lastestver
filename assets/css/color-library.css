@@ -574,38 +574,6 @@
   color: var(--ink-soft, #78716C);
 }
 
-/* Saved Formulas Sub-block */
-.cl-formula-subblock {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--line, #E6DFD3);
-}
-
-.cl-formula-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 12px;
-  margin-top: 10px;
-}
-
-.cl-formula-card {
-  border: 1px solid var(--line, #E6DFD3);
-  border-radius: 10px;
-  padding: 10px 12px;
-  background: var(--surface-2);
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-}
-
-.cl-formula-swatch {
-  width: 38px;
-  height: 38px;
-  border-radius: 8px;
-  border: 1px solid rgba(0, 0, 0, 0.14);
-  flex-shrink: 0;
-}
-
 /* Add / Edit Modal Live Preview */
 .cl-preview-box {
   display: flex;

@@ -1035,6 +1035,12 @@ if ($action === 'color_library_list') {
     exit;
 }
 
+if (in_array($action, ['color_library_save', 'color_library_delete', 'color_formula_save', 'color_formula_delete'], true) && ($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+    http_response_code(405);
+    echo json_encode(['success' => false, 'error' => 'Method not allowed. Use POST.']);
+    exit;
+}
+
 if ($action === 'color_library_save' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     $payload = json_decode(file_get_contents('php://input'), true) ?: [];
     $res = colorLibrarySaveColor($conn, $payload, $actingUser);
@@ -1752,7 +1758,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     $pColorCls = !empty($p['colorClassification']) ? (string)$p['colorClassification'] : (!empty($p['color_classification']) ? (string)$p['color_classification'] : '');
                     $pColorHex = !empty($p['colorHex']) ? (string)$p['colorHex'] : (!empty($p['color_hex']) ? (string)$p['color_hex'] : '');
                     $pIsPigment = (!empty($p['isColorPigment']) || !empty($p['is_color_pigment']) || colorSyncIsPigmentCategory($pCategory) || colorSyncIsPigmentCategory($pType)) ? 1 : 0;
-                    $pIsBasePaint = (!empty($p['isBasePaint']) || !empty($p['is_base_paint'])) ? 1 : 0;
+                    $pIsBasePaint = $existingP ? (!empty($existingP['is_base_paint']) ? 1 : 0) : 0;
                     $pPaintSystem = !empty($p['paintSystem']) ? (string)$p['paintSystem'] : (!empty($p['paint_system']) ? (string)$p['paint_system'] : ($existingP['paint_system'] ?? 'unverified'));
                     $pIsSpecPig = (!empty($p['isSpecialtyPigment']) || !empty($p['is_specialty_pigment']) || $pColorCls === 'Specialty Colors') ? 1 : 0;
                     $pAdminNote = array_key_exists('adminReviewNote', $p) ? ($p['adminReviewNote'] !== '' ? $p['adminReviewNote'] : null) : (array_key_exists('admin_review_note', $p) ? ($p['admin_review_note'] !== '' ? $p['admin_review_note'] : null) : ($existingP['admin_review_note'] ?? null));
@@ -1874,8 +1880,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 if (colorSyncIsNonColorCategory($category) || colorSyncIsNonColorCategory($type)) {
                     $isColorPigment = 0;
                 }
-                // Pigment / Colorant products must never be treated as Base Paint
-                $isBasePaint = ($actingRole === 'admin' && !$isColorPigment && (!empty($p['isBasePaint']) || !empty($p['is_base_paint']))) ? 1 : 0;
+                // Preserve existing Base Paint designation in DB (cannot be manually toggled or accidentally reset via product edits)
+                $isBasePaint = $existingP ? (!empty($existingP['is_base_paint']) ? 1 : 0) : 0;
                 $allowedPaintSystems = ['unverified', 'water_based', 'solvent_based', 'automotive', 'specialty', 'universal_colorant'];
                 $rawPaintSys = !empty($p['paintSystem']) ? (string)$p['paintSystem'] : (!empty($p['paint_system']) ? (string)$p['paint_system'] : ($existingP['paint_system'] ?? 'unverified'));
                 $paintSystem = in_array($rawPaintSys, $allowedPaintSystems, true) ? $rawPaintSys : 'unverified';

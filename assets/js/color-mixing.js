@@ -804,7 +804,8 @@ function evaluateColorMixIngredientStatus(c, idx, selectedCat = null, totalLiter
 
   // 5. Enforce Base Paint category & single-base rules -> ADMIN REVIEW
   if (isBase) {
-    if (!isPigmentCatMode && pCatLower !== catLower) {
+    // Allow explicitly designated Base Paints in Pigment / Colorant (e.g. Pure White Pigment) without requiring category rename
+    if (!isPigmentCatMode && !isPigment && pCatLower !== catLower) {
       return {
         status: 'ADMIN REVIEW',
         badgeBg: 'var(--warning-bg)', badgeColor: 'var(--warning-text)', badgeBorder: 'var(--warning-border)',
@@ -861,7 +862,7 @@ function onColorMixBaseTypeChange(newType) {
   if (!s.isCustomizingFormula && !s.isCustomizedFormula && Number(s.selectedPresetIndex) >= 0 && COLOR_RECIPE_PRESETS[s.selectedPresetIndex]) {
     const p = COLOR_RECIPE_PRESETS[s.selectedPresetIndex];
     if (!p.isCustom && Array.isArray(p.recipe) && p.recipe.length >= 2) {
-      const check = evaluateRecipePresetAvailability(p, s.totalLiters || 1);
+      const check = evaluateRecipePresetAvailability(p, s.totalLiters || 1, normalized);
       if (check && Array.isArray(check.resolvedItems) && check.resolvedItems.length >= 2) {
         s.components = check.resolvedItems.map(({ item, product, reason, baseMissingForCategory }, idx) => ({
           id: uid('cmc'),
@@ -1014,6 +1015,7 @@ function initColorMixStudioState() {
       colorMixStudioState.originalPresetIndex = pickIdx;
       colorMixStudioState.originalCatalogName = cleanPresetColorName(p.name);
       colorMixStudioState.colorName = cleanPresetColorName(p.name);
+      colorMixStudioState.baseType = getPresetFormulaCategory(p);
     }
   }
 
@@ -1022,7 +1024,6 @@ function initColorMixStudioState() {
 
 function isDesignatedBasePaintProduct(p) {
   if (!p) return false;
-  if (isPigmentMixingProduct(p)) return false;
   return Boolean(p.isBasePaint || p.is_base_paint);
 }
 
@@ -1603,9 +1604,27 @@ function sanitizeMismatchedCustomPreset(preset) {
   return preset;
 }
 
+function syncCustomPresetsLocalCacheFromDb() {
+  try {
+    if (typeof db !== 'undefined' && db && Array.isArray(db.colorFormulas)) {
+      if (db.colorFormulas.length === 0) {
+        localStorage.removeItem(CUSTOM_COLOR_PRESETS_KEY);
+      } else {
+        localStorage.setItem(CUSTOM_COLOR_PRESETS_KEY, JSON.stringify(db.colorFormulas));
+      }
+    }
+  } catch (e) { }
+}
+
 function loadSavedCustomColorPresets() {
   try {
-    if (typeof db !== 'undefined' && db && Array.isArray(db.colorFormulas) && db.colorFormulas.length > 0) {
+    // MariaDB (db.colorFormulas) is the Single Source of Truth whenever loaded — even when empty ([]).
+    // Never fall back to stale localStorage entries when db.colorFormulas is an empty array.
+    if (typeof db !== 'undefined' && db && Array.isArray(db.colorFormulas)) {
+      if (db.colorFormulas.length === 0) {
+        try { localStorage.removeItem(CUSTOM_COLOR_PRESETS_KEY); } catch (e) { }
+        return [];
+      }
       return db.colorFormulas.map(f => {
         const catMatch = String(f.sheen || '').match(/^cat:(.+)$/i);
         return sanitizeMismatchedCustomPreset({
@@ -1615,7 +1634,7 @@ function loadSavedCustomColorPresets() {
           desc: `${f.detectedName || f.name} (${(f.pigmentFormula || []).map(c => `${c.pct}% ${c.name}`).join(' + ')})`,
           hex: f.hexReference || '#1F6F6B',
           family: catMatch ? catMatch[1].trim() : (f.family || ''),
-          baseType: f.baseType || 'Automotive Paint',
+          baseType: f.baseType || 'Pigment / Colorant',
           sheen: catMatch ? '' : (f.sheen || ''),
           notes: f.notes || '',
           isCustom: true,
@@ -1623,23 +1642,7 @@ function loadSavedCustomColorPresets() {
         });
       });
     }
-    const raw = localStorage.getItem(CUSTOM_COLOR_PRESETS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    let changed = false;
-    const cleaned = parsed.map(item => {
-      const s = sanitizeMismatchedCustomPreset(item);
-      if (s && s._sanitized) {
-        changed = true;
-        delete s._sanitized;
-      }
-      return s;
-    });
-    if (changed) {
-      try { localStorage.setItem(CUSTOM_COLOR_PRESETS_KEY, JSON.stringify(cleaned)); } catch (e) { }
-    }
-    return cleaned;
+    return [];
   } catch (e) {
     return [];
   }
@@ -1668,25 +1671,35 @@ function enrichRecipeWithDictionary(recipeObj) {
 
 function getColorRecipePresets() {
   const custom = loadSavedCustomColorPresets();
-  const seen = new Set();
+  const seenBuiltin = new Set();
+  const seenCustomIds = new Set();
   const list = [];
-  // 1. Add all saved recipes (ready-made + custom formulas), enriched with PAINT_COLOR_DICTIONARY
-  [...DEFAULT_COLOR_RECIPE_PRESETS, ...custom].forEach(raw => {
+  // 1. Add all built-in ready-made recipes, enriched with PAINT_COLOR_DICTIONARY
+  DEFAULT_COLOR_RECIPE_PRESETS.forEach(raw => {
     const enriched = enrichRecipeWithDictionary(raw);
     if (!enriched) return;
     const key = enriched.cleanName.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
+    if (seenBuiltin.has(key)) return;
+    seenBuiltin.add(key);
+    list.push(enriched);
+  });
+  // 2. Add all saved custom formulas keyed strictly by their unique ID (allows same display name with different ingredients)
+  custom.forEach(raw => {
+    const enriched = enrichRecipeWithDictionary(raw);
+    if (!enriched) return;
+    const cidKey = enriched.id ? `id:${enriched.id}` : `name:${enriched.cleanName.toLowerCase()}`;
+    if (seenCustomIds.has(cidKey)) return;
+    seenCustomIds.add(cidKey);
     list.push(enriched);
   });
 
-  // 2. Include all remaining mixed colors from PAINT_COLOR_DICTIONARY (marked hasFormula: false, no invented ratios)
+  // 3. Include all remaining mixed colors from PAINT_COLOR_DICTIONARY (marked hasFormula: false, no invented ratios)
   if (Array.isArray(PAINT_COLOR_DICTIONARY)) {
     PAINT_COLOR_DICTIONARY.forEach(d => {
       if (!d || !d.name) return;
       const key = d.name.trim().toLowerCase();
-      if (seen.has(key)) return;
-      seen.add(key);
+      if (seenBuiltin.has(key)) return;
+      seenBuiltin.add(key);
       list.push({
         name: d.name,
         cleanName: d.name,
@@ -1714,9 +1727,26 @@ function syncActiveColorRecipePresets() {
 
 syncActiveColorRecipePresets();
 
-function saveMixedColorToPresets({ colorName, detectedName, hex, baseType, components, colorId = null, sheen = '', notes = '' }) {
-  if (!colorName || !Array.isArray(components) || !components.length) return;
+let _cmFormulaSaveInFlight = false;
+function buildClientFormulaSignature(name, baseType, pigmentFormula) {
+  const normName = String(name || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const normBase = String(baseType || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const parts = (Array.isArray(pigmentFormula) ? pigmentFormula : []).map(c => {
+    const pid = String(c.productId || c.product_id || '').trim().toLowerCase();
+    const cid = String(c.colorId || c.color_id || '').trim().toLowerCase();
+    const hint = String(c.colorHint || c.colorName || c.name || '').trim().toLowerCase();
+    const ident = pid ? `p:${pid}` : (cid ? `c:${cid}` : `h:${hint}`);
+    const pct = (Number(c.percentage ?? c.pct) || 0).toFixed(2);
+    return `${ident}=${pct}`;
+  }).sort();
+  return `${normName}|${normBase}|${parts.join(';')}`;
+}
+
+function saveMixedColorToPresets({ id = '', colorName, detectedName, hex, baseType, components, colorId = null, sheen = '', notes = '' }) {
+  if (!colorName || !Array.isArray(components) || !components.length) return Promise.resolve(null);
+  if (_cmFormulaSaveInFlight) return Promise.resolve(null);
   const cleanName = colorName.trim();
+  const normBase = normalizeColorMixCategory(baseType || 'Pigment / Colorant');
   const pigmentFormula = components.map(c => {
     const prod = (c.productId && typeof productById === 'function') ? productById(c.productId) : null;
     const compColorId = c.colorId || (prod && (prod.colorId || prod.color_id)) || null;
@@ -1732,83 +1762,62 @@ function saveMixedColorToPresets({ colorName, detectedName, hex, baseType, compo
       preferredCanSize: Number(c.preferredCanSize) || 0
     };
   });
-  const recipeDesc = pigmentFormula.map(c => `${c.pct}% ${c.name}`).join(' + ');
   const hexRef = (typeof normalizeHexCode === 'function' ? normalizeHexCode(hex) : '') || hex || '#1F6F6B';
-  const newPreset = {
-    colorId: colorId || null,
-    name: cleanName,
-    desc: `${detectedName || cleanName} (${recipeDesc})`,
-    hex: hexRef,
-    baseType: baseType || 'Automotive Paint',
-    sheen: sheen || '',
-    notes: notes || '',
-    isCustom: true,
-    recipe: pigmentFormula
-  };
+  const targetId = String(id || '').trim();
 
-  const existingIdx = COLOR_RECIPE_PRESETS.findIndex(
-    p => p.isCustom && (p.name || '').trim().toLowerCase() === cleanName.toLowerCase()
-  );
-  if (existingIdx >= 0) {
-    COLOR_RECIPE_PRESETS[existingIdx] = newPreset;
-  } else {
-    COLOR_RECIPE_PRESETS.push(newPreset);
+  // Client-side exact-duplicate check when creating a new formula (prevents redundant API calls on repeated Save clicks)
+  if (!targetId && typeof db !== 'undefined' && db && Array.isArray(db.colorFormulas)) {
+    const incomingSig = buildClientFormulaSignature(cleanName, normBase, pigmentFormula);
+    const existingExact = db.colorFormulas.find(f =>
+      buildClientFormulaSignature(f.name, f.baseType || '', f.pigmentFormula || []) === incomingSig
+    );
+    if (existingExact) {
+      if (colorMixStudioState) colorMixStudioState.selectedCustomFormulaId = existingExact.id;
+      return Promise.resolve({ success: true, deduplicated: true, formulaId: existingExact.id });
+    }
   }
 
-  // Persist in db.colorFormulas & localStorage
-  if (typeof db !== 'undefined' && db) {
-    if (!Array.isArray(db.colorFormulas)) db.colorFormulas = [];
-    const fIdx = db.colorFormulas.findIndex(f => (f.name || '').trim().toLowerCase() === cleanName.toLowerCase());
-    const formulaRec = {
-      id: fIdx >= 0 ? db.colorFormulas[fIdx].id : ('cf_' + Date.now().toString(36)),
-      colorId: colorId || null,
-      name: cleanName,
-      hexReference: hexRef,
-      detectedName: detectedName || cleanName,
-      baseType: baseType || 'Automotive Paint',
-      sheen: sheen || '',
-      notes: notes || '',
-      pigmentFormula: pigmentFormula,
-      isCustom: true
-    };
-    if (fIdx >= 0) db.colorFormulas[fIdx] = formulaRec;
-    else db.colorFormulas.unshift(formulaRec);
-  }
+  _cmFormulaSaveInFlight = true;
 
-  try {
-    const customOnly = COLOR_RECIPE_PRESETS.filter(p => p.isCustom);
-    localStorage.setItem(CUSTOM_COLOR_PRESETS_KEY, JSON.stringify(customOnly));
-  } catch (e) {
-    console.warn('Could not persist custom color presets', e);
-  }
-
-  // Persist to local MySQL database offline
-  fetch('api/db.php?action=color_formula_save', {
+  // Persist to local MariaDB database (Single Source of Truth)
+  return fetch('api/db.php?action=color_formula_save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      id: targetId,
       colorId: colorId || null,
       name: cleanName,
       hexReference: hexRef,
       detectedName: detectedName || cleanName,
-      baseType: baseType || 'Automotive Paint',
+      baseType: normBase,
       sheen: sheen || '',
       notes: notes || '',
       pigmentFormula: pigmentFormula
     })
   })
-    .then(r => r.json())
+    .then(r => r.json().catch(() => ({})))
     .then(data => {
       if (data && data.success && Array.isArray(data.colorFormulas) && typeof db !== 'undefined' && db) {
         db.colorFormulas = data.colorFormulas;
+        if (colorMixStudioState && data.formulaId) {
+          colorMixStudioState.selectedCustomFormulaId = data.formulaId;
+        }
+        syncCustomPresetsLocalCacheFromDb();
+        if (typeof storage !== 'undefined' && storage.set) storage.set(DB_KEY, JSON.stringify(db));
+        if (typeof broadcastDbUpdate === 'function') broadcastDbUpdate();
         syncActiveColorRecipePresets();
         const chipsEl = document.getElementById('cm-preset-chips-wrap');
         if (chipsEl) chipsEl.innerHTML = renderColorMixPresetChipsHtml();
       }
+      return data;
     })
-    .catch(err => console.warn('Color formula DB save warning:', err));
-
-  syncActiveColorRecipePresets();
+    .catch(err => {
+      console.warn('Color formula DB save warning:', err);
+      return null;
+    })
+    .finally(() => {
+      _cmFormulaSaveInFlight = false;
+    });
 }
 
 let _cmProdIndexSig = '';
@@ -1974,7 +1983,7 @@ function findMatchingProductForRecipeItem(item, reqLiters = 0, excludeProductIds
   // - Must belong to the exact selected category (never silently pull an Automotive Base Paint into House Paint or Specialty Paint!)
   if (isBaseSlot && !isPigmentCatMode) {
     const sameCatBaseCandidates = index
-      .filter(e => !excludeProductIds.has(e.idStr) && e.isBasePaint && !e.isColorPigment && e.typeLower === prefLower)
+      .filter(e => !excludeProductIds.has(e.idStr) && e.isBasePaint && (e.typeLower === prefLower || e.isColorPigment))
       .map(entry => ({ entry, score: getExactColorMatchScore(entry, item) }))
       .filter(x => x.score > 0);
 
@@ -2127,7 +2136,14 @@ function evaluateFormulaVerificationStatus(components, selectedCat, totalLiters,
   };
 }
 
-function evaluateRecipePresetAvailability(preset, totalLiters = (colorMixStudioState && colorMixStudioState.totalLiters ? colorMixStudioState.totalLiters : 1)) {
+function getPresetFormulaCategory(preset) {
+  if (preset && preset.baseType) {
+    return normalizeColorMixCategory(preset.baseType);
+  }
+  return 'Pigment / Colorant';
+}
+
+function evaluateRecipePresetAvailability(preset, totalLiters = (colorMixStudioState && colorMixStudioState.totalLiters ? colorMixStudioState.totalLiters : 1), categoryOverride = null) {
   if (!preset || !Array.isArray(preset.recipe) || !preset.recipe.length) {
     return {
       available: false,
@@ -2143,15 +2159,14 @@ function evaluateRecipePresetAvailability(preset, totalLiters = (colorMixStudioS
   }
 
   const vol = Math.max(0.5, Number(totalLiters) || 0.5);
-  const preferredType = (colorMixStudioState && colorMixStudioState.baseType)
-    ? colorMixStudioState.baseType
-    : ((colorMixStudioState && colorMixStudioState.typeFilter && colorMixStudioState.typeFilter !== 'all')
-      ? colorMixStudioState.typeFilter
-      : (preset.baseType || 'Pigment / Colorant'));
+  // Isolate each catalog entry's evaluation to its own category (never inherit another selected formula's baseType)
+  const preferredType = categoryOverride
+    ? normalizeColorMixCategory(categoryOverride)
+    : getPresetFormulaCategory(preset);
 
   // Ensure product index & recipe evaluation cache are synchronized with current inventory stock
   getColorMixProductIndex();
-  const recipeKey = `${preset.id || preset.cleanName || preset.name || ''}|${vol}|${preferredType}|${preset.physicalSampleTested ? '1' : '0'}`;
+  const recipeKey = `${preset.isCustom ? '1' : '0'}|${preset.id || preset.cleanName || preset.name || ''}|${vol}|${preferredType}|${preset.physicalSampleTested ? '1' : '0'}`;
   if (_cmRecipeEvalCache.has(recipeKey)) {
     return _cmRecipeEvalCache.get(recipeKey);
   }
@@ -2538,6 +2553,7 @@ function applyRecipePreset(presetIndex, preCheck = null) {
 
   colorMixStudioState.components = newComponents;
   colorMixStudioState.selectedPresetIndex = presetIndex;
+  colorMixStudioState.selectedCustomFormulaId = (p.isCustom && p.id) ? p.id : null;
   colorMixStudioState.originalPresetIndex = presetIndex;
   colorMixStudioState.originalCatalogName = cleanPresetColorName(p.name);
   colorMixStudioState.isCustomizingFormula = false;
@@ -2545,11 +2561,8 @@ function applyRecipePreset(presetIndex, preCheck = null) {
   colorMixStudioState.customizeSnapshot = null;
   colorMixStudioState.openPickerIdx = -1;
   colorMixStudioState.selectedLibraryColorId = p.colorId || null;
-  if (p.isCustom && p.baseType) {
-    colorMixStudioState.baseType = normalizeColorMixCategory(p.baseType);
-  } else {
-    colorMixStudioState.baseType = normalizeColorMixCategory(colorMixStudioState.baseType);
-  }
+  // Set active formula category strictly from the selected preset so switching formulas never leaks category state
+  colorMixStudioState.baseType = getPresetFormulaCategory(p);
   // Set formula color name cleanly from the preset (stripping emoji e.g. "🌸 Pastel Rose" -> "Pastel Rose")
   const cleanPresetName = cleanPresetColorName(p.name);
   colorMixStudioState.colorName = cleanPresetName;
@@ -3731,6 +3744,15 @@ function renderCategorizedAccordionMenusHtml(idx, prods, selectedProductId, sear
   });
 
   const categoryGroups = [];
+  const basePaintItems = filtered.filter(p => isDesignatedBasePaintProduct(p));
+  if (basePaintItems.length > 0) {
+    categoryGroups.push({
+      key: 'Base Paints',
+      icon: '🪣',
+      title: 'Base Paints',
+      items: basePaintItems
+    });
+  }
   STANDARD_CATEGORIES.forEach(c => {
     const items = categoryMap.get(c.key) || [];
     if (items.length > 0) {
@@ -4219,7 +4241,8 @@ function saveCustomizeColorMixFormula() {
     return false;
   }
 
-  // 5. Commit customized state without modifying original Mixed Color Catalog formulas
+  // 5. Commit customized state without auto-appending "(Custom)" / "(Custom 2)" suffixes or creating duplicates
+  if (_cmFormulaSaveInFlight) return false;
   s.isCustomizingFormula = false;
   s.isCustomizedFormula = true;
   s.customizeSnapshot = null;
@@ -4228,33 +4251,20 @@ function saveCustomizeColorMixFormula() {
   const origName = s.originalCatalogName || '';
   const nameInput = document.getElementById('cm-color-name');
   const currentName = (nameInput ? nameInput.value.trim() : s.colorName) || origName || 'Custom Mix';
-  const existingCatalogPresets = [
-    ...(Array.isArray(DEFAULT_COLOR_RECIPE_PRESETS) ? DEFAULT_COLOR_RECIPE_PRESETS : []),
-    ...(Array.isArray(COLOR_RECIPE_PRESETS) ? COLOR_RECIPE_PRESETS : [])
-  ];
-  const matchesExistingCatalog = existingCatalogPresets.some(
-    pr => cleanPresetColorName(pr.name).toLowerCase() === currentName.toLowerCase()
-  );
-  if (matchesExistingCatalog) {
-    let candidate = `${currentName} (Custom)`;
-    let suffix = 2;
-    while (existingCatalogPresets.some(pr => cleanPresetColorName(pr.name).toLowerCase() === candidate.toLowerCase())) {
-      candidate = `${currentName} (Custom ${suffix++})`;
-    }
-    s.colorName = candidate;
-    s.userCustomizedName = true;
-  } else {
-    s.colorName = currentName;
-    s.userCustomizedName = true;
-  }
+  s.colorName = currentName;
+  s.userCustomizedName = true;
 
   const mixed = subtractivePaintMix(s.components);
   const detected = detectMixedColorName(mixed.r, mixed.g, mixed.b);
   const baseType = normalizeColorMixCategory(s.baseType);
   s.baseType = baseType;
 
-  // Save custom formula separately linked to the original catalog color
+  // If Admin is editing an existing custom formula, update its existing record by ID; otherwise save as a new/deduplicated custom formula
+  const isAdminActor = typeof currentUser !== 'undefined' && currentUser && currentUser.role === 'admin';
+  const updateFormulaId = (isAdminActor && s.selectedCustomFormulaId) ? s.selectedCustomFormulaId : '';
+
   saveMixedColorToPresets({
+    id: updateFormulaId,
     colorName: s.colorName,
     detectedName: detected.name,
     hex: mixed.hex,
@@ -4265,7 +4275,12 @@ function saveCustomizeColorMixFormula() {
 
   updateColorMixCalculation(false);
   renderColorMixStudio();
-  showToast(`Saved custom formula "${s.colorName}" (100% balanced). Original catalog formula unchanged.`, 'ok');
+  showToast(
+    updateFormulaId
+      ? `Updated custom formula "${s.colorName}" (100% balanced).`
+      : `Saved custom formula "${s.colorName}" (100% balanced). Original catalog formula unchanged.`,
+    'ok'
+  );
   return true;
 }
 
@@ -4533,7 +4548,7 @@ async function submitColorMix() {
 
   const isExistingBuiltinPreset = Array.isArray(DEFAULT_COLOR_RECIPE_PRESETS) &&
     DEFAULT_COLOR_RECIPE_PRESETS.some(pr => cleanPresetColorName(pr.name).toLowerCase() === String(colorName || '').trim().toLowerCase());
-  if (!isExistingBuiltinPreset) {
+  if (!isExistingBuiltinPreset && !s.selectedCustomFormulaId) {
     saveMixedColorToPresets({
       colorName: colorName,
       detectedName: detected.name,

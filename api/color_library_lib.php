@@ -513,16 +513,17 @@ function colorLibrarySaveColor(mysqli $conn, array $input, array $actor, array $
             $existingRow = $chk->get_result()->fetch_assoc();
             $chk->close();
         }
-        if ($existingRow) {
-            $isEdit = true;
-            if ((int)$existingRow['is_custom'] !== 1) {
-                return ['status' => 403, 'success' => false, 'error' => 'Built-in library colors cannot be modified. Add a custom color instead.'];
-            }
+        if (!$existingRow || !empty($existingRow['is_archived'])) {
+            return ['status' => 404, 'success' => false, 'error' => 'Color record not found or has been archived.'];
+        }
+        $isEdit = true;
+        if ((int)$existingRow['is_custom'] !== 1) {
+            return ['status' => 403, 'success' => false, 'error' => 'Built-in library colors cannot be modified. Add a custom color instead.'];
         }
     }
 
-    // Duplicate check: prevent duplicate name (case-insensitive) OR duplicate HEX (case-insensitive)
-    $dupStmt = $conn->prepare("SELECT id, name, hex FROM color_library WHERE (LOWER(name) = LOWER(?) OR UPPER(hex) = UPPER(?)) AND id != ? LIMIT 1");
+    // Duplicate check: prevent duplicate name (case-insensitive) OR duplicate HEX (case-insensitive) among active colors
+    $dupStmt = $conn->prepare("SELECT id, name, hex FROM color_library WHERE COALESCE(is_archived, 0) = 0 AND (LOWER(name) = LOWER(?) OR UPPER(hex) = UPPER(?)) AND id != ? LIMIT 1");
     if ($dupStmt) {
         $cmpId = $isEdit ? $id : '';
         $dupStmt->bind_param('sss', $name, $hex, $cmpId);
@@ -684,10 +685,25 @@ function colorLibraryDeleteColor(mysqli $conn, string $id, array $actor, string 
         $conn->begin_transaction();
         try {
             $now = date('Y-m-d H:i:s');
-            $arch = $conn->prepare("UPDATE color_library SET is_archived = 1, archived_at = ?, archived_by = ?, linked_product_id = NULL, updated_by = ? WHERE id = ? AND is_custom = 1");
-            $arch->bind_param('ssss', $now, $actorName, $actorName, $id);
-            $arch->execute();
+            $archivedName = mb_substr($existing['name'], 0, 92) . ' [Archived ' . date('YmdHis') . ']';
+            $arch = $conn->prepare("UPDATE color_library SET name = ?, is_archived = 1, archived_at = ?, archived_by = ?, linked_product_id = NULL, updated_by = ? WHERE id = ? AND is_custom = 1");
+            if (!$arch) {
+                throw new Exception('Failed to prepare archive statement: ' . $conn->error);
+            }
+            $arch->bind_param('sssss', $archivedName, $now, $actorName, $actorName, $id);
+            if (!$arch->execute()) {
+                $err = $arch->error;
+                $arch->close();
+                throw new Exception('Failed to archive color: ' . $err);
+            }
             $arch->close();
+
+            $uParent = $conn->prepare("UPDATE color_library SET parent_color_id = NULL WHERE parent_color_id = ?");
+            if ($uParent) {
+                $uParent->bind_param('s', $id);
+                $uParent->execute();
+                $uParent->close();
+            }
 
             $delMap = $conn->prepare("DELETE FROM color_inventory_sync_map WHERE color_id = ?");
             if ($delMap) {
@@ -696,12 +712,18 @@ function colorLibraryDeleteColor(mysqli $conn, string $id, array $actor, string 
                 $delMap->close();
             }
 
-            // Unlink active products' color_id while preserving their color name & HEX display text and stock
+            // Unlink active products and formulas while preserving their color name, HEX display text, stock, and historical records
             $uProd = $conn->prepare("UPDATE products SET color_id = NULL WHERE color_id = ?");
             if ($uProd) {
                 $uProd->bind_param('s', $id);
                 $uProd->execute();
                 $uProd->close();
+            }
+            $uForm = $conn->prepare("UPDATE color_formulas SET color_id = NULL WHERE color_id = ?");
+            if ($uForm) {
+                $uForm->bind_param('s', $id);
+                $uForm->execute();
+                $uForm->close();
             }
 
             colorLibraryAuditLog(
@@ -813,6 +835,14 @@ function colorLibraryDeleteColor(mysqli $conn, string $id, array $actor, string 
             }
         }
 
+        // Clear any child parent_color_id references cleanly
+        $uParent = $conn->prepare("UPDATE color_library SET parent_color_id = NULL WHERE parent_color_id = ?");
+        if ($uParent) {
+            $uParent->bind_param('s', $id);
+            $uParent->execute();
+            $uParent->close();
+        }
+
         // Remove mapping and delete only the color_library row (NEVER deletes inventory products)
         $delMap = $conn->prepare("DELETE FROM color_inventory_sync_map WHERE color_id = ?");
         if ($delMap) {
@@ -822,9 +852,20 @@ function colorLibraryDeleteColor(mysqli $conn, string $id, array $actor, string 
         }
 
         $del = $conn->prepare("DELETE FROM color_library WHERE id = ? AND is_custom = 1");
+        if (!$del) {
+            throw new Exception('Failed to prepare delete statement: ' . $conn->error);
+        }
         $del->bind_param('s', $id);
-        $del->execute();
+        if (!$del->execute()) {
+            $err = $del->error;
+            $del->close();
+            throw new Exception('Failed to delete custom color: ' . $err);
+        }
+        $affected = $del->affected_rows;
         $del->close();
+        if ($affected < 1) {
+            throw new Exception('Custom color record could not be deleted (0 rows affected).');
+        }
 
         $detailMsg = "Deleted custom color '{$existing['name']}' ({$existing['hex']}). Inventory products were preserved.";
         if ($mode === 'unlink') {
@@ -859,6 +900,23 @@ function colorLibraryDeleteColor(mysqli $conn, string $id, array $actor, string 
         'colorFormulas' => $all['formulas'],
         'reassignedTo' => $reassignedToName ?: null,
     ];
+}
+
+function colorLibraryFormulaSignature(string $name, string $baseType, array $pigmentFormula): string {
+    $normName = strtolower(trim(preg_replace('/\s+/', ' ', $name)));
+    $normBase = strtolower(trim(preg_replace('/\s+/', ' ', $baseType)));
+    $parts = [];
+    foreach ($pigmentFormula as $comp) {
+        if (!is_array($comp)) continue;
+        $pid = strtolower(trim((string)($comp['productId'] ?? $comp['product_id'] ?? '')));
+        $cid = strtolower(trim((string)($comp['colorId'] ?? $comp['color_id'] ?? '')));
+        $hint = strtolower(trim((string)($comp['colorHint'] ?? $comp['color_hint'] ?? $comp['colorName'] ?? $comp['name'] ?? '')));
+        $ident = $pid !== '' ? "p:{$pid}" : ($cid !== '' ? "c:{$cid}" : "h:{$hint}");
+        $pct = number_format((float)($comp['percentage'] ?? $comp['pct'] ?? 0), 2, '.', '');
+        $parts[] = "{$ident}={$pct}";
+    }
+    sort($parts);
+    return $normName . '|' . $normBase . '|' . implode(';', $parts);
 }
 
 function colorLibrarySaveFormula(mysqli $conn, array $input, array $actor): array {
@@ -900,7 +958,7 @@ function colorLibrarySaveFormula(mysqli $conn, array $input, array $actor): arra
     $actorName = (string)($actor['name'] ?? 'User');
     $isAdminActor = (($actor['role'] ?? '') === 'admin');
 
-    // Update if same custom formula name exists or id provided
+    // 1. Explicit ID provided -> UPDATE existing record strictly by ID (never insert a duplicate)
     $existingId = '';
     if ($id !== '') {
         $chk = $conn->prepare("SELECT id FROM color_formulas WHERE id = ? LIMIT 1");
@@ -908,12 +966,40 @@ function colorLibrarySaveFormula(mysqli $conn, array $input, array $actor): arra
         $chk->execute();
         if ($r = $chk->get_result()->fetch_assoc()) $existingId = $r['id'];
         $chk->close();
+        if ($existingId === '') {
+            return ['status' => 404, 'success' => false, 'error' => 'Mixed color formula record not found.'];
+        }
     } else {
-        $chk = $conn->prepare("SELECT id FROM color_formulas WHERE LOWER(name) = LOWER(?) LIMIT 1");
-        $chk->bind_param('s', $name);
-        $chk->execute();
-        if ($r = $chk->get_result()->fetch_assoc()) $existingId = $r['id'];
-        $chk->close();
+        // 2. New save (no ID): check for an identical formula (same name + baseType + normalized ingredients & percentages).
+        //    Formulas with the same display name but genuinely different ingredients/percentages are allowed as separate records.
+        $incomingSig = colorLibraryFormulaSignature($name, $baseType, $pigmentFormula);
+        $chkSame = $conn->prepare("SELECT id, name, base_type, pigment_formula FROM color_formulas WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))");
+        if ($chkSame) {
+            $chkSame->bind_param('s', $name);
+            $chkSame->execute();
+            $resSame = $chkSame->get_result();
+            while ($rowSame = $resSame->fetch_assoc()) {
+                $existingPigments = json_decode($rowSame['pigment_formula'] ?? '[]', true);
+                if (!is_array($existingPigments)) $existingPigments = [];
+                $existingSig = colorLibraryFormulaSignature(
+                    (string)$rowSame['name'],
+                    (string)($rowSame['base_type'] ?? ''),
+                    $existingPigments
+                );
+                if ($existingSig === $incomingSig) {
+                    $chkSame->close();
+                    $all = colorLibraryFetchAll($conn);
+                    return [
+                        'status' => 200,
+                        'success' => true,
+                        'deduplicated' => true,
+                        'formulaId' => (string)$rowSame['id'],
+                        'colorFormulas' => $all['formulas'],
+                    ];
+                }
+            }
+            $chkSame->close();
+        }
     }
 
     if ($existingId !== '') {
@@ -921,27 +1007,41 @@ function colorLibrarySaveFormula(mysqli $conn, array $input, array $actor): arra
             return ['status' => 403, 'success' => false, 'error' => 'Access denied: Only Administrators can modify existing Mixed Color Catalog formulas. Save under a new custom name instead.'];
         }
         $stmt = $conn->prepare("UPDATE color_formulas SET color_id = ?, name = ?, hex_reference = ?, detected_name = ?, base_type = ?, sheen = ?, notes = ?, pigment_formula = ?, verification_status = ?, physical_sample_tested = ? WHERE id = ?");
+        if (!$stmt) {
+            return ['status' => 500, 'success' => false, 'error' => 'Failed to prepare formula update: ' . $conn->error];
+        }
         $stmt->bind_param('sssssssssis', $colorId, $name, $hexRef, $detectedName, $baseType, $sheen, $notes, $pigmentJson, $verificationStatus, $physicalSampleTested, $existingId);
-        $stmt->execute();
+        if (!$stmt->execute()) {
+            $err = $stmt->error;
+            $stmt->close();
+            return ['status' => 500, 'success' => false, 'error' => 'Failed to update formula: ' . $err];
+        }
         $stmt->close();
         $id = $existingId;
     } else {
         $id = 'cf_' . bin2hex(random_bytes(5));
         $stmt = $conn->prepare("INSERT INTO color_formulas (id, color_id, name, hex_reference, detected_name, base_type, sheen, notes, pigment_formula, is_custom, verification_status, physical_sample_tested, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)");
+        if (!$stmt) {
+            return ['status' => 500, 'success' => false, 'error' => 'Failed to prepare formula insert: ' . $conn->error];
+        }
         $stmt->bind_param('ssssssssssis', $id, $colorId, $name, $hexRef, $detectedName, $baseType, $sheen, $notes, $pigmentJson, $verificationStatus, $physicalSampleTested, $actorName);
-        $stmt->execute();
+        if (!$stmt->execute()) {
+            $err = $stmt->error;
+            $stmt->close();
+            return ['status' => 500, 'success' => false, 'error' => 'Failed to save formula: ' . $err];
+        }
         $stmt->close();
     }
 
     colorLibraryAuditLog(
         $conn,
         $actor,
-        'Save Color Formula',
+        $existingId !== '' ? 'Update Color Formula' : 'Save Color Formula',
         $name,
         'color_formulas',
         '',
         "{$name} (HEX Ref: {$hexRef})",
-        "Saved custom pigment formula '{$name}' with HEX reference {$hexRef}."
+        ($existingId !== '' ? "Updated" : "Saved") . " custom pigment formula '{$name}' with HEX reference {$hexRef}."
     );
 
     $all = colorLibraryFetchAll($conn);
@@ -961,10 +1061,41 @@ function colorLibraryDeleteFormula(mysqli $conn, string $id, array $actor): arra
     if ($id === '') {
         return ['status' => 400, 'success' => false, 'error' => 'Formula ID is required.'];
     }
+
+    $chk = $conn->prepare("SELECT id, name, hex_reference FROM color_formulas WHERE id = ? LIMIT 1");
+    if (!$chk) {
+        return ['status' => 500, 'success' => false, 'error' => 'Failed to query formula: ' . $conn->error];
+    }
+    $chk->bind_param('s', $id);
+    $chk->execute();
+    $existing = $chk->get_result()->fetch_assoc();
+    $chk->close();
+    if (!$existing) {
+        return ['status' => 404, 'success' => false, 'error' => 'Mixed color formula not found.'];
+    }
+
     $del = $conn->prepare("DELETE FROM color_formulas WHERE id = ?");
+    if (!$del) {
+        return ['status' => 500, 'success' => false, 'error' => 'Failed to prepare formula delete: ' . $conn->error];
+    }
     $del->bind_param('s', $id);
-    $del->execute();
+    if (!$del->execute()) {
+        $err = $del->error;
+        $del->close();
+        return ['status' => 500, 'success' => false, 'error' => 'Failed to delete formula: ' . $err];
+    }
     $del->close();
+
+    colorLibraryAuditLog(
+        $conn,
+        $actor,
+        'Delete Color Formula',
+        (string)$existing['name'],
+        'color_formulas',
+        "{$existing['name']} (HEX Ref: {$existing['hex_reference']})",
+        'Deleted',
+        "Deleted custom mixed color formula '{$existing['name']}' ({$existing['hex_reference']})."
+    );
 
     $all = colorLibraryFetchAll($conn);
     return [

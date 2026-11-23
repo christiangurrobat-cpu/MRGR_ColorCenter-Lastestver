@@ -13,7 +13,7 @@ const COLOR_CLASSIFICATIONS = [
   { code: 'G', name: 'Warm Colors', subtitle: 'Warm-undertone finishes (Coral, Burgundy, Gold, Warm Yellow)', dot: '#FF7F50', families: ['Coral', 'Burgundy', 'Gold', 'Warm Yellow'] },
   { code: 'H', name: 'Cool Colors', subtitle: 'Cool-undertone finishes (Teal, Navy Blue, Turquoise, Cool Gray)', dot: '#008080', families: ['Teal', 'Navy Blue', 'Turquoise', 'Cool Gray', 'Blue'] },
   { code: 'I', name: 'Specialty Colors', subtitle: 'Effect & safety coatings (Metallic, Pearl, Fluorescent, Glow-in-the-dark)', dot: '#D4AF37', families: ['Metallic', 'Pearl', 'Fluorescent', 'Glow-in-the-dark'] },
-  { code: 'J', name: 'Custom Colors', subtitle: 'Admin-created shades & saved Paint Mixing Studio formulas', dot: '#1F6F6B', families: ['Admin Custom', 'Red', 'Yellow', 'Blue', 'Orange', 'Green', 'Violet', 'White', 'Black', 'Gray', 'Brown', 'Specialty Colors'] }
+  { code: 'J', name: 'Custom Colors', subtitle: 'Admin-created shades', dot: '#1F6F6B', families: ['Admin Custom', 'Red', 'Yellow', 'Blue', 'Orange', 'Green', 'Violet', 'White', 'Black', 'Gray', 'Brown', 'Specialty Colors'] }
 ];
 
 const COLOR_LIBRARY_CATEGORIES = [
@@ -318,6 +318,7 @@ function getFormulasReferencingColor(colorId) {
    MAIN COLOR LIBRARY PAGE (RYB CLASSIFICATION VIEW)
    ============================================================ */
 function colorLibraryPage() {
+  if (typeof syncActiveColorRecipePresets === 'function') syncActiveColorRecipePresets();
   const colors = getColorLibraryList();
   const mixedColors = getColorLibraryMixedCatalogList();
   const isAdmin = currentUser && currentUser.role === 'admin';
@@ -961,8 +962,11 @@ function openMixedColorModal(editId = null) {
   clMixedModalState.customHex = null;
   clMixedModalState.rows = existing && Array.isArray(existing.recipe) && existing.recipe.length >= 2
     ? existing.recipe.map(r => {
-      const hint = String(r.colorHint || r.name || 'white').toLowerCase().replace(/paint/i, '').trim();
-      const match = CL_BASE_PIGMENT_OPTIONS.find(o => o.hint === hint) || CL_BASE_PIGMENT_OPTIONS[0];
+      const hint = String(r.colorHint || r.colorName || r.name || 'white').toLowerCase().replace(/paint/i, '').trim();
+      const match = CL_BASE_PIGMENT_OPTIONS.find(o => o.hint === hint)
+        || CL_BASE_PIGMENT_OPTIONS.find(o => new RegExp(`\\b${o.hint}\\b`, 'i').test(hint))
+        || CL_BASE_PIGMENT_OPTIONS.find(o => hint.includes(o.hint))
+        || CL_BASE_PIGMENT_OPTIONS[0];
       return { hint: match.hint, pct: Number(r.pct) || 0 };
     })
     : [
@@ -1351,11 +1355,18 @@ function refreshColorLibraryAfterMixedChange() {
   }
 }
 
+let _clSavingMixedColor = false;
 async function submitMixedColorModal() {
+  if (_clSavingMixedColor) return;
+  if (!currentUser || currentUser.role !== 'admin') {
+    showToast('Admin access required to add or edit mixed colors.', 'error');
+    return;
+  }
   const nameEl = document.getElementById('cl-mixed-name');
   const catEl = document.getElementById('cl-mixed-category');
   const notesEl = document.getElementById('cl-mixed-notes');
   const saveBtn = document.getElementById('cl-mixed-save-btn');
+  const isEditing = Boolean(clMixedModalState.editId);
 
   const name = (nameEl ? nameEl.value : '').trim();
   const category = (catEl ? catEl.value : 'Yellow') || 'Yellow';
@@ -1394,6 +1405,24 @@ async function submitMixedColorModal() {
     }
   }
 
+  // Prevent exact-duplicate custom formula (same name + same pigments & percentages),
+  // while still allowing formulas with the same display name and genuinely different ingredients/percentages.
+  const existingCustomList = (typeof db !== 'undefined' && db && Array.isArray(db.colorFormulas)) ? db.colorFormulas : [];
+  if (!clMixedModalState.editId && typeof buildClientFormulaSignature === 'function') {
+    const candidatePigments = rows.map(r => {
+      const opt = CL_BASE_PIGMENT_OPTIONS.find(o => o.hint === r.hint) || CL_BASE_PIGMENT_OPTIONS[0];
+      return { name: opt.name, colorHint: opt.hint, pct: Number(r.pct) || 0 };
+    });
+    const incomingSig = buildClientFormulaSignature(name, 'Pigment / Colorant', candidatePigments);
+    const exactDup = existingCustomList.find(f =>
+      buildClientFormulaSignature(f.name, f.baseType || '', f.pigmentFormula || []) === incomingSig
+    );
+    if (exactDup) {
+      showToast(`An identical mixed color formula for "${exactDup.name}" already exists.`, 'info');
+      return;
+    }
+  }
+
   const hexInputEl = document.getElementById('cl-mixed-hex-input');
   const rawHexInput = hexInputEl ? hexInputEl.value.trim() : '';
   if (rawHexInput && !normalizeHexCode(rawHexInput)) {
@@ -1416,6 +1445,7 @@ async function submitMixedColorModal() {
     };
   });
 
+  _clSavingMixedColor = true;
   if (saveBtn) {
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving...';
@@ -1426,7 +1456,7 @@ async function submitMixedColorModal() {
     name,
     hexReference: preview.hex,
     detectedName: name,
-    baseType: 'House Paint',
+    baseType: 'Pigment / Colorant',
     sheen: `cat:${category}`,
     notes,
     pigmentFormula
@@ -1438,42 +1468,34 @@ async function submitMixedColorModal() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    const data = await resp.json();
+    const data = await resp.json().catch(() => ({}));
     if (!resp.ok || !data || !data.success) {
-      throw new Error((data && data.error) || 'Failed to save mixed color');
+      showToast((data && data.error) || `Failed to save mixed color (HTTP ${resp.status}).`, 'error');
+      return;
     }
     if (Array.isArray(data.colorFormulas) && typeof db !== 'undefined' && db) {
       db.colorFormulas = data.colorFormulas;
+      if (typeof syncCustomPresetsLocalCacheFromDb === 'function') syncCustomPresetsLocalCacheFromDb();
+      if (typeof storage !== 'undefined' && storage.set) storage.set(DB_KEY, JSON.stringify(db));
+      if (typeof broadcastDbUpdate === 'function') broadcastDbUpdate();
     }
     colorLibraryUiState.mixedExpandedSections.add(category);
     closeModal();
     refreshColorLibraryAfterMixedChange();
-    showToast(`Saved mixed color "${name}" (${preview.hex}) — now available in Color Library & POS!`, 'success');
+    showToast(
+      isEditing
+        ? `Updated mixed color "${name}" (${preview.hex}).`
+        : `Saved mixed color "${name}" (${preview.hex}) — now available in Color Library & POS!`,
+      'success'
+    );
   } catch (err) {
-    // Offline/local fallback when API is unreachable
-    if (typeof db !== 'undefined' && db) {
-      if (!Array.isArray(db.colorFormulas)) db.colorFormulas = [];
-      const newId = clMixedModalState.editId || ('cf_' + Date.now().toString(36));
-      const rec = {
-        id: newId,
-        colorId: null,
-        name,
-        hexReference: preview.hex,
-        detectedName: name,
-        baseType: 'House Paint',
-        sheen: `cat:${category}`,
-        notes,
-        pigmentFormula,
-        isCustom: true
-      };
-      const idx = db.colorFormulas.findIndex(f => String(f.id) === String(newId));
-      if (idx >= 0) db.colorFormulas[idx] = rec;
-      else db.colorFormulas.unshift(rec);
+    showToast('Could not connect to server to save mixed color.', 'error');
+  } finally {
+    _clSavingMixedColor = false;
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = isEditing ? 'Save Changes' : '+ Save Mixed Color';
     }
-    colorLibraryUiState.mixedExpandedSections.add(category);
-    closeModal();
-    refreshColorLibraryAfterMixedChange();
-    showToast(`Saved mixed color "${name}" locally (${err.message || 'offline mode'}).`, 'warning');
   }
 }
 
@@ -1496,12 +1518,24 @@ function confirmDeleteMixedColor(formulaId) {
       <div class="small" style="color:var(--ink-soft);">Are you sure you want to remove this custom mixed color from the Color Library and POS Mixed Color Catalog?</div>
     </div>`,
     `<button type="button" class="btn secondary" onclick="closeModal()">Cancel</button>
-     <button type="button" class="btn danger" onclick="deleteCustomMixedColor('${escapeAttr(formulaId)}')">Delete Mixed Color</button>`,
+     <button type="button" id="cl-mixed-del-btn" class="btn danger" onclick="deleteCustomMixedColor('${escapeAttr(formulaId)}')">Delete Mixed Color</button>`,
     'sm'
   );
 }
 
+let _clDeletingMixedColor = false;
 async function deleteCustomMixedColor(formulaId) {
+  if (_clDeletingMixedColor) return;
+  if (!currentUser || currentUser.role !== 'admin') {
+    showToast('Admin access required to delete mixed colors.', 'error');
+    return;
+  }
+  const delBtn = document.getElementById('cl-mixed-del-btn');
+  _clDeletingMixedColor = true;
+  if (delBtn) {
+    delBtn.disabled = true;
+    delBtn.textContent = 'Deleting...';
+  }
   try {
     const resp = await fetch('api/db.php?action=color_formula_delete', {
       method: 'POST',
@@ -1515,14 +1549,22 @@ async function deleteCustomMixedColor(formulaId) {
     }
     if (Array.isArray(data.colorFormulas) && typeof db !== 'undefined' && db) {
       db.colorFormulas = data.colorFormulas;
+      if (typeof syncCustomPresetsLocalCacheFromDb === 'function') syncCustomPresetsLocalCacheFromDb();
+      if (typeof storage !== 'undefined' && storage.set) storage.set(DB_KEY, JSON.stringify(db));
+      if (typeof broadcastDbUpdate === 'function') broadcastDbUpdate();
     }
+    closeModal();
+    refreshColorLibraryAfterMixedChange();
+    showToast('Custom mixed color deleted.', 'success');
   } catch (e) {
     showToast('Could not connect to server to delete custom mixed color.', 'error');
-    return;
+  } finally {
+    _clDeletingMixedColor = false;
+    if (delBtn) {
+      delBtn.disabled = false;
+      delBtn.textContent = 'Delete Mixed Color';
+    }
   }
-  closeModal();
-  refreshColorLibraryAfterMixedChange();
-  showToast('Custom mixed color deleted.', 'success');
 }
 
 function renderColorFamilyFilterOptionsHtml() {
@@ -1591,28 +1633,20 @@ function getFilteredColorLibraryItems() {
 function renderColorLibrarySectionsHtml() {
   const filtered = getFilteredColorLibraryItems();
   const isAdmin = currentUser && currentUser.role === 'admin';
-  const formulas = (typeof db !== 'undefined' && db && Array.isArray(db.colorFormulas)) ? db.colorFormulas : [];
   const q = (colorLibraryUiState.search || '').trim().toLowerCase();
   const clsFilter = colorLibraryUiState.classification || 'All';
-
-  const filteredFormulas = formulas.filter(f => {
-    if (clsFilter !== 'All' && clsFilter !== 'Custom Colors') return false;
-    if (!q) return true;
-    return `${f.name} ${f.hexReference} ${f.baseType || ''} ${f.sheen || ''}`.toLowerCase().includes(q);
-  });
 
   const sectionsToShow = COLOR_CLASSIFICATIONS.filter(cls => clsFilter === 'All' || cls.name === clsFilter);
   let totalRendered = 0;
 
   const sectionsHtml = sectionsToShow.map(cls => {
     const items = filtered.filter(c => c.classification === cls.name);
-    const isCustomSection = cls.name === 'Custom Colors';
-    if (items.length === 0 && !(isCustomSection && filteredFormulas.length > 0)) {
+    if (items.length === 0) {
       return '';
     }
-    totalRendered += items.length + (isCustomSection ? filteredFormulas.length : 0);
+    totalRendered += items.length;
     const isOpen = colorLibraryUiState.expandedSections.has(cls.name) || clsFilter !== 'All' || Boolean(q);
-    const badgeCount = isCustomSection ? (items.length + filteredFormulas.length) : items.length;
+    const badgeCount = items.length;
     const limit = Number(colorLibraryUiState.sectionLimits[cls.name]) || DEFAULT_SECTION_LIMIT;
     const visibleItems = items.slice(0, limit);
     const remainingCount = Math.max(0, items.length - visibleItems.length);
@@ -1635,48 +1669,19 @@ function renderColorLibrarySectionsHtml() {
 
         ${isOpen ? `
           <div class="cl-section-body">
-            ${visibleItems.length > 0 ? `
-              <div class="cl-grid">
-                ${visibleItems.map(c => renderColorSwatchCardHtml(c, isAdmin)).join('')}
-              </div>
-              ${remainingCount > 0 ? `
-                <div class="cl-load-more-bar">
-                  <span>Showing <b>${visibleItems.length}</b> of <b>${items.length}</b> colors in ${escapeHtml(cls.name)}</span>
-                  <div class="row" style="gap:6px;">
-                    <button type="button" class="btn secondary small" style="font-size:11.5px; padding:4px 10px;" onclick="loadMoreColorSection('${escapeAttr(cls.name)}')">
-                      Load ${Math.min(24, remainingCount)} More (${remainingCount} left)
-                    </button>
-                    <button type="button" class="btn ghost small" style="font-size:11.5px; padding:4px 8px;" onclick="showAllColorSection('${escapeAttr(cls.name)}')">
-                      Show All
-                    </button>
-                  </div>
-                </div>
-              ` : ''}
-            ` : (isCustomSection ? `<div class="muted small">No Admin-created custom colors yet.</div>` : '')}
-
-            ${isCustomSection && filteredFormulas.length > 0 ? `
-              <div class="cl-formula-subblock">
-                <div style="font-size:12.5px; font-weight:700; color:var(--ink); display:flex; align-items:center; gap:6px;">
-                  <span>🧪 Saved Paint Mixing Studio Formulas (${filteredFormulas.length})</span>
-                  <span class="muted" style="font-weight:400; font-size:11px;">(Digital HEX reference stored separately from physical pigment recipe)</span>
-                </div>
-                <div class="cl-formula-grid">
-                  ${filteredFormulas.map(f => `
-                    <div class="cl-formula-card">
-                      <div class="cl-formula-swatch" style="background-color:${escapeAttr(f.hexReference)};" title="${escapeAttr(f.hexReference)}"></div>
-                      <div style="min-width:0; flex:1;">
-                        <div style="font-weight:700; font-size:13px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(f.name)}</div>
-                        <div style="font-size:11px; color:var(--ink-soft); margin-top:2px;">
-                          <code style="font-weight:700; color:var(--teal-dark);">${escapeHtml(f.hexReference)}</code>
-                          ${f.baseType ? ` · ${escapeHtml(f.baseType)}` : ''}
-                        </div>
-                        <div class="muted" style="font-size:10.5px; margin-top:3px;">
-                          ${(f.pigmentFormula || []).map(p => `${p.pct}% ${escapeHtml(p.name)}`).join(' + ')}
-                        </div>
-                      </div>
-                      <button type="button" class="cl-action-btn" onclick="copyColorLibraryHex('${escapeAttr(f.hexReference)}')" title="Copy HEX">📋</button>
-                    </div>
-                  `).join('')}
+            <div class="cl-grid">
+              ${visibleItems.map(c => renderColorSwatchCardHtml(c, isAdmin)).join('')}
+            </div>
+            ${remainingCount > 0 ? `
+              <div class="cl-load-more-bar">
+                <span>Showing <b>${visibleItems.length}</b> of <b>${items.length}</b> colors in ${escapeHtml(cls.name)}</span>
+                <div class="row" style="gap:6px;">
+                  <button type="button" class="btn secondary small" style="font-size:11.5px; padding:4px 10px;" onclick="loadMoreColorSection('${escapeAttr(cls.name)}')">
+                    Load ${Math.min(24, remainingCount)} More (${remainingCount} left)
+                  </button>
+                  <button type="button" class="btn ghost small" style="font-size:11.5px; padding:4px 8px;" onclick="showAllColorSection('${escapeAttr(cls.name)}')">
+                    Show All
+                  </button>
                 </div>
               </div>
             ` : ''}
@@ -2120,7 +2125,13 @@ function updateColorLibraryModalPreview() {
   }
 }
 
+let _clSavingCustomColor = false;
 async function saveCustomColorFromModal(existingId) {
+  if (_clSavingCustomColor) return;
+  if (!currentUser || currentUser.role !== 'admin') {
+    showToast('Only Admin users can add or edit custom colors.', 'error');
+    return;
+  }
   const name = (document.getElementById('cl-form-name')?.value || '').trim();
   const rawHex = document.getElementById('cl-form-hex')?.value || '';
   const hex = normalizeHexCode(rawHex);
@@ -2156,6 +2167,7 @@ async function saveCustomColorFromModal(existingId) {
   }
 
   const btn = document.getElementById('cl-form-save-btn');
+  _clSavingCustomColor = true;
   if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
 
   try {
@@ -2164,10 +2176,9 @@ async function saveCustomColorFromModal(existingId) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: existingId, name, hex, category, classification, colorFamily, variation, parentColorId, notes, productCategory })
     });
-    const data = await resp.json();
-    if (!resp.ok || !data.success) {
-      if (btn) { btn.disabled = false; btn.textContent = existingId ? 'Save Changes' : 'Save Color'; }
-      return showErr(data.error || 'Failed to save color.');
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data || !data.success) {
+      return showErr((data && data.error) || `Failed to save color (HTTP ${resp.status}).`);
     }
 
     if (typeof db !== 'undefined' && db) {
@@ -2209,6 +2220,7 @@ async function saveCustomColorFromModal(existingId) {
           });
         }
       }
+      colorLibraryUiState.expandedSections.add(classification);
       notifyColorLibraryChanged(existingId ? 'edit' : 'add');
       if (typeof storage !== 'undefined' && storage.set) {
         storage.set(DB_KEY, JSON.stringify(db));
@@ -2228,8 +2240,10 @@ async function saveCustomColorFromModal(existingId) {
     showToast(toastMsg, 'success');
     if (currentPage === 'colorLibrary' || currentPage === 'inventory') renderPage();
   } catch (err) {
-    if (btn) { btn.disabled = false; btn.textContent = existingId ? 'Save Changes' : 'Save Color'; }
     showErr('Network/database error saving custom color.');
+  } finally {
+    _clSavingCustomColor = false;
+    if (btn) { btn.disabled = false; btn.textContent = existingId ? 'Save Changes' : 'Save Color'; }
   }
 }
 
@@ -2300,11 +2314,24 @@ function onColorDeleteReassignChange(val) {
   if (btn) btn.disabled = !val;
 }
 
+let _clDeletingCustomColor = false;
 async function executeDeleteCustomColor(colorId, mode = 'delete') {
+  if (_clDeletingCustomColor) return;
+  if (!currentUser || currentUser.role !== 'admin') {
+    showToast('Only Admin users can delete or archive custom colors.', 'error');
+    return;
+  }
   const reassignEl = document.getElementById('cl-reassign-select');
   const reassignToColorId = mode === 'delete' && reassignEl ? reassignEl.value : '';
-  const btn = document.getElementById(mode === 'archive' ? 'cl-archive-btn' : (mode === 'unlink' ? 'cl-unlink-btn' : 'cl-del-btn'));
-  if (btn) { btn.disabled = true; btn.textContent = 'Processing...'; }
+  const allActionBtns = ['cl-archive-btn', 'cl-unlink-btn', 'cl-del-btn']
+    .map(id => document.getElementById(id))
+    .filter(Boolean);
+  const savedBtnStates = allActionBtns.map(b => ({ el: b, disabled: b.disabled, text: b.textContent }));
+  const activeBtn = document.getElementById(mode === 'archive' ? 'cl-archive-btn' : (mode === 'unlink' ? 'cl-unlink-btn' : 'cl-del-btn'));
+
+  _clDeletingCustomColor = true;
+  allActionBtns.forEach(b => { b.disabled = true; });
+  if (activeBtn) activeBtn.textContent = 'Processing...';
 
   try {
     const resp = await fetch('api/db.php?action=color_library_delete', {
@@ -2312,10 +2339,9 @@ async function executeDeleteCustomColor(colorId, mode = 'delete') {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: colorId, reassignToColorId, mode })
     });
-    const data = await resp.json();
-    if (!resp.ok || !data.success) {
-      if (btn) { btn.disabled = false; btn.textContent = reassignEl ? 'Reassign & Delete Color' : 'Delete Color'; }
-      showToast(data.error || 'Could not delete color.', 'error');
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data || !data.success) {
+      showToast((data && data.error) || `Could not delete color (HTTP ${resp.status}).`, 'error');
       return;
     }
 
@@ -2375,13 +2401,25 @@ async function executeDeleteCustomColor(colorId, mode = 'delete') {
     }
 
     closeModal();
-    showToast(data.reassignedTo
-      ? `Custom color deleted and references reassigned to "${data.reassignedTo}".`
-      : 'Custom color deleted.', 'success');
+    const successMsg = mode === 'archive'
+      ? 'Custom color archived. Linked inventory products and historical records were preserved.'
+      : (mode === 'unlink'
+        ? 'Custom color unlinked and removed. Linked inventory products and formulas were preserved.'
+        : (data.reassignedTo
+          ? `Custom color deleted and references reassigned to "${data.reassignedTo}".`
+          : 'Custom color deleted.'));
+    showToast(successMsg, 'success');
     if (currentPage === 'colorLibrary') renderPage();
   } catch (err) {
-    if (btn) { btn.disabled = false; btn.textContent = reassignEl ? 'Reassign & Delete Color' : 'Delete Color'; }
     showToast('Error deleting custom color.', 'error');
+  } finally {
+    _clDeletingCustomColor = false;
+    savedBtnStates.forEach(({ el, disabled, text }) => {
+      if (el) {
+        el.disabled = disabled;
+        el.textContent = text;
+      }
+    });
   }
 }
 

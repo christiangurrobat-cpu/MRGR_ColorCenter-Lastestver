@@ -623,16 +623,6 @@ function openProductModal(id) {
       ? `<span class="badge" style="background:var(--teal-tint); color:var(--teal-dark); border:1px solid var(--teal-tint-border); font-size:10.5px;">🔄 Auto-Syncs with Color Library (creates/links color automatically)</span>`
       : `<span class="muted" style="font-size:10.5px;">Regular paint / non-pigment item (does not auto-create Color Library entries)</span>`}
       </div>
-      ${isAdmin ? `
-      <div id="pf-base-paint-wrap" style="margin-top:8px; padding:8px 10px; background:var(--surface-2); border:1px solid var(--line); border-radius:6px; opacity:${isInitialPigment ? '0.6' : '1'};">
-        <label for="pf-is-base-paint" style="display:flex; align-items:flex-start; gap:8px; margin:0; text-transform:none; letter-spacing:normal; cursor:${isInitialPigment ? 'not-allowed' : 'pointer'};">
-          <input type="checkbox" id="pf-is-base-paint" style="width:16px; height:16px; margin:2px 0 0 0; flex-shrink:0; accent-color:var(--teal); cursor:${isInitialPigment ? 'not-allowed' : 'pointer'};" ${(!isInitialPigment && p && (p.isBasePaint || p.is_base_paint)) ? 'checked' : ''} ${isInitialPigment ? 'disabled' : ''}>
-          <span style="display:block; line-height:1.35;">
-            <span style="display:block; font-size:12px; font-weight:700; color:var(--ink);">Designate as Base Paint</span>
-            <span id="pf-base-paint-sub" style="display:block; font-size:10.5px; font-weight:400; color:var(--ink-soft);">${isInitialPigment ? 'Pigment / Colorant products cannot be designated as Base Paint' : 'Color Mixing Studio — max 1 Base Paint per formula'}</span>
-          </span>
-        </label>
-      </div>` : ''}
     </div>
     <div class="field" id="pf-color-cls-field" style="${isInitialPigment ? '' : 'display:none;'}">
       <label for="pf-color-classification">Color Classification <span class="muted small">(Color Library Sync)</span></label>
@@ -867,25 +857,6 @@ function onProductTypeChange(typeVal) {
   if (clsField) {
     clsField.style.display = isPigment ? '' : 'none';
   }
-  const bpWrap = document.getElementById('pf-base-paint-wrap');
-  const bpCheck = document.getElementById('pf-is-base-paint');
-  const bpSub = document.getElementById('pf-base-paint-sub');
-  if (bpCheck) {
-    if (isPigment) {
-      bpCheck.checked = false;
-      bpCheck.disabled = true;
-      bpCheck.style.cursor = 'not-allowed';
-    } else {
-      bpCheck.disabled = false;
-      bpCheck.style.cursor = 'pointer';
-    }
-  }
-  if (bpWrap) bpWrap.style.opacity = isPigment ? '0.6' : '1';
-  if (bpSub) {
-    bpSub.textContent = isPigment
-      ? 'Pigment / Colorant products cannot be designated as Base Paint'
-      : 'Color Mixing Studio — max 1 Base Paint per formula';
-  }
 }
 
 function openProductColorLibraryPicker() {
@@ -1088,8 +1059,8 @@ async function submitProduct(e, id) {
     const taxClassification = taxClassEl ? taxClassEl.value : 'vatable';
     const chosenType = document.getElementById('pf-type').value;
     const isColorPigment = isPigmentProductType(chosenType);
-    const bpEl = document.getElementById('pf-is-base-paint');
-    const isBasePaint = isAdmin && !isColorPigment && !!(bpEl && bpEl.checked);
+    const existingForBase = id ? productById(id) : null;
+    const isBasePaint = Boolean(existingForBase && (existingForBase.isBasePaint || existingForBase.is_base_paint));
     const colorClsEl = document.getElementById('pf-color-classification');
     const colorClassification = isColorPigment && colorClsEl ? colorClsEl.value : (colorId && typeof findColorLibraryEntry === 'function' ? ((findColorLibraryEntry(colorId) || {}).classification || null) : null);
     const data = {
@@ -1176,13 +1147,6 @@ async function submitProduct(e, id) {
       if (data.name !== existing.name) changes.name = { label: 'Product Name', old: existing.name, new: data.name };
       if (data.brand !== existing.brand) changes.brand = { label: 'Brand', old: existing.brand, new: data.brand };
       if (data.type !== existing.type) changes.type = { label: 'Type', old: existing.type, new: data.type };
-      if (Boolean(data.isBasePaint) !== Boolean(existing.isBasePaint || existing.is_base_paint)) {
-        changes.isBasePaint = {
-          label: 'Base Paint Designation',
-          old: Boolean(existing.isBasePaint || existing.is_base_paint) ? 'Yes (Base Paint)' : 'No',
-          new: Boolean(data.isBasePaint) ? 'Yes (Base Paint)' : 'No'
-        };
-      }
       if (data.taxClassification !== (existing.taxClassification || existing.tax_classification || 'vatable')) {
         changes.taxClassification = { label: 'Tax Classification', old: existing.taxClassification || existing.tax_classification || 'vatable', new: data.taxClassification };
       }
