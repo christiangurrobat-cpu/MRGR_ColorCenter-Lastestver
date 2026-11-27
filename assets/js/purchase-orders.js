@@ -777,8 +777,8 @@ function poDetailPage() {
   const isAdmin = currentUser && currentUser.role === 'admin';
   const isStaff = currentUser && currentUser.role === 'staff';
   const canApprove = isAdmin && po.status === 'pending';
-  const canReceive = isStaff && (po.status === 'ordered' || po.status === 'partial');
-  const canCancel = (po.status === 'pending' && (isAdmin || isStaff)) || (po.status === 'ordered' && isAdmin);
+  const canReceive = (isStaff || isAdmin) && (po.status === 'ordered' || po.status === 'partial');
+  const canCancel = isAdmin && (po.status === 'pending' || po.status === 'ordered');
 
   // Timeline
   const cancelled = po.status === 'cancelled';
@@ -1023,6 +1023,7 @@ async function completePOReceiving(po, refNote = '', batchQtys = null, batchMeta
   const beforeSummaryList = [];
   const afterSummaryList = [];
   const damagedPayloadItems = [];
+  const txLines = [];
   let firstProductId = '';
 
   items.forEach((item, idx) => {
@@ -1032,7 +1033,7 @@ async function completePOReceiving(po, refNote = '', batchQtys = null, batchMeta
     const prevAccepted = Number(item.acceptedQty !== undefined ? item.acceptedQty : alreadyReceived);
     const activeRepPending = (typeof getPOItemActiveReplacementPending === 'function')
       ? Number(getPOItemActiveReplacementPending(po.id, item) || 0)
-      : Number(item.replacementPendingQty || 0);
+      : Math.max(0, Number(item.replacementRequestedQty || 0) - Number(item.replacementReceivedQty || 0));
     const remaining = Math.max(0, Number((ordered - alreadyReceived - activeRepPending).toFixed(2)));
 
     let qtyDelivered = remaining;
@@ -1045,6 +1046,18 @@ async function completePOReceiving(po, refNote = '', batchQtys = null, batchMeta
     const qtyAccepted = Math.max(0, Number((qtyDelivered - qtyDamaged).toFixed(2)));
 
     if (qtyDelivered > 0) {
+      const bmForTx = (batchMeta && (batchMeta[idx] || batchMeta[item.productId])) || {};
+      txLines.push({
+        index: idx,
+        deliveredQty: qtyDelivered,
+        acceptedQty: qtyAccepted,
+        damagedQty: qtyDamaged,
+        batchNumber: (bmForTx.batchNumber && String(bmForTx.batchNumber).trim()) ? String(bmForTx.batchNumber).trim() : '',
+        expirationDate: bmForTx.expirationDate || null,
+        inspectionNotes: (dm && dm.inspectionNotes) ? dm.inspectionNotes : (bmForTx.notes || ''),
+        damageReason: (dm && dm.reason) ? dm.reason : 'Damaged on Delivery',
+        handling: (dm && dm.handling) ? dm.handling : 'returned_to_driver'
+      });
       receivedItemCount++;
       // Only ACCEPTED stock counts toward PO receivedQty; keep direct acceptedQty separate from replacementReceivedQty
       const newReceivedTotal = Number((alreadyReceived + qtyAccepted).toFixed(2));
@@ -1140,6 +1153,37 @@ async function completePOReceiving(po, refNote = '', batchQtys = null, batchMeta
   po.items = items;
   po.itemsJson = JSON.stringify(items);
 
+  let rcvJson = null;
+  try {
+    const rcvResp = await fetch('api/transactions.php?action=receive_po', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        poId: po.id,
+        receivingTxKey: receivingTxKey || (`rcvtx_${po.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+        refNote: refNote || '',
+        lines: txLines
+      })
+    });
+    rcvJson = await rcvResp.json().catch(() => ({}));
+    if (!rcvResp.ok || !rcvJson.success) {
+      throw new Error(rcvJson.error || 'Failed to receive purchase order on server.');
+    }
+  } catch (rcvErr) {
+    showToast(rcvErr.message || 'Stock receiving failed.', 'error');
+    if (typeof loadDB === 'function') await loadDB();
+    return null;
+  }
+
+  if (typeof loadDB === 'function') await loadDB();
+  if (typeof loadSupplierReturns === 'function') {
+    try { await loadSupplierReturns(true); } catch (e) {}
+  }
+
+  const finalAllCompleted = Boolean(rcvJson.allCompleted);
+  const damagedRecorded = Boolean(rcvJson.damagedRecorded);
+  const autoReplacementRefs = Array.isArray(rcvJson.autoReplacementRefs) ? rcvJson.autoReplacementRefs : [];
+
   if (receivedItemCount > 0 && typeof logAudit === 'function') {
     if (receivedDetailsList.length > 0) {
       const rcvSummary = receivedDetailsList.join(', ');
@@ -1157,63 +1201,17 @@ async function completePOReceiving(po, refNote = '', batchQtys = null, batchMeta
     const poSummaryText = receivedDetailsList.length > 0
       ? receivedDetailsList.join(', ')
       : `${totalDamagedUnits} damaged unit(s) quarantined (0 added to sellable stock)`;
-    logAudit('PO_RECEIVE', 'Purchase Order', `${allCompleted ? 'Fully received' : 'Partially received'} Purchase Order ${po.poNumber} from ${po.supplierName} (${receivedItemCount} item${receivedItemCount === 1 ? '' : 's'}${totalDamagedUnits > 0 ? `, ${totalDamagedUnits} damaged` : ''})`, {
+    logAudit('PO_RECEIVE', 'Purchase Order', `${finalAllCompleted ? 'Fully received' : 'Partially received'} Purchase Order ${po.poNumber} from ${po.supplierName} (${receivedItemCount} item${receivedItemCount === 1 ? '' : 's'}${totalDamagedUnits > 0 ? `, ${totalDamagedUnits} damaged` : ''})`, {
       entityName: po.poNumber,
       fieldChanged: 'Purchase Order Status',
       oldValue: prevPOStatus,
-      newValue: allCompleted ? 'Fully Received' : 'Partial Delivery',
+      newValue: finalAllCompleted ? 'Fully Received' : 'Partial Delivery',
       referenceNo: po.poNumber,
       reason: poSummaryText
     });
   }
 
-  const saved = await saveDB();
-  if (!saved) {
-    if (typeof loadDB === 'function') await loadDB();
-    return null;
-  }
-
-  let damagedRecorded = false;
-  let autoReturnRef = null;
-  let firstDamagedRecordId = null;
-  let autoReplacementRefs = [];
-  if (damagedPayloadItems.length > 0) {
-    try {
-      const resp = await fetch('api/supplier_returns.php?action=record_receiving_damage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          poId: po.id,
-          poNumber: po.poNumber,
-          supplierId: po.supplierId || '',
-          supplierName: po.supplierName || '',
-          receivingTxKey: receivingTxKey || (`rcvtx_${po.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
-          autoGenerateReplacement: true,
-          items: damagedPayloadItems
-        })
-      });
-      const json = await resp.json();
-      if (json && json.success) {
-        damagedRecorded = true;
-        autoReturnRef = json.autoReturnRef || null;
-        firstDamagedRecordId = (Array.isArray(json.createdIds) && json.createdIds[0]) ? json.createdIds[0] : null;
-        autoReplacementRefs = Array.isArray(json.autoReplacementRefs) ? json.autoReplacementRefs : [];
-        if (typeof applySupplierReturnsPayload === 'function') {
-          applySupplierReturnsPayload(json);
-        }
-        if (typeof loadDB === 'function') {
-          await loadDB();
-        }
-      } else {
-        showToast((json && json.error) || 'Warning: Accepted stock was saved, but damaged/replacement tracking failed to record. Please log it in Replacement Tracking.', 'error');
-      }
-    } catch (err) {
-      console.error('Failed to record receiving damaged stock:', err);
-      showToast('Warning: Accepted stock was saved, but damaged/replacement tracking could not reach the server.', 'error');
-    }
-  }
-
-  return { items, allCompleted, receivedItemCount, totalAcceptedUnits, totalDamagedUnits, damagedRecorded, autoReturnRef, firstDamagedRecordId, autoReplacementRefs };
+  return { items, allCompleted: finalAllCompleted, receivedItemCount, totalAcceptedUnits, totalDamagedUnits, damagedRecorded, autoReturnRef: null, firstDamagedRecordId: null, autoReplacementRefs };
 }
 
 async function cancelPO(id) {
@@ -2825,14 +2823,14 @@ function openManageProductSuppliersModal(productId = null, defaultSize = null) {
         </div>
         <div>
           <label style="font-size:11px; font-weight:700; color:var(--ink-soft); display:block; margin-bottom:3px;">Container Size</label>
-          <select id="mps-size" style="width:100%; font-size:12.5px; padding:6px 8px; border-radius:4px; border:1px solid var(--line); background:var(--surface);">
+          <select id="mps-size" onchange="onMpsSizeChange(this.value, ${Number(p.price) || 0})" style="width:100%; font-size:12.5px; padding:6px 8px; border-radius:4px; border:1px solid var(--line); background:var(--surface);">
             ${sizes.map(sz => `<option value="${sz}" ${sz === targetSize ? 'selected' : ''}>${fmtSize(sz)}</option>`).join('')}
             <option value="0">All Container Sizes</option>
           </select>
         </div>
         <div>
           <label style="font-size:11px; font-weight:700; color:var(--ink-soft); display:block; margin-bottom:3px;">Purchase Cost (₱) *</label>
-          <input type="number" id="mps-cost" step="0.01" min="0" placeholder="0.00" value="${(p.price * 0.85).toFixed(2)}" style="width:100%; font-size:12.5px; padding:6px 8px; border-radius:4px; border:1px solid var(--line); background:var(--surface);">
+          <input type="number" id="mps-cost" step="0.01" min="0" placeholder="0.00" value="${((Number(p.price) || 0) * 0.85 * (sizes.includes(targetSize) ? targetSize : (sizes[0] || 1))).toFixed(2)}" style="width:100%; font-size:12.5px; padding:6px 8px; border-radius:4px; border:1px solid var(--line); background:var(--surface);">
         </div>
       </div>
 
@@ -2860,6 +2858,14 @@ function openManageProductSuppliersModal(productId = null, defaultSize = null) {
 }
 
 window.openManageProductSuppliersModal = openManageProductSuppliersModal;
+
+window.onMpsSizeChange = function (sizeVal, basePricePerLiter) {
+  const costEl = document.getElementById('mps-cost');
+  if (!costEl) return;
+  const sz = Number(sizeVal) || 0;
+  const mult = sz > 0 ? sz : 1;
+  costEl.value = ((Number(basePricePerLiter) || 0) * 0.85 * mult).toFixed(2);
+};
 
 window.removeProductSupplierInModal = async function (relId, productId, targetSize) {
   deleteProductSupplierRelationship(relId);
@@ -3361,8 +3367,8 @@ function togglePORowActionsMenu(poId, btnEl, event) {
   const isAdmin = currentUser && currentUser.role === 'admin';
   const isStaff = currentUser && currentUser.role === 'staff';
   const canApprove = isAdmin && po.status === 'pending';
-  const canReceive = isStaff && (po.status === 'ordered' || po.status === 'partial');
-  const canCancel = (po.status === 'pending' && (isAdmin || isStaff)) || (po.status === 'ordered' && isAdmin);
+  const canReceive = (isStaff || isAdmin) && (po.status === 'ordered' || po.status === 'partial');
+  const canCancel = isAdmin && (po.status === 'pending' || po.status === 'ordered');
 
   const menu = document.createElement('div');
   menu.id = 'po-actions-menu-dropdown';

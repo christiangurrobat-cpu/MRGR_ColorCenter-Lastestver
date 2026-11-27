@@ -18,6 +18,42 @@ try {
 
 $action = $_GET['action'] ?? '';
 
+function logFailedLoginAudit($conn, $attemptedUsername, $matchedUser = null, $reason = 'Invalid credentials') {
+    try {
+        $now = date('Y-m-d H:i:s');
+        $cleanUser = substr(trim((string)$attemptedUsername), 0, 120);
+        $uid = ($matchedUser && !empty($matchedUser['id'])) ? substr((string)$matchedUser['id'], 0, 64) : '';
+        $uname = ($matchedUser && !empty($matchedUser['name']))
+            ? substr((string)$matchedUser['name'], 0, 255)
+            : ($cleanUser !== '' ? substr($cleanUser, 0, 255) : 'Unknown User');
+        $role = ($matchedUser && !empty($matchedUser['role'])) ? substr((string)$matchedUser['role'], 0, 32) : 'unauthenticated';
+        $actionCode = 'LOGIN_FAILED';
+        $entity = 'Authentication';
+        $entityName = $cleanUser !== '' ? "Login Attempt (@{$cleanUser})" : 'Login Attempt';
+        $fieldChanged = 'Sign-in Credentials';
+        $oldVal = 'Unauthenticated';
+        $newVal = 'Authentication Blocked';
+        $details = "Failed sign-in attempt for username \"{$cleanUser}\" — {$reason}";
+        $ip = substr((string)($_SERVER['REMOTE_ADDR'] ?? ''), 0, 64);
+
+        $st = $conn->prepare("INSERT INTO audit_logs (
+            created_at, user_id, user_name, user_role, action, entity,
+            entity_name, field_changed, old_value, new_value, reason, details, ip_address
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        if ($st) {
+            $st->bind_param(
+                'sssssssssssss',
+                $now, $uid, $uname, $role, $actionCode, $entity,
+                $entityName, $fieldChanged, $oldVal, $newVal, $reason, $details, $ip
+            );
+            $st->execute();
+            $st->close();
+        }
+    } catch (Throwable $e) {
+        // Never block auth response if audit insert fails
+    }
+}
+
 // POST: Login endpoint
 if ($action === 'login') {
     if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
@@ -51,12 +87,14 @@ if ($action === 'login') {
     $stmt->close();
 
     if (!$user) {
+        logFailedLoginAudit($conn, $username, null, 'Invalid username or password');
         http_response_code(401);
         echo json_encode(['success' => false, 'error' => 'Incorrect username or password.']);
         exit;
     }
 
     if ($user['status'] !== 'active') {
+        logFailedLoginAudit($conn, $username, $user, 'Attempted sign-in to deactivated account');
         http_response_code(403);
         echo json_encode(['success' => false, 'error' => 'This account has been deactivated. Contact the administrator.']);
         exit;
@@ -93,6 +131,7 @@ if ($action === 'login') {
     }
 
     if (!$isValid) {
+        logFailedLoginAudit($conn, $username, $user, 'Invalid password');
         http_response_code(401);
         echo json_encode(['success' => false, 'error' => 'Incorrect username or password.']);
         exit;
@@ -214,6 +253,13 @@ if ($action === 'verify_admin') {
         }
     } elseif ($storedHash !== '' && hash_equals($storedHash, $password)) {
         $isValid = true;
+        $newHash = password_hash($password, PASSWORD_BCRYPT);
+        $upStmt = $conn->prepare("UPDATE users SET password = ? WHERE id = ?");
+        if ($upStmt) {
+            $upStmt->bind_param("ss", $newHash, $user['id']);
+            $upStmt->execute();
+            $upStmt->close();
+        }
     }
 
     if (!$isValid) {
@@ -222,9 +268,19 @@ if ($action === 'verify_admin') {
         exit;
     }
 
+    // Issue a short-lived server-side authorization token for sensitive actions (returns/refunds)
+    $verifyToken = bin2hex(random_bytes(24));
+    $_SESSION['admin_verify_token'] = [
+        'token' => $verifyToken,
+        'adminId' => $user['id'],
+        'adminName' => $user['name'],
+        'expiresAt' => time() + 600
+    ];
+
     // Return admin info without altering cashier/staff session
     echo json_encode([
         'success' => true,
+        'verifyToken' => $verifyToken,
         'admin' => [
             'id' => $user['id'],
             'username' => $user['username'],

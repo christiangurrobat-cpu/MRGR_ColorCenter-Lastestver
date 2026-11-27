@@ -193,7 +193,22 @@ function expRefreshSummary(force) {
       // updateNavBadges re-enters expRefreshSummary but the throttle stamp above stops recursion
       updateNavBadges();
     }
-  }).catch(() => { /* badge is best-effort */ });
+  }).catch(() => {
+    EXP.summaryTs = 0;
+    if (!EXP.summary) {
+      const card = document.getElementById('exp-dash-stat-card');
+      if (card) {
+        const valEl = card.querySelector('.value');
+        if (valEl) valEl.textContent = 'Unavailable';
+        const subEl = card.querySelector('.sub');
+        if (subEl) subEl.textContent = 'Could not load expiration summary';
+      }
+      const w = document.getElementById('exp-dash-widget');
+      if (w) {
+        w.innerHTML = `<div class="muted small" style="padding:6px 0;">Could not load expiration data. <button type="button" class="btn ghost small" onclick="expRefreshSummary(true)">↻ Retry</button></div>`;
+      }
+    }
+  });
 }
 
 /* ------------------------------------------------------------
@@ -698,6 +713,7 @@ function expRenderBatchRow(b, canEdit) {
       <button type="button" class="exp-act" title="View stock movement history" onclick="expOpenDetail('${bid}', 'movements')">📜</button>
       <button type="button" class="exp-act ${canEdit ? '' : 'disabled'}" ${canEdit ? '' : 'disabled'} title="${canEdit ? 'Edit expiration date' : 'You do not have permission to edit expiration dates'}" onclick="expOpenEdit('${bid}')">✏️</button>
       <button type="button" class="exp-act ${expCanAdjust() ? '' : 'disabled'}" ${expCanAdjust() ? '' : 'disabled'} title="${expCanAdjust() ? 'Record stock adjustment' : 'Stock adjustments require Administrator authorization'}" onclick="expOpenAdjust('${bid}')">±</button>
+      ${(!dep && b.expiryStatus === 'expired' && expCanAdjust()) ? `<button type="button" class="exp-act" style="color:var(--danger-text);" title="Write off all ${b.remainingQty} expired unit(s) in this batch" onclick="expOpenAdjust('${bid}', true)">🗑️</button>` : ''}
     </td>
   </tr>`;
 }
@@ -939,13 +955,14 @@ function expRenderDetail() {
         ? `<div class="table-scroll exp-hist"><table class="exp-table small"><thead><tr><th>Date</th><th>Event</th><th class="right">Change</th><th class="right">Balance</th><th>Staff</th><th>Details</th></tr></thead><tbody>${ledgerRows}</tbody></table></div>`
         : empty('No ledger entries.'))}
     ${pane('corrections', (d.correctionHistory || []).length
-        ? `<div class="table-scroll exp-hist"><table class="exp-table small"><thead><tr><th>Date &amp; Time</th><th>Previous Date</th><th>Corrected Date</th><th>Admin Responsible</th><th>Reason</th></tr></thead><tbody>${(d.correctionHistory || []).map(ch => `<tr><td>${expFmtDateTime(ch.date)}</td><td>${escapeHtml(ch.previousDate)}</td><td><b>${escapeHtml(ch.correctedDate)}</b></td><td>${escapeHtml(ch.adminName || 'Admin')}</td><td class="exp-note">${escapeHtml(ch.reason || '—')}</td></tr>`).join('')}</tbody></table></div><div class="muted small" style="margin-top:6px;">Permanent append-only audit trail of Administrator expiration date corrections for batch ${escapeHtml(b.batchNumber)}.</div>`
-        : empty('No expiration date corrections have been made to this batch.'))}`;
+          ? `<div class="table-scroll exp-hist"><table class="exp-table small"><thead><tr><th>Date &amp; Time</th><th>Previous Date</th><th>Corrected Date</th><th>Admin Responsible</th><th>Reason</th></tr></thead><tbody>${(d.correctionHistory || []).map(ch => `<tr><td>${expFmtDateTime(ch.date)}</td><td>${escapeHtml(ch.previousDate)}</td><td><b>${escapeHtml(ch.correctedDate)}</b></td><td>${escapeHtml(ch.adminName || 'Admin')}</td><td class="exp-note">${escapeHtml(ch.reason || '—')}</td></tr>`).join('')}</tbody></table></div><div class="muted small" style="margin-top:6px;">Permanent append-only audit trail of Administrator expiration date corrections for batch ${escapeHtml(b.batchNumber)}.</div>`
+          : empty('No expiration date corrections have been made to this batch.'))}`;
 
   const canAdjust = !!(d.permissions && d.permissions.canAdjust !== undefined ? d.permissions.canAdjust : expCanAdjust());
   const foot = `
     <button class="btn secondary" onclick="closeModal()">Close</button>
     ${canEdit ? `<button class="btn secondary" onclick="expOpenEdit('${escapeAttr(b.batchId)}')">✏️ Correct Expiration Date</button>` : ''}
+    ${(!b.depleted && b.expiryStatus === 'expired' && canAdjust) ? `<button class="btn secondary danger" onclick="expOpenAdjust('${escapeAttr(b.batchId)}', true)">🗑️ Write Off All Expired (${b.remainingQty})</button>` : ''}
     ${canAdjust ? `<button class="btn" onclick="expOpenAdjust('${escapeAttr(b.batchId)}')">± Record Adjustment</button>` : ''}`;
   openModal(`🗓️ Batch ${escapeHtml(b.batchNumber)} — ${escapeHtml(p.name || b.productName)} (${fmtSize(b.containerSize)})`, body, foot, 'wide');
 }
@@ -1137,6 +1154,7 @@ async function expSaveEdit(batchId) {
     EXP.summaryTs = 0;
     await expLoad(true);
     expRefreshSummary(true);
+    if (typeof loadDB === 'function') await loadDB();
     if (typeof updateNavBadges === 'function') updateNavBadges();
   } catch (e) {
     if (err) err.textContent = e.message || 'Could not update expiration date.';
@@ -1151,7 +1169,7 @@ async function expSaveEdit(batchId) {
    + movement pipeline so central stock, movement log, audit log and
    the batch ledger all stay in sync.
    ------------------------------------------------------------ */
-function expOpenAdjust(batchId) {
+function expOpenAdjust(batchId, prefillWriteOffAll = false) {
   if (!expCanAdjust()) {
     showToast('Stock adjustments require Administrator authorization. Staff can submit an adjustment request under Stock Receiving / Adjust.', 'error');
     return;
@@ -1159,6 +1177,8 @@ function expOpenAdjust(batchId) {
   const b = expFindBatch(batchId);
   if (!b) { showToast('Batch not found.', 'error'); return; }
   const defType = b.expiryStatus === 'expired' && !b.depleted ? 'remove_expired' : 'remove_damaged';
+  const defQty = (prefillWriteOffAll && b.remainingQty > 0) ? b.remainingQty : 1;
+  const defNote = prefillWriteOffAll ? 'Write-off of expired paint batch from warehouse stock' : '';
   const body = `
     <div class="exp-form-note">Adjusts the <b>central sealed inventory</b> for ${escapeHtml(b.productName)} (${fmtSize(b.containerSize)}) and the selected batch together. Recorded in the stock movement log and audit log.</div>
     <div class="exp-adj-summary">
@@ -1172,14 +1192,14 @@ function expOpenAdjust(batchId) {
         <select id="exp-a-type" onchange="expAdjPreview('${escapeAttr(batchId)}')">
           ${Object.entries(EXP_ADJ_TYPES).map(([k, t]) => `<option value="${k}" ${k === defType ? 'selected' : ''}>${t.label}</option>`).join('')}
         </select></div>
-      <div class="field"><label>Quantity (units / cans) *</label><input type="number" id="exp-a-qty" min="1" step="1" value="1" oninput="expAdjPreview('${escapeAttr(batchId)}')"></div>
+      <div class="field"><label>Quantity (units / cans) *</label><input type="number" id="exp-a-qty" min="1" max="${Math.max(1, b.remainingQty)}" step="1" value="${defQty}" oninput="expAdjPreview('${escapeAttr(batchId)}')"></div>
     </div>
-    <div class="field"><label>Reason / notes *</label><textarea id="exp-a-note" rows="2" placeholder="Explain why this adjustment is needed (min. 5 characters)"></textarea></div>
+    <div class="field"><label>Reason / notes *</label><textarea id="exp-a-note" rows="2" placeholder="Explain why this adjustment is needed (min. 5 characters)">${escapeHtml(defNote)}</textarea></div>
     <div id="exp-a-preview" class="exp-adj-preview"></div>
     <label class="exp-check" style="margin-top:8px;"><input type="checkbox" id="exp-a-auth"> I am an authorized Administrator and approve this stock adjustment.</label>
     <div id="exp-a-err" class="exp-form-err"></div>`;
-  openModal(`± Record Stock Adjustment`, body,
-    `<button class="btn secondary" onclick="closeModal()">Cancel</button><button class="btn" id="exp-a-save" onclick="expSaveAdjust('${escapeAttr(batchId)}')">Record Adjustment</button>`, '');
+  openModal(prefillWriteOffAll ? `🗑️ Write Off Expired Batch` : `± Record Stock Adjustment`, body,
+    `<button class="btn secondary" onclick="closeModal()">Cancel</button><button class="btn" id="exp-a-save" onclick="expSaveAdjust('${escapeAttr(batchId)}')">${prefillWriteOffAll ? 'Confirm Write-Off' : 'Record Adjustment'}</button>`, '');
   expAdjPreview(batchId);
 }
 
@@ -1279,6 +1299,7 @@ async function expSaveAdjust(batchId) {
     showToast(`✓ Adjustment recorded for batch ${b.batchNumber}.`, 'ok');
     EXP.summaryTs = 0;
     await expLoad(true);
+    if (typeof loadDB === 'function') await loadDB();
     if (typeof updateNavBadges === 'function') updateNavBadges();
   } catch (e) {
     // Rollback in-memory mutations on save failure
@@ -1328,44 +1349,19 @@ async function expSaveThresholds() {
 
 function expOpenDiscounts() {
   if (!expIsAdmin()) return;
-  const d = (EXP.data && EXP.data.discountSettings) || { enabled: false, criticalPct: 0, soonPct: 0 };
-  openModal('🏷️ Near-Expiry Discount Management', `
-    <div class="exp-form-note">Configure automatic POS discounts for eligible near-expiry batches (FIFO). Discounts never apply to Good, Not Specified, or Expired stock. Expired stock is strictly blocked from sale.</div>
-    <div class="field" style="margin-bottom:10px;">
-      <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
-        <input type="checkbox" id="exp-d-enabled" ${d.enabled ? 'checked' : ''} style="width:auto;">
-        <span><b>Enable automatic near-expiry discounts in POS</b></span>
-      </label>
-    </div>
-    <div class="exp-form-grid">
-      <div class="field"><label>Critical Batch Discount (%)</label><input type="number" id="exp-d-crit" min="0" max="90" step="0.5" value="${Number(d.criticalPct || 0)}"></div>
-      <div class="field"><label>Expiring Soon Batch Discount (%)</label><input type="number" id="exp-d-soon" min="0" max="90" step="0.5" value="${Number(d.soonPct || 0)}"></div>
-    </div>
-    <div id="exp-d-err" class="exp-form-err"></div>`,
-    `<button class="btn secondary" onclick="closeModal()">Cancel</button><button class="btn" onclick="expSaveDiscounts()">Save Discount Policy</button>`, '');
-}
-
-async function expSaveDiscounts() {
-  const enabled = !!(document.getElementById('exp-d-enabled') || {}).checked;
-  const criticalPct = Number((document.getElementById('exp-d-crit') || {}).value);
-  const soonPct = Number((document.getElementById('exp-d-soon') || {}).value);
-  const err = document.getElementById('exp-d-err');
-  if (isNaN(criticalPct) || criticalPct < 0 || criticalPct > 90 || isNaN(soonPct) || soonPct < 0 || soonPct > 90) {
-    if (err) err.textContent = 'Discount percentages must be between 0% and 90%.';
+  if (typeof discOpenScheduleModal === 'function') {
+    if (typeof DISC !== 'undefined') {
+      if (!DISC.data) DISC.data = {};
+      if (EXP.data && EXP.data.discountSettings) {
+        DISC.data.discountSettings = EXP.data.discountSettings;
+      }
+    }
+    discOpenScheduleModal();
     return;
   }
-  const t = (EXP.data && EXP.data.thresholds) || { critical: 30, soon: 90 };
-  const tiers = [
-    { days: Number(t.soon || 90), pct: soonPct },
-    { days: Number(t.critical || 30), pct: criticalPct }
-  ];
-  try {
-    await expApi('save_discount_settings', { body: { enabled, criticalPct, soonPct, tiers } });
-    if (typeof posBatchStatusLoadedAt !== 'undefined') posBatchStatusLoadedAt = 0;
-    closeModal();
-    showToast('✓ Near-expiry discount policy saved.', 'ok');
-    await expLoad(true);
-  } catch (e) { if (err) err.textContent = e.message; }
+  if (typeof goToDiscounts === 'function') {
+    goToDiscounts('all');
+  }
 }
 
 /* ------------------------------------------------------------

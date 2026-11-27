@@ -59,9 +59,8 @@ function goToAdjustment(productId = null) {
   goTo('receiving');
 }
 
-// Stock Adjustment Quantity Safeguards (Option 1: Prevent 100% stock wipeout & cap manual adjustments)
-const MAX_ADJ_DEDUCT_CANS = 5;     // Max sealed cans deductible per adjustment entry
-const MAX_ADJ_DEDUCT_RATIO = 0.5;  // Max 50% of available cans/stock deductible at once (never wipes out 100% of stock)
+// Stock Adjustment Quantity Safeguards (allows deducting down to 0 so damaged/leaking last unit can be removed; Staff requests still require Admin approval)
+const MAX_ADJ_DEDUCT_CANS = 5;     // Max sealed cans deductible per manual adjustment entry
 const MAX_ADJ_ADD_CANS = 10;       // Max sealed cans added via Count Correction (+) (use Purchase Orders for restocking)
 
 /* Opened / Used stock is adjusted PER CAN SIZE. Size values: <size> (sealed cans of that size, e.g. 1, 3.5, 20) or 'opened<size>'
@@ -105,9 +104,8 @@ function maxAllowedAdjQty(product, reason = 'Damaged', size = 1) {
   const currentStock = Number(product.stock) || 0;
   const hasBreakdown = productHasCanBreakdown(product);
   const availCans = hasBreakdown ? productCanCount(product, sizeNum) : Math.floor(currentStock / sizeNum);
-  const maxByCans = Math.floor(availCans * MAX_ADJ_DEDUCT_RATIO);
-  const maxByStock = Math.floor((currentStock * MAX_ADJ_DEDUCT_RATIO) / sizeNum);
-  return Math.max(0, Math.min(MAX_ADJ_DEDUCT_CANS, maxByCans, maxByStock));
+  const maxByStock = Math.floor(currentStock / sizeNum);
+  return Math.max(0, Math.min(MAX_ADJ_DEDUCT_CANS, availCans, maxByStock));
 }
 
 function defaultAdjSizeForProduct(product, reason = 'Damaged', currentSize = 1) {
@@ -893,8 +891,8 @@ function renderReceivingPOPreview() {
           <label>
             <span>Handling / Disposition *</span>
             <select id="rcv-dmg-handling-${i}" class="rcv-dmg-select">
-              <option value="returned_to_driver" selected>Return Directly to Delivery Personnel (Auto-Log Return)</option>
-              <option value="quarantine">Quarantine at Store (Pending Supplier Return)</option>
+              <option value="returned_to_driver" selected>Return to Delivery Personnel (Auto-Create Replacement Request)</option>
+              <option value="quarantine">Quarantine at Store (Auto-Create Replacement Request)</option>
             </select>
           </label>
           <label class="rcv-dmg-notes-col">
@@ -1200,14 +1198,12 @@ function computeBulkAdjRowState(row) {
   } else if (!isAdd) {
     if (curCans <= 0 || currentStock <= 0) {
       invalidMsg = `No ${sizeNum}L units in stock to deduct`;
-    } else if (maxQty <= 0 && curCans === 1) {
-      invalidMsg = `Protected: The last 1 unit cannot be deducted (50% safety limit against accidental stockout)`;
     } else if (exceedsCans) {
       invalidMsg = `Only ${curCans} unit(s) of ${sizeNum}L available in stock`;
     } else if (exceedsStock) {
       invalidMsg = `Exceeds total available inventory (${formatLiters(currentStock)})`;
     } else if (exceedsDeductCap) {
-      invalidMsg = `Up to ${maxQty} unit(s) can be deducted (50% / ${MAX_ADJ_DEDUCT_CANS}-unit safety limit)`;
+      invalidMsg = `Up to ${maxQty} unit(s) can be deducted per adjustment entry (max ${MAX_ADJ_DEDUCT_CANS} units at once)`;
     }
   }
 
@@ -2661,7 +2657,7 @@ async function submitMovement(e) {
       const alreadyAccepted = Number(items[i].receivedQty !== undefined ? items[i].receivedQty : (po.status === 'received' ? ordered : 0));
       const activeRepPending = (typeof getPOItemActiveReplacementPending === 'function')
         ? Number(getPOItemActiveReplacementPending(po.id, items[i]) || 0)
-        : Number(items[i].replacementPendingQty || 0);
+        : Math.max(0, Number(items[i].replacementRequestedQty || 0) - Number(items[i].replacementReceivedQty || 0));
       const remaining = Math.max(0, Number((ordered - alreadyAccepted - activeRepPending).toFixed(2)));
 
       if (valDelivered > remaining) {

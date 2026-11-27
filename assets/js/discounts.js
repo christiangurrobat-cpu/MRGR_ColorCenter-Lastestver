@@ -701,6 +701,10 @@ async function discSaveSchedule() {
     closeModal();
     showToast('✓ Near-expiry discount schedule saved.', 'ok');
     await discLoad(true);
+    if (typeof EXP !== 'undefined' && EXP.loaded && typeof expLoad === 'function') {
+      EXP.summaryTs = 0;
+      await expLoad(true);
+    }
   } catch (e) {
     fail(e.message);
     if (btn) { btn.disabled = false; btn.textContent = 'Save Schedule'; }

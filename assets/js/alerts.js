@@ -84,7 +84,7 @@ function getProductAlertMatchingSizes(p) {
     const variant = productSizeVariantBySize(p, s);
     const poSt = LowStockService.getVariantPOStatus(p, s, variant ? variant.sizeId : null);
     if (alertTab === 'needing_po') return (st === 'low' || st === 'out') && poSt.status !== 'on_order';
-    if (alertTab === 'on_order') return poSt.status === 'on_order';
+    if (alertTab === 'on_order') return (st === 'low' || st === 'out') && poSt.status === 'on_order';
     return st === 'low' || st === 'out';
   };
   if (alertSizeFilter === 'all' && !rawSizes.some(matchesTab)) return [];
@@ -135,7 +135,7 @@ function getAlertsList() {
     if (bLow !== aLow) return bLow - aLow;
     const aThresh = productTotalThresholdLiters(a) || Number(a.threshold) || 0;
     const bThresh = productTotalThresholdLiters(b) || Number(b.threshold) || 0;
-    return (a.stock - aThresh) - (b.stock - bThresh);
+    return (productSellableStock(a) - aThresh) - (productSellableStock(b) - bThresh);
   });
 
   return list;
@@ -491,7 +491,8 @@ function alertsPage() {
             const variant = productSizeVariantBySize(p, s);
             const sizeId = variant ? variant.sizeId : null;
             const sizeKey = getAlertSizeKey(p.id, s, sizeId);
-            const count = productCanCount(p, s);
+            const count = productSellableCanCount(p, s);
+            const expCount = productExpiredCanCount(p, s);
             const thresh = productSizeThreshold(p, s);
             const stockVol = count * s;
             const threshVol = thresh * s;
@@ -530,7 +531,8 @@ function alertsPage() {
                       ${escapeHtml(p.name)}
                     </div>
                     <div class="muted small" style="margin-top:4px; font-size:11px;">
-                      Total Stock: <b style="${productHasLowStock(p) ? 'color:var(--danger);' : ''}">${formatLiters(p.stock)}</b>
+                      Sellable Stock: <b style="${productHasLowStock(p) ? 'color:var(--danger);' : ''}">${formatLiters(productSellableStock(p))}</b>
+                      ${productExpiredStock(p) > 0 ? `<span style="color:var(--danger-text); font-weight:600;"> · ⛔ ${formatLiters(productExpiredStock(p))} expired</span>` : ''}
                     </div>
                   </td>
 
@@ -583,6 +585,7 @@ function alertsPage() {
                 <!-- Stock Quantity (Units) -->
                 <td class="right" style="font-weight:700; font-family:'Space Grotesk',sans-serif; vertical-align:middle; ${borderBottom} ${st === 'out' ? 'color:var(--danger);' : (st === 'low' ? 'color:var(--warning-text);' : 'color:var(--ink);')}">
                   ${count} ${count === 1 ? 'unit' : 'units'}
+                  ${expCount > 0 ? `<div style="font-size:10.5px; color:var(--danger-text); font-weight:600;" title="${expCount} expired unit(s) quarantined and excluded from sellable stock">⛔ +${expCount} expired</div>` : ''}
                 </td>
 
                 <!-- Stock Volume (L) -->

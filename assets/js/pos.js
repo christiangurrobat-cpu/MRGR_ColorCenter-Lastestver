@@ -726,6 +726,10 @@ function getCartReservedLitersForProduct(prod, excludeIndex = -1) {
 function addSizeToCart(productId, size = 1) {
   const p = productById(productId);
   if (!p || p.stock <= 0) { showToast('This product is out of stock.', 'error'); return; }
+  if ((Number(p.price) || 0) <= 0) {
+    showToast(`Cannot sell "${p.name}": selling price is ₱0.00. Ask Administrator to set a valid price first.`, 'error');
+    return;
+  }
 
   const bInfo = posGetSizeBatchInfo(p, size);
   const sizeId = bInfo.sizeId;
@@ -1026,6 +1030,10 @@ function submitPosDiscountSelection(productId, size, useDiscount) {
 function addPosSizeBatchToCart(productId, size = 1, applyNearExpiryDiscount = false, addQty = 1, selectedBatchId = null) {
   const p = productById(productId);
   if (!p || p.stock <= 0) { showToast('This product is out of stock.', 'error'); return false; }
+  if ((Number(p.price) || 0) <= 0) {
+    showToast(`Cannot sell "${p.name}": selling price is ₱0.00. Ask Administrator to set a valid price first.`, 'error');
+    return false;
+  }
 
   const qtyToAdd = Math.max(1, parseInt(addQty, 10) || 1);
   const bInfo = posGetSizeBatchInfo(p, size);
@@ -1061,6 +1069,10 @@ function addPosSizeBatchToCart(productId, size = 1, applyNearExpiryDiscount = fa
   let nearExpiryDiscountPct = 0;
   let nearExpiryDiscountAmount = 0;
   const originalUnitPrice = bInfo.bestOriginalPrice;
+  if (!(Number(originalUnitPrice) > 0) || !(Number(p.price) > 0)) {
+    showToast(`Cannot add "${p.name}" because its retail price is ₱0.00. Please set a valid price in Inventory first.`, 'error');
+    return false;
+  }
   let unitPriceForSize = originalUnitPrice;
   let chosenBatchId = null;
   let chosenBatchNumber = null;
@@ -1171,7 +1183,7 @@ function addPosSizeBatchToCart(productId, size = 1, applyNearExpiryDiscount = fa
 function changeCartQty(index, delta) {
   const line = cart[index];
   if (!line) return;
-  const next = (Number(line.qty) || 0) + delta;
+  const next = Number(((Number(line.qty) || 0) + delta).toFixed(2));
   if (next <= 0) {
     cart.splice(index, 1);
     refreshCartUI();
@@ -1263,7 +1275,9 @@ function handleCartQtyInput(index, input) {
         const reqLiters = Number((newQty * ((Number(comp.percentage) || 0) / 100)).toFixed(2));
         if (p) {
           const reserved = getCartReservedLitersForProduct(p, index);
-          const avail = (typeof productMixAvailableStock === 'function' ? productMixAvailableStock(p) : p.stock) - reserved.total;
+          const avail = (typeof productMixNonExpiredAvailableStock === 'function'
+            ? productMixNonExpiredAvailableStock(p)
+            : (typeof productMixAvailableStock === 'function' ? productMixAvailableStock(p) : p.stock)) - reserved.total;
           if (avail + 1e-6 < reqLiters) {
             showToast(`Not enough stock for mix ingredient "${comp.name}" (${formatLiters(Math.max(0, avail))} available).`, 'error');
             input.value = line.qty;
@@ -1280,20 +1294,32 @@ function handleCartQtyInput(index, input) {
   }
 
   line.qty = newQty;
-  line.lineTotal = (line.type === 'colormix' && line.baseGrandTotal && line.baseLiters)
-    ? Number(((line.qty / line.baseLiters) * line.baseGrandTotal).toFixed(2))
-    : Number((line.qty * line.unitPrice).toFixed(2));
+  if (line.type === 'colormix' && line.baseGrandTotal && line.baseLiters) {
+    const svcFee = Number(line.priceBreakdown && line.priceBreakdown.serviceFee !== undefined ? line.priceBreakdown.serviceFee : 50);
+    const otherChg = Number(line.priceBreakdown && line.priceBreakdown.otherCharges !== undefined ? line.priceBreakdown.otherCharges : 0);
+    const baseMaterial = Math.max(0, Number(line.baseGrandTotal) - svcFee - otherChg);
+    const scaledMaterial = Number(((line.qty / line.baseLiters) * baseMaterial).toFixed(2));
+    line.lineTotal = Number((scaledMaterial + svcFee + otherChg).toFixed(2));
+    line.unitPrice = Number((line.lineTotal / Math.max(0.01, line.qty)).toFixed(2));
+  } else {
+    line.lineTotal = Number((line.qty * line.unitPrice).toFixed(2));
+  }
   updateCartLineDOM(index);
 }
 
 function handleCartQtyChange(index, input) {
   const line = cart[index];
   if (!line) return;
+  const isMix = line.type === 'colormix';
+  const minQty = isMix ? 0.5 : 1;
   const raw = input.value.trim();
-  let newQty = parseInt(raw, 10);
-  if (isNaN(newQty) || newQty < 1) {
-    newQty = 1;
-    input.value = 1;
+  let newQty = isMix ? parseFloat(raw) : parseInt(raw, 10);
+  if (isNaN(newQty) || newQty < minQty) {
+    newQty = minQty;
+    input.value = minQty;
+  } else if (isMix) {
+    newQty = Number(newQty.toFixed(2));
+    input.value = newQty;
   }
   setCartQty(index, newQty);
 }
@@ -1433,7 +1459,9 @@ function setCartQty(index, rawVal) {
         const reqLiters = Number((newQty * ((Number(comp.percentage) || 0) / 100)).toFixed(2));
         if (p) {
           const reserved = getCartReservedLitersForProduct(p, index);
-          const avail = (typeof productMixAvailableStock === 'function' ? productMixAvailableStock(p) : p.stock) - reserved.total;
+          const avail = (typeof productMixNonExpiredAvailableStock === 'function'
+            ? productMixNonExpiredAvailableStock(p)
+            : (typeof productMixAvailableStock === 'function' ? productMixAvailableStock(p) : p.stock)) - reserved.total;
           if (avail + 1e-6 < reqLiters) {
             showToast(`Not enough stock for mix ingredient "${comp.name}" (need ${formatStock(reqLiters)}L, available ${formatStock(Math.max(0, avail))}L).`, 'error');
             refreshCartUI();
@@ -1448,9 +1476,16 @@ function setCartQty(index, rawVal) {
     }
     line.qty = newQty;
     line.liters = newQty;
-    line.lineTotal = (line.baseGrandTotal && line.baseLiters)
-      ? Number(((line.qty / line.baseLiters) * line.baseGrandTotal).toFixed(2))
-      : Number((line.qty * line.unitPrice).toFixed(2));
+    if (line.baseGrandTotal && line.baseLiters) {
+      const svcFee = Number(line.priceBreakdown && line.priceBreakdown.serviceFee !== undefined ? line.priceBreakdown.serviceFee : 50);
+      const otherChg = Number(line.priceBreakdown && line.priceBreakdown.otherCharges !== undefined ? line.priceBreakdown.otherCharges : 0);
+      const baseMaterial = Math.max(0, Number(line.baseGrandTotal) - svcFee - otherChg);
+      const scaledMaterial = Number(((line.qty / line.baseLiters) * baseMaterial).toFixed(2));
+      line.lineTotal = Number((scaledMaterial + svcFee + otherChg).toFixed(2));
+      line.unitPrice = Number((line.lineTotal / Math.max(0.01, line.qty)).toFixed(2));
+    } else {
+      line.lineTotal = Number((line.qty * line.unitPrice).toFixed(2));
+    }
   }
   refreshCartUI();
 }
@@ -1539,12 +1574,12 @@ function cartLinesHtml() {
         <span>${peso(c.lineTotal)}</span>
       </div>
       <div class="qty-control">
-        <button type="button" onclick="changeCartQty(${i},-1)" title="Decrease quantity">−</button>
-        <input type="number" min="1" step="1" id="cart-qty-input-${i}" value="${c.qty}" 
+        <button type="button" onclick="changeCartQty(${i},${isMix ? -0.5 : -1})" title="Decrease quantity">−</button>
+        <input type="number" min="${isMix ? '0.5' : '1'}" step="${isMix ? '0.5' : '1'}" id="cart-qty-input-${i}" value="${c.qty}" 
                onchange="handleCartQtyChange(${i}, this)"
                oninput="handleCartQtyInput(${i}, this)"
                onblur="handleCartQtyBlur(${i}, this)">
-        <button type="button" onclick="changeCartQty(${i},1)" title="Increase quantity">+</button>
+        <button type="button" onclick="changeCartQty(${i},${isMix ? 0.5 : 1})" title="Increase quantity">+</button>
       </div>
       <button class="btn ghost small" onclick="removeCartLine(${i})" style="color:var(--danger); font-size:14px; padding:3px 6px;" title="Remove item">✕</button>
     </div>`;
@@ -2015,18 +2050,26 @@ function calculateSaleVat(items, discountAmount = 0, customVatSettings = null) {
 
 function cartTotals() {
   const grossSubtotal = Number(cart.reduce((t, c) => t + (Number(c.lineTotal) || 0), 0).toFixed(2));
+  // Exclude items that already have a Near-Expiry Batch Discount so bulk promo never stacks on top
+  const promoEligibleSubtotal = Number(
+    cart.reduce((t, c) => t + ((Number(c.nearExpiryDiscountPct) > 0) ? 0 : (Number(c.lineTotal) || 0)), 0).toFixed(2)
+  );
+  const hasNearExpiryDiscountedItems = cart.some(c => Number(c.nearExpiryDiscountPct) > 0);
+
   const promo = getPromoDiscountSettings();
-  const isEligible = promo.enabled && promo.discountPct > 0 && grossSubtotal >= promo.minAmount;
+  const isEligible = promo.enabled && promo.discountPct > 0 && promoEligibleSubtotal >= promo.minAmount;
   const discountPct = isEligible ? promo.discountPct : 0;
-  const discountAmount = isEligible ? Number((grossSubtotal * (promo.discountPct / 100)).toFixed(2)) : 0;
+  const discountAmount = isEligible ? Number((promoEligibleSubtotal * (promo.discountPct / 100)).toFixed(2)) : 0;
   const neededToQualify = (promo.enabled && promo.discountPct > 0 && !isEligible)
-    ? Number(Math.max(0, promo.minAmount - grossSubtotal).toFixed(2))
+    ? Number(Math.max(0, promo.minAmount - promoEligibleSubtotal).toFixed(2))
     : 0;
 
   const vatCalc = calculateSaleVat(cart, discountAmount);
 
   return {
     subtotal: vatCalc.subtotal,
+    promoEligibleSubtotal,
+    hasNearExpiryDiscountedItems,
     discountPct,
     discountPercentage: discountPct,
     discountAmount: vatCalc.discountAmount,
@@ -2061,17 +2104,19 @@ function cartTotalsHtml() {
     </div>
     ${t.isEligible ? `
       <div class="cart-total-row pos-discount-row">
-        <span>Discount (${t.discountPct}%)</span>
+        <span>Discount (${t.discountPct}%${t.hasNearExpiryDiscountedItems ? ' on regular items' : ''})</span>
         <span style="font-weight:700; font-family:'Space Grotesk',monospace;">-${peso(t.discountAmount)}</span>
       </div>
       <div class="pos-promo-indicator qualified">
         <span>🎉</span>
-        <span>${t.discountPct}% Discount Applied!</span>
+        <span>${t.discountPct}% Discount Applied${t.hasNearExpiryDiscountedItems ? ' (near-expiry items excluded)' : '!'}</span>
       </div>
     ` : (hasItems && t.promoEnabled && t.promoDiscountPct > 0 ? `
       <div class="pos-promo-indicator hint">
         <span>💡</span>
-        <span>Add ${peso(t.neededToQualify)} more to qualify for a ${t.promoDiscountPct}% discount.</span>
+        <span>${t.hasNearExpiryDiscountedItems && t.promoEligibleSubtotal <= 0
+          ? `Near-expiry discounted items are excluded from the ${t.promoDiscountPct}% bulk promo (no discount stacking).`
+          : `Add ${peso(t.neededToQualify)} more in regular-priced items to qualify for a ${t.promoDiscountPct}% discount.`}</span>
       </div>
     ` : '')}
 
@@ -3053,7 +3098,9 @@ async function completeSale() {
     for (const pid of Object.keys(prodRefMap)) {
       const p = prodRefMap[pid];
       const combinedReq = Number(((reqSealedLitersByProd[pid] || 0) + (reqMixLitersByProd[pid] || 0)).toFixed(2));
-      const totalAvail = Number(productMixAvailableStock(p).toFixed(2));
+      const totalAvail = Number((typeof productMixNonExpiredAvailableStock === 'function'
+        ? productMixNonExpiredAvailableStock(p)
+        : productMixAvailableStock(p)).toFixed(2));
       if (combinedReq > totalAvail + 1e-6) {
         showToast(`Not enough combined stock for "${p.name}" (${formatStock(totalAvail)}L available, need ${formatStock(combinedReq)}L across sale & color mix).`, 'error');
         return;
@@ -3248,37 +3295,80 @@ async function completeSale() {
           note: `Formula: ${formulaSummary} · Receipt: ${receiptNo}`,
           staffName: (currentUser && currentUser.name) || 'Cashier'
         });
+      }
+    });
 
+    let txJson = null;
+    try {
+      const txResp = await fetch('api/transactions.php?action=pos_checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sale })
+      });
+      txJson = await txResp.json().catch(() => ({}));
+      if (!txResp.ok || !txJson.success) {
+        throw new Error(txJson.error || 'Checkout transaction failed on server.');
+      }
+    } catch (txErr) {
+      db.sales.length = prevSalesLen;
+      db.movements.length = prevMovesLen;
+      prodSnapshots.forEach(snap => {
+        snap.p.stock = snap.stock;
+        snap.p.canStock = snap.canStock;
+        snap.p.openedStock = snap.openedStock;
+        snap.p.openedCanSize = snap.openedCanSize;
+        snap.p.openedBySize = snap.openedBySize;
+        if (typeof syncProductVariants === 'function') syncProductVariants(snap.p);
+      });
+      showToast(txErr.message || 'Failed to complete sale.', 'error');
+      return;
+    }
+
+    // Apply authoritative server-computed receipt number and totals
+    if (txJson.receiptNo) sale.receiptNo = txJson.receiptNo;
+    if (txJson.total !== undefined) sale.total = Number(txJson.total);
+    if (txJson.subtotal !== undefined) sale.subtotal = Number(txJson.subtotal);
+    if (txJson.discountAmount !== undefined) sale.discountAmount = Number(txJson.discountAmount);
+    if (txJson.vatAmount !== undefined) sale.vatAmount = Number(txJson.vatAmount);
+    if (txJson.vatableSales !== undefined) sale.vatableSales = Number(txJson.vatableSales);
+    if (txJson.changeAmount !== undefined) sale.changeAmount = Number(txJson.changeAmount);
+    const finalReceiptNo = sale.receiptNo || receiptNo;
+
+    // Log audit entries ONLY after transactional server commit succeeds
+    items.forEach(c => {
+      if (c.type === 'colormix') {
+        const fSummary = c.components && c.components.length
+          ? c.components.map(cp => `${cp.percentage}% ${cp.name}`).join(' + ')
+          : (c.note || '');
         logAudit(
           'MIXING_COMPLETE',
           c.colorName || 'Custom Color Mix',
-          `Completed ${c.liters}L "${c.colorName}" (${c.detectedColorName || 'Custom'}) color mix for POS Sale ${receiptNo} — Formula: ${formulaSummary} (${peso(c.lineTotal)})`,
+          `Completed ${c.liters}L "${c.colorName}" (${c.detectedColorName || 'Custom'}) color mix for POS Sale ${finalReceiptNo} — Formula: ${fSummary} (${peso(c.lineTotal)})`,
           {
             entityName: c.colorName || 'Custom Color Mix',
             fieldChanged: 'Paint Color Mix Formula',
-            oldValue: formulaSummary || 'Base Pigments',
+            oldValue: fSummary || 'Base Pigments',
             newValue: `${c.liters}L ${c.colorName} [${c.hexColor || ''}] (${peso(c.lineTotal)})`,
-            referenceNo: receiptNo,
+            referenceNo: finalReceiptNo,
             reason: c.note || c.baseType || 'POS Custom Paint Mixing'
           }
         );
       }
     });
-
     const itemSummaryText = items.map(i => `${i.qty}${i.size ? '×' + i.size + 'L' : 'L'} ${i.name}${i.colorName ? ' (' + i.colorName + ')' : ''}`).join(', ');
     logAudit(
       'SALE',
-      `Receipt ${receiptNo}`,
-      `Completed sale ${receiptNo}${customerName ? ' for ' + customerName : ''} — ${items.length} item(s): ${itemSummaryText} · Total: ${peso(sale.total)}`,
+      `Receipt ${finalReceiptNo}`,
+      `Completed sale ${finalReceiptNo}${customerName ? ' for ' + customerName : ''} — ${items.length} item(s): ${itemSummaryText} · Total: ${peso(sale.total)}`,
       {
-        entityName: `Receipt ${receiptNo}`,
+        entityName: `Receipt ${finalReceiptNo}`,
         fieldChanged: 'POS Sales Checkout',
         oldValue: saleStockChanges.length ? saleStockChanges.map(sc => `${sc.field}: ${sc.oldValue}`).join(' · ') : `Subtotal: ${peso(sale.subtotal)}`,
         newValue: `${peso(sale.total)} — ${items.length} item(s)`,
-        referenceNo: receiptNo,
+        referenceNo: finalReceiptNo,
         reason: 'POS Sale Checkout',
         meta: {
-          receiptNo,
+          receiptNo: finalReceiptNo,
           customerName: customerName || null,
           cashierName: sale.cashierName,
           subtotal: sale.subtotal,
@@ -3291,32 +3381,20 @@ async function completeSale() {
 
     logAudit(
       'RECEIPT_GENERATED',
-      `Receipt ${receiptNo}`,
-      `Official Receipt ${receiptNo} generated — Total: ${peso(sale.total)}`,
+      `Receipt ${finalReceiptNo}`,
+      `Official Receipt ${finalReceiptNo} generated — Total: ${peso(sale.total)}`,
       {
-        entityName: `Receipt ${receiptNo}`,
+        entityName: `Receipt ${finalReceiptNo}`,
         fieldChanged: 'Official Sales Receipt',
         oldValue: 'Pending Checkout',
-        newValue: `Receipt ${receiptNo} Issued (${peso(sale.total)})`,
-        referenceNo: receiptNo,
+        newValue: `Receipt ${finalReceiptNo} Issued (${peso(sale.total)})`,
+        referenceNo: finalReceiptNo,
         reason: 'Issued via POS'
       }
     );
 
-    const saved = await saveDB();
-    if (!saved) {
-      db.sales.length = prevSalesLen;
-      db.movements.length = prevMovesLen;
-      prodSnapshots.forEach(snap => {
-        snap.p.stock = snap.stock;
-        snap.p.canStock = snap.canStock;
-        snap.p.openedStock = snap.openedStock;
-        snap.p.openedCanSize = snap.openedCanSize;
-        snap.p.openedBySize = snap.openedBySize;
-        if (typeof syncProductVariants === 'function') syncProductVariants(snap.p);
-      });
-      return;
-    }
+    if (typeof loadDB === 'function') await loadDB();
+    const committedSale = (db.sales || []).find(s => s.id === sale.id) || sale;
     cart = [];
     posLoadBatchStatus(true);
     currentSaleCustomerName = '';
@@ -3324,7 +3402,7 @@ async function completeSale() {
     if (custInp) custInp.value = '';
     renderPage();
     if (typeof updateNavBadges === 'function') updateNavBadges();
-    showReceipt(sale);
+    showReceipt(committedSale);
   } finally {
     window._isCompletingSale = false;
     const btn = document.getElementById('btn-complete-sale');
@@ -3431,7 +3509,7 @@ function showReceipt(sale) {
       <div class="pos-receipt-sub" style="font-size:11px; margin-top:2px;">Contact Number: ${escapeHtml(BUSINESS_CONTACT_NUMBER)}</div>
       <div class="pos-receipt-sub" style="font-size:11px; margin-top:4px; font-weight:600;">Official Sales Receipt</div>
       <div class="pos-receipt-badge">Receipt #: <span>${escapeHtml(receiptNo)}</span></div>
-      ${status === 'voided' ? `
+      ${(typeof normalizeSaleStatus === 'function' ? normalizeSaleStatus(status) : String(status || '').toLowerCase()) === 'voided' ? `
         <div style="background:var(--danger-bg); border:2px dashed #C1443D; border-radius:8px; padding:10px 14px; margin-top:10px; text-align:center;">
           <div style="font-size:16px; font-weight:800; color:var(--danger-text); letter-spacing:0.05em;">*** TRANSACTION VOIDED ***</div>
           <div style="font-size:11.5px; color:var(--danger-text); margin-top:3px;">
@@ -3677,7 +3755,7 @@ function buildThermalReceiptHtml(sale) {
         <div class="th-sub" style="font-size:9.5px; margin-bottom:2px;">Contact Number: ${escapeHtml(BUSINESS_CONTACT_NUMBER)}</div>
         <div class="th-sub" style="font-weight:700;">Official Sales Receipt</div>
         <div class="th-receipt-no">${escapeHtml(receiptNo)}</div>
-        ${status === 'voided' ? `<div class="th-void">*** TRANSACTION VOIDED ***</div>` : ''}
+        ${(typeof normalizeSaleStatus === 'function' ? normalizeSaleStatus(status) : String(status || '').toLowerCase()) === 'voided' ? `<div class="th-void">*** TRANSACTION VOIDED ***</div>` : ''}
       </div>
       <div class="th-divider"></div>
       <div class="th-meta-line">Date: ${formatDateTime(sale.date)}</div>

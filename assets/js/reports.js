@@ -20,15 +20,18 @@ function calculateCurrentInventoryValue() {
     if (p.status === 'discontinued') return;
     if (Array.isArray(p.sizesData) && p.sizesData.length > 0) {
       p.sizesData.forEach(sz => {
-        const cans = Number(sz.sealedQuantity || 0);
-        const pricePerCan = Number(sz.pricePerCan || ((Number(sz.pricePerLiter) || Number(p.price) || 0) * (Number(sz.containerSize) || 1)));
+        const sizeL = Number(sz.containerSize || 1);
+        const physicalCans = Number(sz.sealedQuantity || 0);
+        const expiredCans = typeof productExpiredCanCount === 'function' ? productExpiredCanCount(p, sizeL) : Number(sz.expiredQuantity || 0);
+        const cans = Math.max(0, physicalCans - expiredCans);
+        const pricePerCan = Number(sz.pricePerCan || ((Number(sz.pricePerLiter) || Number(p.price) || 0) * sizeL));
         totalVal += cans * pricePerCan;
       });
       const openedLitres = Number(p.openedStock || 0);
       const pricePerL = Number(p.price || 0);
       totalVal += openedLitres * pricePerL;
     } else {
-      const stock = Number(p.stock || 0);
+      const stock = typeof productSellableStock === 'function' ? productSellableStock(p) : Number(p.stock || 0);
       const price = Number(p.price || 0);
       totalVal += stock * price;
     }
@@ -608,22 +611,22 @@ function openMixingDetailsModal(mixId) {
         `}
       </div>
       ${(() => {
-        if (!rec.receiptRef || typeof renderCustomColorMixReceiptBreakdownHtml !== 'function') return '';
-        const linkedSale = (db.sales || []).find(s => s.receiptNo === rec.receiptRef || (typeof getReceiptNo === 'function' && getReceiptNo(s) === rec.receiptRef));
-        if (!linkedSale || !Array.isArray(linkedSale.items)) return '';
-        const mixItem = linkedSale.items.find(it => it.type === 'colormix' && it.colorName && it.colorName.toLowerCase() === String(rec.colorName || '').toLowerCase())
-          || linkedSale.items.find(it => it.type === 'colormix');
-        if (!mixItem) return '';
-        const bdHtml = renderCustomColorMixReceiptBreakdownHtml(mixItem, { mode: 'compact' });
-        if (!bdHtml) return '';
-        return `
+      if (!rec.receiptRef || typeof renderCustomColorMixReceiptBreakdownHtml !== 'function') return '';
+      const linkedSale = (db.sales || []).find(s => s.receiptNo === rec.receiptRef || (typeof getReceiptNo === 'function' && getReceiptNo(s) === rec.receiptRef));
+      if (!linkedSale || !Array.isArray(linkedSale.items)) return '';
+      const mixItem = linkedSale.items.find(it => it.type === 'colormix' && it.colorName && it.colorName.toLowerCase() === String(rec.colorName || '').toLowerCase())
+        || linkedSale.items.find(it => it.type === 'colormix');
+      if (!mixItem) return '';
+      const bdHtml = renderCustomColorMixReceiptBreakdownHtml(mixItem, { mode: 'compact' });
+      if (!bdHtml) return '';
+      return `
           <div class="mixing-modal-section-title" style="margin-top:18px;">
             <span>Transaction Pricing Breakdown</span>
             <span class="muted small" style="font-weight:400; text-transform:none; margin-left:8px;">Permanent snapshot from Receipt ${escapeHtml(rec.receiptRef)}</span>
           </div>
           ${bdHtml}
         `;
-      })()}
+    })()}
     </div>
   `;
 
@@ -874,13 +877,16 @@ function getLowStockReportData() {
 
     const affectedSizes = [];
     sizes.forEach(s => {
-      const count = typeof productCanCount === 'function' ? productCanCount(p, s) : Number((p.canStock && p.canStock[s]) || 0);
+      const count = typeof productSellableCanCount === 'function'
+        ? productSellableCanCount(p, s)
+        : (typeof productCanCount === 'function' ? productCanCount(p, s) : Number((p.canStock && p.canStock[s]) || 0));
+      const expiredCount = typeof productExpiredCanCount === 'function' ? productExpiredCanCount(p, s) : 0;
       const thresh = typeof productSizeThreshold === 'function' ? productSizeThreshold(p, s) : Number((p.thresholdBySize && p.thresholdBySize[s]) || 5);
 
-      // Stock Status Calculation per container size:
-      // - OUT OF STOCK: Available stock is zero.
-      // - LOW STOCK: Available stock is greater than zero but at or below configured minimum threshold.
-      // - GOOD STOCK: Available stock is above configured minimum threshold.
+      // Stock Status Calculation per container size (based on sellable, non-expired units):
+      // - OUT OF STOCK: Available sellable stock is zero.
+      // - LOW STOCK: Available sellable stock is greater than zero but at or below configured minimum threshold.
+      // - GOOD STOCK: Available sellable stock is above configured minimum threshold.
       let st = 'ok';
       if (count <= 0) {
         st = 'out';
@@ -902,6 +908,7 @@ function getLowStockReportData() {
         affectedSizes.push({
           size: s,
           count,
+          expiredCount,
           threshold: thresh,
           stockVol,
           threshVol,
@@ -933,6 +940,65 @@ function getLowStockReportData() {
 }
 
 
+function exportSalesReportCsv() {
+  if (!currentUser || currentUser.role !== 'admin') {
+    showToast('Only Administrators can export sales reports.', 'error');
+    return;
+  }
+  const from = reportDateFrom || '';
+  const to = reportDateTo || '';
+  const filteredSales = (db.sales || []).filter(s => {
+    if (!s) return false;
+    const d = String(s.date || '').slice(0, 10);
+    if (from && d < from) return false;
+    if (to && d > to) return false;
+    return true;
+  }).sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  if (!filteredSales.length) {
+    showToast('No sales transactions found in the selected date range.', 'warn');
+    return;
+  }
+
+  const csvCell = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  const headers = ['Receipt No', 'Date', 'Cashier', 'Customer', 'Status', 'Subtotal', 'Discount', 'VATable Sales', 'VAT Amount', 'Total', 'Refund Total', 'Net Revenue'];
+  const rows = [headers.map(csvCell).join(',')];
+
+  filteredSales.forEach(s => {
+    const st = String(s.status || 'completed');
+    const isVoid = ['voided', 'void', 'cancelled', 'canceled'].includes(st.trim().toLowerCase());
+    const tot = Number(s.total || 0);
+    const ref = Number(s.refundTotal || 0);
+    const net = isVoid ? 0 : Number((tot - ref).toFixed(2));
+    rows.push([
+      s.receiptNo || s.receipt_no || s.id,
+      s.date || '',
+      s.cashierName || '',
+      s.customerName || 'Walk-in',
+      st,
+      Number(s.subtotal || 0).toFixed(2),
+      Number(s.discountAmount || 0).toFixed(2),
+      Number(s.vatableSales || s.vatable_sales || 0).toFixed(2),
+      Number(s.vatAmount || s.vat_amount || 0).toFixed(2),
+      tot.toFixed(2),
+      ref.toFixed(2),
+      net.toFixed(2)
+    ].map(csvCell).join(','));
+  });
+
+  const blob = new Blob(["\uFEFF" + rows.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const rangeTag = (from || 'all') + '_to_' + (to || 'present');
+  a.href = url;
+  a.download = `MRGR_Sales_Report_${rangeTag}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast(`Exported ${filteredSales.length} sales record(s) to CSV.`, 'ok');
+}
+
 function reportsPage() {
   const curY = getCurrentYear();
   const availableYears = getAvailableRecordYears();
@@ -958,6 +1024,8 @@ function reportsPage() {
       </div>
       <div class="spacer"></div>
       <div class="row" style="gap:6px;">
+        ${isAdmin ? `<button type="button" class="btn secondary small" onclick="exportSalesReportCsv()" title="Download filtered sales as CSV spreadsheet">📥 Export CSV</button>` : ''}
+        <button type="button" class="btn secondary small" onclick="window.print()" title="Print current report">🖨️ Print</button>
         <button type="button" class="btn ghost small" onclick="resetAllReportFilters()" title="Reset date filters to current year">Reset All</button>
         <button type="button" class="btn secondary small" onclick="renderReportBody()">↻ Refresh</button>
       </div>
@@ -1188,10 +1256,18 @@ function getTopProductsData(sales) {
     if (!sale) return;
     const rawSt = String(sale.status || 'completed').trim().toLowerCase();
     if (rawSt === 'voided' || rawSt === 'void' || rawSt === 'cancelled' || rawSt === 'canceled') return;
+    const rawSaleTot = Number(sale.total || 0);
+    const refTot = Number(sale.refundTotal || 0);
+    const effRefTot = (rawSt === 'refunded' && refTot === 0 && (!sale.returns || !sale.returns.length)) ? rawSaleTot : refTot;
+    if (rawSt === 'refunded' && (rawSaleTot - effRefTot) <= 0.0001) return;
     const saleId = sale.id || sale.receiptNo || ('s_' + sale.date);
     (sale.items || []).forEach(item => {
       if (item.type && item.type !== 'product') return;
       if (!item.name && !item.productId) return;
+      const origQty = Number(item.qty) || 0;
+      const retQty = Number(item.returnedQty) || 0;
+      const netItemQty = Math.max(0, origQty - retQty);
+      if (netItemQty <= 0) return;
 
       allSalesWithProducts.add(saleId);
 
@@ -1242,9 +1318,11 @@ function getTopProductsData(sales) {
       const variantObj = p ? productSizeVariantBySize(p, sizeVal) : null;
       const sizeId = item.sizeId || (variantObj ? variantObj.sizeId : null);
 
-      // Quantities, lineTotal, unitPrice (Preserving historical transaction prices)
-      const qty = Number(item.qty) || 0;
-      const lineTotal = Number(item.lineTotal !== undefined ? item.lineTotal : (qty * (Number(item.unitPrice) || 0))) || 0;
+      // Quantities, lineTotal, unitPrice (Net of returned quantities, preserving historical transaction prices)
+      const origQtyVal = Number(item.qty) || 0;
+      const qty = Math.max(0, origQtyVal - (Number(item.returnedQty) || 0));
+      const rawLineTotal = Number(item.lineTotal !== undefined ? item.lineTotal : (origQtyVal * (Number(item.unitPrice) || 0))) || 0;
+      const lineTotal = origQtyVal > 0 ? Number((rawLineTotal * (qty / origQtyVal)).toFixed(2)) : 0;
       const unitPrice = (item.unitPrice !== undefined && item.unitPrice !== null && !isNaN(Number(item.unitPrice)))
         ? Number(item.unitPrice)
         : (qty > 0 ? Number((lineTotal / qty).toFixed(2)) : 0);
@@ -1938,8 +2016,8 @@ function computeSalesHistorySummary(salesList) {
       let lineLiters = 0;
 
       if (isMix) {
-        const litersPerUnit = Number(lineItem.liters || lineItem.size || 1) || 1;
-        lineLiters = Number((netQty * litersPerUnit).toFixed(2));
+        // For colormix items, qty is already stored in liters (e.g. 4L mix has qty=4, liters=4)
+        lineLiters = Number(netQty.toFixed(2));
         sizeKey = 'colormix';
         sizeLabel = 'Custom Mix';
         sizeNum = 0;
@@ -2298,7 +2376,7 @@ function renderSalesHistoryTableRowsHtml(pagedSales) {
     const status = s.status || 'completed';
     const rawSt = String(status).trim().toLowerCase();
     const isVoidOrCancel = (rawSt === 'voided' || rawSt === 'void' || rawSt === 'cancelled' || rawSt === 'canceled');
-    const returnedVal = typeof getSaleReturnedValue === 'function' ? getSaleReturnedValue(s) : Number(s.refundTotal || 0);
+    const returnedVal = typeof getSaleReturnedValue === 'function' ? getSaleReturnedValue(s) : Math.max(0, Number(s.refundTotal || 0));
     const exchangeTotal = typeof getSaleExchangeTotal === 'function' ? getSaleExchangeTotal(s) : 0;
     const refundTotal = Number(s.refundTotal || 0);
     const netTotal = Number((s.total - refundTotal).toFixed(2));
@@ -2314,22 +2392,22 @@ function renderSalesHistoryTableRowsHtml(pagedSales) {
         <td>
           <div>${itemCount} item${itemCount === 1 ? '' : 's'}</div>
           ${(() => {
-            const mixes = (s.items || []).filter(it => it && it.type === 'colormix');
-            if (!mixes.length) return '';
-            return mixes.slice(0, 2).map(mx => `
+        const mixes = (s.items || []).filter(it => it && it.type === 'colormix');
+        if (!mixes.length) return '';
+        return mixes.slice(0, 2).map(mx => `
               <div class="muted small" style="display:flex; align-items:center; gap:4px; font-size:11px; margin-top:2px;">
                 <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${escapeAttr(mx.hexColor || '#1F6F6B')}; border:1px solid rgba(0,0,0,0.2); flex-shrink:0;"></span>
                 <span>Mix: <b>${escapeHtml(mx.colorName || 'Custom')}</b> (${formatStock(mx.liters || mx.qty || 1)}L)</span>
               </div>
             `).join('') + (mixes.length > 2 ? `<div class="muted small" style="font-size:10.5px;">+${mixes.length - 2} more mix</div>` : '');
-          })()}
+      })()}
         </td>
         <td class="center">${saleStatusBadge(status)}</td>
         <td class="right">
           ${isVoidOrCancel
         ? `<div><strong style="font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif; font-size:13.5px; text-decoration:line-through; color:var(--ink-soft);">${peso(s.total)}</strong></div>
                <div class="muted small" style="color:var(--danger); font-size:11px;">Excluded (${escapeHtml(status)})</div>`
-        : ((returnedVal > 0 || refundTotal > 0)
+        : ((returnedVal > 0 || refundTotal !== 0)
           ? `<div><strong style="font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif; font-size:13.5px;">${peso(netTotal)}</strong></div>
                  <div class="muted small" style="color:${exchangeTotal > 0 ? 'var(--teal)' : 'var(--danger)'}; font-size:11px;">
                    ${exchangeTotal > 0
@@ -2337,7 +2415,7 @@ function renderSalesHistoryTableRowsHtml(pagedSales) {
             : `Returned: -${peso(returnedVal || refundTotal)}`}
                  </div>`
           : `<div><strong style="font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif; font-size:13.5px;">${peso(s.total)}</strong></div>
-             ${(Number(s.discountAmount || s.discount || 0) > 0) ? `<div class="muted small" style="color:var(--teal-text); font-size:11px; font-weight:600;">10% Disc: -${peso(Number(s.discountAmount || s.discount || 0))}</div>` : ''}`)}
+             ${(Number(s.discountAmount || s.discount || 0) > 0) ? `<div class="muted small" style="color:var(--teal-text); font-size:11px; font-weight:600;">${Number(s.discountPct || 0) > 0 ? `${Number(s.discountPct)}% Disc:` : 'Promo Disc:'} -${peso(Number(s.discountAmount || s.discount || 0))}</div>` : ''}`)}
         </td>
         <td class="right" style="white-space:nowrap;">
           <div class="row wrap" style="justify-content:flex-end; gap:6px;">
@@ -2438,19 +2516,11 @@ function renderReportsSalesHistorySectionHtml(salesList, from, to) {
 
 
 function renderOverallReportSummaryCardsHtml(from, to, sales, moves) {
-  const validSalesForRev = sales.filter(s => {
-    const st = String((s && s.status) || 'completed').trim().toLowerCase();
-    return st !== 'voided' && st !== 'void' && st !== 'cancelled' && st !== 'canceled';
-  });
-  const grossSales = validSalesForRev.reduce((t, s) => t + Number(s.subtotal !== undefined ? s.subtotal : (s.total || 0)), 0);
-  const totalDiscounts = validSalesForRev.reduce((t, s) => t + Number(s.discountAmount !== undefined ? s.discountAmount : (s.discount || 0)), 0);
-  const periodRefunds = validSalesForRev.reduce((t, s) => {
-    const st = String(s.status || 'completed').trim().toLowerCase();
-    const ref = Number(s.refundTotal || 0);
-    const effRef = (st === 'refunded' && ref === 0 && (!s.returns || !s.returns.length)) ? Number(s.total || 0) : ref;
-    return t + effRef;
-  }, 0);
-  const netSales = Number((validSalesForRev.reduce((t, s) => t + Number(s.total || 0), 0) - periodRefunds).toFixed(2));
+  const salesSum = computeSalesHistorySummary(sales);
+  const grossSales = salesSum.grossSales;
+  const totalDiscounts = salesSum.totalDiscounts;
+  const netSales = salesSum.netSales;
+  const totalTransactions = salesSum.totalTransactions;
 
   let totalReceivedLitres = 0;
   let totalAdjustedLitres = 0;
@@ -2470,7 +2540,7 @@ function renderOverallReportSummaryCardsHtml(from, to, sales, moves) {
       <div class="stat-card" style="cursor:pointer;" onclick="setReportTab('sales')" title="Click to view sales and revenue reports">
         <div class="label">Total Net Sales</div>
         <div class="value">${peso(netSales)}</div>
-        <div class="sub">Gross: ${peso(grossSales)}${totalDiscounts > 0 ? ` · Disc: -${peso(totalDiscounts)}` : ''} (${validSalesForRev.length} sales)</div>
+        <div class="sub">Gross: ${peso(grossSales)}${totalDiscounts > 0 ? ` · Disc: -${peso(totalDiscounts)}` : ''} (${totalTransactions} sales)</div>
       </div>` : ''}
       <div class="stat-card sage" style="cursor:pointer;" onclick="setReportTab('receiving')" title="Click to view stock receiving deliveries">
         <div class="label">Total Stock Received</div>
@@ -2521,8 +2591,10 @@ function renderInventoryStockReportSectionHtml() {
     const sup = supplierById(p.supplierId);
     if (Array.isArray(p.sizesData) && p.sizesData.length > 0) {
       p.sizesData.forEach(sz => {
-        const cans = Number(sz.sealedQuantity || 0);
         const sizeL = Number(sz.containerSize || 1);
+        const physicalCans = Number(sz.sealedQuantity || 0);
+        const expiredCans = typeof productExpiredCanCount === 'function' ? productExpiredCanCount(p, sizeL) : Number(sz.expiredQuantity || 0);
+        const cans = Math.max(0, physicalCans - expiredCans);
         const ltrs = cans * sizeL;
         const pricePerCan = Number(sz.pricePerCan || ((Number(sz.pricePerLiter) || Number(p.price) || 0) * sizeL));
         const val = cans * pricePerCan;
@@ -2541,6 +2613,7 @@ function renderInventoryStockReportSectionHtml() {
           sizeId: sz.sizeId,
           sizeL,
           cans,
+          expiredCans,
           ltrs,
           pricePerCan,
           val,
@@ -2555,7 +2628,7 @@ function renderInventoryStockReportSectionHtml() {
         totalStockVal += openedLtrs * Number(p.price || 0);
       }
     } else {
-      const cans = Number(p.stock || 0);
+      const cans = typeof productSellableStock === 'function' ? productSellableStock(p) : Number(p.stock || 0);
       const val = cans * Number(p.price || 0);
       const thresh = Number(p.threshold || 5);
       let status = 'In Stock';
@@ -2572,6 +2645,7 @@ function renderInventoryStockReportSectionHtml() {
         sizeId: 'Standard',
         sizeL: 1,
         cans,
+        expiredCans: 0,
         ltrs: cans,
         pricePerCan: Number(p.price || 0),
         val,
@@ -2657,7 +2731,10 @@ function renderInventoryStockReportSectionHtml() {
                   <td style="font-size:12px;">${escapeHtml(p.brand || 'Generic')} · ${escapeHtml(p.type || p.category || 'Paint')}</td>
                   <td style="font-size:12px; color:var(--ink-soft);">${escapeHtml(r.supplierName)}</td>
                   <td style="text-align:center;"><span class="badge ghost small" style="font-weight:600;">${r.sizeL}L</span></td>
-                  <td class="right" style="font-weight:700; font-size:13px;">${r.cans}</td>
+                  <td class="right" style="font-weight:700; font-size:13px;">
+                    ${r.cans}
+                    ${r.expiredCans > 0 ? `<div class="muted small" style="font-size:10.5px; color:var(--danger); font-weight:600;">${r.expiredCans} expired</div>` : ''}
+                  </td>
                   <td class="right" style="font-size:12px; color:var(--ink-soft);">${formatLiters(r.ltrs)}</td>
                   <td class="right" style="font-size:12.5px;">${peso(r.pricePerCan)}</td>
                   <td class="right" style="font-family:'Space Grotesk',monospace; font-weight:700; font-size:13px; color:var(--teal-dark);">${peso(r.val)}</td>
@@ -3037,10 +3114,17 @@ function reportBodyHtml(from, to) {
   const salesTotalByDay = new Map();
   for (let i = 0; i < sales.length; i++) {
     const s = sales[i];
-    if (!s || s.status === 'voided' || s.status === 'refunded') continue;
+    if (!s) continue;
+    const st = String(s.status || 'completed').trim().toLowerCase();
+    if (st === 'voided' || st === 'void' || st === 'cancelled' || st === 'canceled') continue;
+    const rawTotal = Number(s.total || s.subtotal || 0);
+    const ref = Number(s.refundTotal || 0);
+    const effRef = (st === 'refunded' && ref === 0 && (!Array.isArray(s.returns) || !s.returns.length)) ? rawTotal : ref;
+    const saleNet = Number((rawTotal - effRef).toFixed(2));
+    if (st === 'refunded' && saleNet <= 0.0001) continue;
     const iso = (s.date || '').slice(0, 10);
     if (!iso) continue;
-    salesTotalByDay.set(iso, (salesTotalByDay.get(iso) || 0) + (Number(s.total) || 0));
+    salesTotalByDay.set(iso, Number(((salesTotalByDay.get(iso) || 0) + Math.max(0, saleNet)).toFixed(2)));
   }
   while (cur <= end && dayList.length < maxDays) {
     const iso = toLocalISODate(cur);
@@ -3099,7 +3183,7 @@ function reportBodyHtml(from, to) {
     const saleNet = Number((rawTotal - effRef).toFixed(2));
     if (st === 'refunded' && saleNet <= 0.0001) return;
 
-    const ratio = (rawTotal > 0 && effRef > 0) ? Math.max(0, saleNet / rawTotal) : 1;
+    const ratio = (rawTotal > 0 && effRef !== 0) ? Math.max(0, saleNet / rawTotal) : 1;
     totalVatableSales += Number(s.vatableSales || s.vatable_sales || 0) * ratio;
     totalVatAmount += Number(s.vatAmount || s.vat_amount || 0) * ratio;
     totalVatExempt += Number(s.vatExemptSales || s.vat_exempt_sales || 0) * ratio;
@@ -3113,6 +3197,25 @@ function reportBodyHtml(from, to) {
         const unitCost = supplierCostMap.get(`${it.productId}_${sz}`) ?? (supplierCostMap.has(`${it.productId}_perL`) ? supplierCostMap.get(`${it.productId}_perL`) * sz : null);
         if (unitCost !== null && unitCost > 0) {
           estimatedCogs += unitCost * netQty;
+          cogsMatchedItems++;
+        } else {
+          cogsUnmatchedItems++;
+        }
+      } else if (it.type === 'colormix' && Array.isArray(it.components) && it.components.length) {
+        const mixScale = (Number(it.qty) || 0) > 0 ? (netQty / Number(it.qty)) : 1;
+        let mixCost = 0;
+        let matchedAny = false;
+        it.components.forEach(comp => {
+          const cPid = String(comp.productId || comp.product_id || '');
+          const cLiters = (Number(comp.liters) || 0) * mixScale;
+          const perL = cPid ? (supplierCostMap.get(`${cPid}_perL`) ?? supplierCostMap.get(`${cPid}_1`) ?? null) : null;
+          if (perL !== null && perL > 0 && cLiters > 0) {
+            mixCost += perL * cLiters;
+            matchedAny = true;
+          }
+        });
+        if (matchedAny) {
+          estimatedCogs += mixCost;
           cogsMatchedItems++;
         } else {
           cogsUnmatchedItems++;
@@ -3280,6 +3383,7 @@ function reportBodyHtml(from, to) {
                   </td>
                   <td class="right" style="font-weight:600; font-family:'Space Grotesk',sans-serif; vertical-align:middle; ${borderBottom} ${st === 'out' ? 'color:var(--danger);' : 'color:var(--warning-text);'}">
                     ${count} ${count === 1 ? 'unit' : 'units'}
+                    ${entry.expiredCount > 0 ? `<div class="muted small" style="font-size:10.5px; color:var(--danger); font-weight:600;">${entry.expiredCount} expired</div>` : ''}
                   </td>
                   <td class="right" style="font-weight:600; font-family:'Space Grotesk',sans-serif; vertical-align:middle; ${borderBottom} ${st === 'out' ? 'color:var(--danger);' : 'color:var(--warning-text);'}">
                     ${formatLiters(stockVol)}

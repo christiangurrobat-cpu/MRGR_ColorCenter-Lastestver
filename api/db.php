@@ -709,12 +709,14 @@ if ($action === 'sales_history_summary') {
         $types .= 's';
     }
     if ($status !== 'all' && $status !== '') {
-        $where[] = "status = ?";
+        $where[] = "LOWER(status) = LOWER(?)";
         $params[] = $status;
         $types .= 's';
+    } else {
+        $where[] = "LOWER(status) NOT IN ('voided', 'void', 'cancelled', 'canceled')";
     }
     $whereSql = !empty($where) ? ('WHERE ' . implode(' AND ', $where)) : '';
-    $sql = "SELECT COUNT(*) as cnt, COALESCE(SUM(total), 0) as total_sum FROM sales $whereSql";
+    $sql = "SELECT COUNT(*) as cnt, COALESCE(SUM(total - COALESCE(refund_total, 0)), 0) as total_sum FROM sales $whereSql";
     $stmt = $conn->prepare($sql);
     if (!empty($params)) {
         $stmt->bind_param($types, ...$params);
@@ -1120,6 +1122,25 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
         ];
         $vatSettings = $settings['vat_settings'] ?? $defaultVatSettings;
 
+        // Pre-aggregate expired vs sellable batch quantities per size_id so UI & Low-Stock Alerts
+        // evaluate strictly non-expired sellable stock while keeping physical sealed_quantity intact.
+        $batchStatsBySize = [];
+        $bsRes = $conn->query("SELECT size_id,
+                                      COALESCE(SUM(CASE WHEN expiration_date IS NOT NULL AND expiration_date < CURDATE() THEN remaining_qty ELSE 0 END), 0) AS expired_qty,
+                                      COALESCE(SUM(CASE WHEN expiration_date IS NULL OR expiration_date >= CURDATE() THEN remaining_qty ELSE 0 END), 0) AS sellable_qty,
+                                      COUNT(*) AS batch_count
+                               FROM inventory_batches
+                               GROUP BY size_id");
+        if ($bsRes) {
+            while ($bsRow = $bsRes->fetch_assoc()) {
+                $batchStatsBySize[(string)$bsRow['size_id']] = [
+                    'expiredQty' => max(0, (int)$bsRow['expired_qty']),
+                    'sellableQty' => max(0, (int)$bsRow['sellable_qty']),
+                    'batchCount' => (int)$bsRow['batch_count']
+                ];
+            }
+        }
+
         // Load product sizes joined with inventory
         $sizesByProd = [];
         $allProductSizes = [];
@@ -1131,6 +1152,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
         if ($psRes) {
             while ($sRow = $psRes->fetch_assoc()) {
                 $pid = $sRow['product_id'];
+                $sealedQty = (int)($sRow['sealed_quantity'] ?? 0);
+                $bStat = $batchStatsBySize[(string)$sRow['size_id']] ?? null;
+                $expiredQty = $bStat ? min(max(0, $sealedQty), $bStat['expiredQty']) : 0;
+                $sellableQty = max(0, $sealedQty - $expiredQty);
+
                 $variant = [
                     'sizeId' => $sRow['size_id'],
                     'productId' => $pid,
@@ -1140,7 +1166,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
                     'minimumStock' => (int)$sRow['minimum_stock'],
                     'isActive' => (bool)$sRow['is_active'],
                     'inventoryId' => $sRow['inventory_id'] ?? null,
-                    'sealedQuantity' => (int)($sRow['sealed_quantity'] ?? 0),
+                    'sealedQuantity' => $sealedQty,
+                    'expiredQuantity' => $expiredQty,
+                    'sellableQuantity' => $sellableQty,
                     'openedQuantity' => (int)($sRow['opened_quantity'] ?? 0),
                     'remainingVolume' => (float)($sRow['remaining_volume'] ?? 0)
                 ];
@@ -1150,7 +1178,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
                     $allInventory[] = [
                         'inventoryId' => $sRow['inventory_id'],
                         'sizeId' => $sRow['size_id'],
-                        'sealedQuantity' => (int)($sRow['sealed_quantity'] ?? 0),
+                        'sealedQuantity' => $sealedQty,
+                        'expiredQuantity' => $expiredQty,
+                        'sellableQuantity' => $sellableQty,
                         'openedQuantity' => (int)($sRow['opened_quantity'] ?? 0),
                         'remainingVolume' => (float)($sRow['remaining_volume'] ?? 0)
                     ];
@@ -1169,6 +1199,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
             $openedObj = !empty($r['opened_by_size']) ? (json_decode($r['opened_by_size'], true) ?: []) : [];
             if (!is_array($openedObj)) $openedObj = [];
 
+            $expiredBySizeObj = [];
+            $sellableBySizeObj = [];
+            $expiredLitersTotal = 0.0;
+
             if (!empty($variants)) {
                 $sizesList = [];
                 $canStockObj = [];
@@ -1178,9 +1212,14 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
                     $cSzStr = (string)$cSz;
                     $sizesList[] = $cSz;
                     $canStockObj[$cSzStr] = $v['sealedQuantity'];
+                    $expiredBySizeObj[$cSzStr] = $v['expiredQuantity'];
+                    $sellableBySizeObj[$cSzStr] = $v['sellableQuantity'];
+                    $expiredLitersTotal += ((int)$v['expiredQuantity']) * ((float)$cSz);
                     $thresholdObj[$cSzStr] = $v['minimumStock'];
                     if ($v['remainingVolume'] > 0) {
                         $openedObj[$cSzStr] = $v['remainingVolume'];
+                    } else {
+                        unset($openedObj[$cSzStr]);
                     }
                 }
                 sort($sizesList);
@@ -1192,6 +1231,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
                 $thresholdObj = !empty($r['threshold_by_size']) ? (json_decode($r['threshold_by_size'], true) ?: []) : [];
                 if (!is_array($thresholdObj)) $thresholdObj = [];
             }
+
+            $totalPhysicalStock = (float)$r['stock'];
+            $expiredLitersTotal = round($expiredLitersTotal, 2);
+            $sellableStockLiters = round(max(0.0, $totalPhysicalStock - $expiredLitersTotal), 2);
 
             $priceHistDecoded = !empty($r['price_history']) ? json_decode($r['price_history'], true) : null;
             $pendingSizesDecoded = !empty($r['pending_sizes']) ? json_decode($r['pending_sizes'], true) : null;
@@ -1237,8 +1280,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
                 'recentPrice' => (isset($r['recent_price']) && $r['recent_price'] !== null && $r['recent_price'] !== '') ? (float)$r['recent_price'] : null,
                 'pendingPrice' => (isset($r['pending_price']) && $r['pending_price'] !== null && $r['pending_price'] !== '') ? (float)$r['pending_price'] : null,
                 'priceHistory' => is_array($priceHistDecoded) ? $priceHistDecoded : [],
-                'stock' => (float)$r['stock'],
+                'stock' => $totalPhysicalStock,
+                'sellableStock' => $sellableStockLiters,
+                'expiredStock' => $expiredLitersTotal,
                 'canStock' => !empty($canStockObj) ? $canStockObj : new stdClass(),
+                'sellableBySize' => !empty($sellableBySizeObj) ? $sellableBySizeObj : new stdClass(),
+                'expiredBySize' => !empty($expiredBySizeObj) ? $expiredBySizeObj : new stdClass(),
                 'openedStock' => (float)($r['opened_stock'] ?? 0),
                 'openedCanSize' => (int)($r['opened_can_size'] ?? 0),
                 'sizes' => $sizesList,
@@ -1738,9 +1785,20 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 }
             }
 
+            // Concurrency guard (#4): if client sent dirtyProductIds / dirtyStockProductIds,
+            // never overwrite untouched products or untouched stock quantities from stale browser snapshots.
+            $hasDirtyProdList = array_key_exists('dirtyProductIds', $payload) && is_array($payload['dirtyProductIds']);
+            $dirtyProdSet = $hasDirtyProdList ? array_flip(array_map('strval', $payload['dirtyProductIds'])) : null;
+            $hasDirtyStockList = array_key_exists('dirtyStockProductIds', $payload) && is_array($payload['dirtyStockProductIds']);
+            $dirtyStockSet = $hasDirtyStockList ? array_flip(array_map('strval', $payload['dirtyStockProductIds'])) : null;
+
             foreach ($dbData['products'] as $p) {
                 $id = (string)$p['id'];
                 $existingP = $existingProdMap[$id] ?? null;
+
+                if ($existingP !== null && $hasDirtyProdList && !isset($dirtyProdSet[$id])) {
+                    continue; // Untouched on this terminal: skip to avoid overwriting concurrent changes
+                }
 
                 // Concurrency and dirty check: skip updating if product has not changed
                 if ($existingP !== null) {
@@ -2003,7 +2061,20 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     }
                 }
 
-                $stmt->bind_param("ssssssssssssiisisssdddsdsdissssdsssssss", $id, $productId, $productName, $name, $brand, $type, $category, $taxClassification, $color, $colorId, $colorClassification, $colorHex, $isColorPigment, $isBasePaint, $paintSystem, $isSpecialtyPigment, $adminReviewNote, $supplierId, $price, $recentPrice, $pendingPrice, $priceHistoryJson, $stock, $canStock, $openedStock, $openedCanSize, $openedBySize, $sizesJson, $pendingSizesJson, $pendingEditJson, $threshold, $thresholdBySize, $status, $deactReason, $deactAt, $deactBy, $updatedBy, $discReason);
+                // Concurrency guard (#4): if this terminal only edited metadata (e.g. price/name/status)
+                // and did NOT modify stock quantities for this product, preserve the latest DB stock values.
+                $preserveExistingStock = ($existingP !== null && $hasDirtyStockList && !isset($dirtyStockSet[$id]));
+                if ($preserveExistingStock) {
+                    $stock = (float)$existingP['stock'];
+                    $canStock = (string)($existingP['can_stock'] ?? '{}');
+                    $canStockObj = json_decode($canStock, true) ?: [];
+                    $openedStock = (float)($existingP['opened_stock'] ?? 0);
+                    $openedCanSize = (int)($existingP['opened_can_size'] ?? 0);
+                    $openedBySize = (string)($existingP['opened_by_size'] ?? '{}');
+                    $openedBySizeObj = json_decode($openedBySize, true) ?: [];
+                }
+
+                $stmt->bind_param("ssssssssssssiisissdddsdsdissssdsssssss", $id, $productId, $productName, $name, $brand, $type, $category, $taxClassification, $color, $colorId, $colorClassification, $colorHex, $isColorPigment, $isBasePaint, $paintSystem, $isSpecialtyPigment, $adminReviewNote, $supplierId, $price, $recentPrice, $pendingPrice, $priceHistoryJson, $stock, $canStock, $openedStock, $openedCanSize, $openedBySize, $sizesJson, $pendingSizesJson, $pendingEditJson, $threshold, $thresholdBySize, $status, $deactReason, $deactAt, $deactBy, $updatedBy, $discReason);
                 $stmt->execute();
 
                 // Genuine DB-level Inventory -> Color Library two-way synchronization (Admin only, pigment/colorant products only)
@@ -2052,6 +2123,19 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                             'isActive' => 1
                         ];
                     }
+                }
+                if ($preserveExistingStock) {
+                    foreach ($variantsToSync as &$vSyncRef) {
+                        $vSz = (float)($vSyncRef['containerSize'] ?? ($vSyncRef['container_size'] ?? 0));
+                        $vSzKey = $id . '_' . $vSz;
+                        if (isset($existingSizeMap[$vSzKey]) && isset($existingInvMeta[$existingSizeMap[$vSzKey]])) {
+                            $exI = $existingInvMeta[$existingSizeMap[$vSzKey]];
+                            $vSyncRef['sealedQuantity'] = (int)$exI['sealed_quantity'];
+                            $vSyncRef['openedQuantity'] = (int)$exI['opened_quantity'];
+                            $vSyncRef['remainingVolume'] = (float)$exI['remaining_volume'];
+                        }
+                    }
+                    unset($vSyncRef);
                 }
 
                 $syncedSizeIds = [];
@@ -2312,8 +2396,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             }
         }
 
-        // 2b. Sync Product-Supplier Relationships (Multi-supplier per product/container size)
-        if (in_array($actingRole, ['admin', 'staff'], true) && !empty($dbData['productSuppliers']) && is_array($dbData['productSuppliers'])) {
+        // 2b. Sync Product-Supplier Relationships (Admin Only RBAC)
+        if ($actingRole === 'admin' && !empty($dbData['productSuppliers']) && is_array($dbData['productSuppliers'])) {
             $stmtPs = $conn->prepare("INSERT INTO product_suppliers (id, product_id, supplier_id, container_size, purchase_cost, min_order_qty, availability, notes)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
@@ -2340,7 +2424,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 $stmtPs->close();
             }
         }
-        if (in_array($actingRole, ['admin', 'staff'], true) && !empty($dbData['deletedProductSupplierIds']) && is_array($dbData['deletedProductSupplierIds'])) {
+        if ($actingRole === 'admin' && !empty($dbData['deletedProductSupplierIds']) && is_array($dbData['deletedProductSupplierIds'])) {
             $stmtDelPs = $conn->prepare("DELETE FROM product_suppliers WHERE id = ?");
             if ($stmtDelPs) {
                 foreach ($dbData['deletedProductSupplierIds'] as $dpsId) {
@@ -2370,6 +2454,16 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     role = VALUES(role),
                     status = VALUES(status)");
 
+            $activeAdminCount = 0;
+            foreach ($dbData['users'] as $chkU) {
+                if (($chkU['role'] ?? '') === 'admin' && ($chkU['status'] ?? 'active') === 'active') {
+                    $activeAdminCount++;
+                }
+            }
+            if ($activeAdminCount < 1) {
+                throw new Exception("At least one active Administrator account is required.", 400);
+            }
+
             foreach ($dbData['users'] as $u) {
                 $id = (string)$u['id'];
                 $username = trim((string)$u['username']);
@@ -2377,6 +2471,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 $role = (string)($u['role'] ?? 'cashier');
                 $status = (string)($u['status'] ?? 'active');
 
+                if ($id === $actingUserId && ($role !== 'admin' || $status !== 'active')) {
+                    throw new Exception("You cannot demote or deactivate your own Administrator account.", 400);
+                }
                 if ($username === '' || $name === '') {
                     throw new Exception("User username and name cannot be empty.");
                 }
@@ -2392,7 +2489,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     }
                 }
 
-                // Secure password handling: hash new plaintext passwords, keep existing bcrypt hashes
+                // Secure password handling: hash new plaintext passwords, keep existing bcrypt hashes, reject blank passwords for new users
                 $passInput = (string)($u['password'] ?? ($u['newPassword'] ?? ''));
                 $finalHash = '';
                 if ($passInput !== '') {
@@ -2404,7 +2501,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 } elseif (isset($existingUserPass[$id]) && $existingUserPass[$id] !== '') {
                     $finalHash = $existingUserPass[$id];
                 } else {
-                    $finalHash = password_hash('password123', PASSWORD_BCRYPT);
+                    throw new Exception("A password is required when creating a new user account.", 400);
                 }
 
                 $stmt->bind_param("ssssss", $id, $username, $finalHash, $name, $role, $status);
@@ -2558,10 +2655,105 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 if (isset($existingSalesMap[$id]) && $existingSalesMap[$id] === $saleSig) {
                     continue; // Skip unchanged sale record
                 }
-                // Validate numeric bounds only for newly created sales (never block historical records on unrelated saves)
+                // Validate numeric bounds & RBAC color mix pricing for newly created sales (never block historical records on unrelated saves)
                 if (!isset($existingSalesOwner[$id])) {
                     if ($subtotal < 0 || $total < 0 || $discountPct < 0 || $discountPct > 100 || $discountAmount < 0) {
-                        throw new Exception('Invalid negative or out-of-range sale amount.');
+                        throw new Exception('Invalid negative or out-of-range sale amount.', 400);
+                    }
+
+                    // Server-side RBAC: Only Administrators may override Paint Color Mixing prices.
+                    // For non-admin users (e.g., Cashiers), recompute every colormix item strictly from DB product prices + ₱50 service fee.
+                    if ($actingRole !== 'admin' && !empty($sale['items']) && is_array($sale['items'])) {
+                        static $authProdPriceMap = null;
+                        if ($authProdPriceMap === null) {
+                            $authProdPriceMap = [];
+                            $pRes = $conn->query("SELECT id, price FROM products");
+                            if ($pRes) {
+                                while ($pRow = $pRes->fetch_assoc()) {
+                                    $authProdPriceMap[(string)$pRow['id']] = (float)$pRow['price'];
+                                }
+                            }
+                        }
+
+                        $hasColorMixItem = false;
+                        $recomputedSubtotal = 0.0;
+                        foreach ($sale['items'] as $sItem) {
+                            $itemType = strtolower(trim((string)($sItem['type'] ?? 'product')));
+                            if ($itemType === 'colormix') {
+                                $hasColorMixItem = true;
+                                $comps = isset($sItem['components']) && is_array($sItem['components']) ? $sItem['components'] : [];
+                                if (count($comps) < 2) {
+                                    throw new Exception('Forbidden: Invalid custom color mix formula components.', 403);
+                                }
+                                $baseLiters = (float)($sItem['baseLiters'] ?? ($sItem['liters'] ?? ($sItem['qty'] ?? 1)));
+                                $qtyLiters = (float)($sItem['qty'] ?? ($sItem['liters'] ?? $baseLiters));
+                                if ($baseLiters < 0.5 || $qtyLiters < 0.5) {
+                                    throw new Exception('Invalid custom color mix volume (minimum 0.5 L).', 400);
+                                }
+
+                                $pctSum = 0.0;
+                                $materialCost = 0.0;
+                                foreach ($comps as $comp) {
+                                    $compPid = (string)($comp['productId'] ?? ($comp['product_id'] ?? ''));
+                                    $compPct = (float)($comp['percentage'] ?? ($comp['pctNum'] ?? ($comp['pct'] ?? 0)));
+                                    if ($compPid === '' || !isset($authProdPriceMap[$compPid]) || $compPct <= 0) {
+                                        throw new Exception('Forbidden: Unknown or invalid color mix ingredient.', 403);
+                                    }
+                                    $dbIngPrice = $authProdPriceMap[$compPid];
+                                    if ($dbIngPrice <= 0) {
+                                        throw new Exception('Cannot sell custom color mix with ₱0.00 ingredient.', 400);
+                                    }
+                                    $pctSum += $compPct;
+                                    $compLiters = round($baseLiters * ($compPct / 100.0), 4);
+                                    $materialCost += round($compLiters * $dbIngPrice, 2);
+                                }
+                                if (abs($pctSum - 100.0) > 0.5) {
+                                    throw new Exception('Invalid color mix formula: ingredient percentages must total 100%.', 400);
+                                }
+
+                                $materialCost = round($materialCost, 2);
+                                $serviceFee = 50.00;
+                                $expectedBaseGrandTotal = round($materialCost + $serviceFee, 2);
+                                $expectedUnitPrice = round($expectedBaseGrandTotal / $baseLiters, 2);
+                                $expectedLineTotal = (abs($qtyLiters - $baseLiters) > 0.0001)
+                                    ? round(($qtyLiters / $baseLiters) * $expectedBaseGrandTotal, 2)
+                                    : $expectedBaseGrandTotal;
+
+                                $submittedUnitPrice = (float)($sItem['unitPrice'] ?? 0);
+                                $submittedLineTotal = (float)($sItem['lineTotal'] ?? 0);
+                                $submittedOtherCharges = isset($sItem['priceBreakdown']['otherCharges'])
+                                    ? (float)$sItem['priceBreakdown']['otherCharges']
+                                    : 0.0;
+
+                                if (
+                                    abs($submittedOtherCharges) > 0.05 ||
+                                    abs($submittedUnitPrice - $expectedUnitPrice) > 0.05 ||
+                                    abs($submittedLineTotal - $expectedLineTotal) > 0.05
+                                ) {
+                                    throw new Exception('Forbidden: Only Administrators may override Paint Color Mixing prices.', 403);
+                                }
+                                $recomputedSubtotal += $expectedLineTotal;
+                            } else {
+                                $recomputedSubtotal += (float)($sItem['lineTotal'] ?? 0);
+                            }
+                        }
+
+                        if ($hasColorMixItem) {
+                            $recomputedSubtotal = round($recomputedSubtotal, 2);
+                            if (abs($subtotal - $recomputedSubtotal) > 0.10) {
+                                throw new Exception('Forbidden: Sale subtotal does not match authorized Paint Color Mixing prices.', 403);
+                            }
+                            $netAfterDisc = round(max(0.0, $recomputedSubtotal - $discountAmount), 2);
+                            $salePricingType = strtolower(trim((string)($sale['pricingType'] ?? ($sale['pricing_type'] ?? 'inclusive'))));
+                            $saleTaxStatus = strtolower(trim((string)($sale['taxStatus'] ?? ($sale['tax_status'] ?? 'vat_registered'))));
+                            $saleVatAmt = (float)($sale['vatAmount'] ?? ($sale['vat_amount'] ?? 0));
+                            $expectedTotal = ($saleTaxStatus === 'vat_registered' && $salePricingType === 'exclusive')
+                                ? round($netAfterDisc + $saleVatAmt, 2)
+                                : $netAfterDisc;
+                            if (abs($total - $expectedTotal) > 0.10) {
+                                throw new Exception('Forbidden: Sale total does not match authorized Paint Color Mixing prices.', 403);
+                            }
+                        }
                     }
                 }
 
@@ -2673,10 +2865,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         // 5b. Expiration Tracking: route new movements into batch ledger (FIFO / receiving batches),
         //     then reconcile so batch totals always equal the centralized inventory.
         //     If batch processing fails (e.g. attempting to sell expired stock), abort transaction.
-        $hasColorMixMovement = false;
+        $blockExpiredReconcile = false;
         foreach ($mvNewRows as $nm) {
-            if ($nm['type'] === 'colormix') {
-                $hasColorMixMovement = true;
+            $mvTypeLow = strtolower((string)$nm['type']);
+            if (in_array($mvTypeLow, ['colormix', 'color_mix', 'mix', 'sale'], true) || ($mvTypeLow === 'return' && (float)$nm['qtyChange'] < 0)) {
+                $blockExpiredReconcile = true;
+            }
+            if ($mvTypeLow === 'colormix' || $mvTypeLow === 'color_mix' || $mvTypeLow === 'mix') {
                 if ((float)$nm['qtyChange'] < 0 && !empty($nm['productId'])) {
                     $cmPid = (string)$nm['productId'];
                     $cmStmt = $conn->prepare("SELECT id, name, status, is_color_pigment, is_base_paint FROM products WHERE id = ? OR product_id = ? LIMIT 1");
@@ -2698,7 +2893,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             }
             batchProcessMovement($conn, $nm['m'], $nm['type'], $nm['sizeId'], $nm['productId'], $nm['containerSize'], $nm['qtyChange'], $nm['staff'], $nm['note'], $nm['date']);
         }
-        batchReconcile($conn, !empty($actingUser['name']) ? (string)$actingUser['name'] : 'System', $hasColorMixMovement);
+        batchReconcile($conn, !empty($actingUser['name']) ? (string)$actingUser['name'] : 'System', $blockExpiredReconcile);
 
         // 6. Sync Purchase Orders (Admin & Staff only; skips unchanged POs)
         if (in_array($actingRole, ['admin', 'staff'], true) && !empty($dbData['purchaseOrders']) && is_array($dbData['purchaseOrders'])) {
@@ -2843,8 +3038,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 
                 // RBAC: Only admin can approve or reject adjustment requests; non-admins cannot re-open finalized requests
                 if ($actingRole !== 'admin') {
-                    if (isset($existingReqStatuses[$id])) {
-                        $prevSt = $existingReqStatuses[$id];
+                    if (isset($existingARMap[$id])) {
+                        $prevSt = explode('_', $existingARMap[$id])[0];
                         if ($prevSt === 'approved' || $prevSt === 'rejected') {
                             continue; // Finalized adjustment requests are immutable to non-admins
                         }
@@ -2865,8 +3060,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             $stmt->close();
         }
 
-        // 8. Sync Void Requests
-        if (!empty($dbData['voidRequests']) && is_array($dbData['voidRequests'])) {
+        // 8. Sync Void Requests (Admin Only; cashiers use transactional api/void.php)
+        if ($actingRole === 'admin' && !empty($dbData['voidRequests']) && is_array($dbData['voidRequests'])) {
             $existingVRMap = [];
             $evrRes = $conn->query("SELECT id, status, reviewed_at FROM void_requests");
             if ($evrRes) {
@@ -2954,7 +3149,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         echo json_encode($respPayload);
     } catch (Throwable $e) {
         $conn->rollback();
-        http_response_code(500);
+        $errCode = (int)$e->getCode();
+        http_response_code(($errCode >= 400 && $errCode < 600) ? $errCode : 500);
         echo json_encode(['success' => false, 'error' => $e->getMessage()]);
     }
     exit;

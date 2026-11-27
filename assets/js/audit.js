@@ -154,9 +154,13 @@ const AUDIT_ACTION_LABELS = {
   CONTAINER_SIZE_ADD: 'Container Size Added',
   CONTAINER_SIZE_REMOVE: 'Container Size Removed',
   STOCK_DISPOSE: 'Opened Stock Disposed',
+  STOCK_DISPOSE_OPENED: 'Opened Stock Disposed',
   ADJ_REQUEST: 'Adjustment Requested',
+  ADJ_REQUEST_SUBMIT: 'Adjustment Requested',
   ADJ_APPROVE: 'Adjustment Approved',
+  ADJ_REQUEST_APPROVE: 'Adjustment Approved',
   ADJ_REJECT: 'Adjustment Rejected',
+  ADJ_REQUEST_REJECT: 'Adjustment Rejected',
   ADJ_BATCH_APPROVE: 'Batch Adjustments Approved',
   DAMAGED_STOCK_RECORD: 'Damaged Stock Recorded (Receiving)',
   DAMAGED_STOCK_QUARANTINE: 'Damaged Stock Quarantined',
@@ -192,6 +196,9 @@ const AUDIT_ACTION_LABELS = {
   SALE_VOID_REJECT: 'Void Sale Rejected',
   SALE_REFUND: 'Sale Refunded',
   PARTIAL_REFUND: 'Partial Refund Processed',
+  SALE_EXCHANGE: 'Sale Exchanged',
+  UPDATE_VAT_SETTINGS: 'VAT Settings Updated',
+  SETTINGS_UPDATE: 'POS Promo Settings Updated',
 
   // User & Supplier Management
   USER_CREATE: 'User Created',
@@ -232,7 +239,7 @@ const AUDIT_ACTIONS = [
   // Purchase Orders
   'PO_CREATE', 'PO_SUBMIT', 'PO_APPROVE', 'PO_REJECT', 'PO_RECEIVE', 'PO_CANCEL',
   // Sales & Refunds
-  'SALE', 'RECEIPT_GENERATED', 'SALE_REFUND', 'PARTIAL_REFUND', 'SALE_VOID', 'SALE_VOID_REQUEST', 'SALE_VOID_APPROVE', 'SALE_VOID_REJECT',
+  'SALE', 'RECEIPT_GENERATED', 'SALE_REFUND', 'PARTIAL_REFUND', 'SALE_EXCHANGE', 'SALE_VOID', 'SALE_VOID_REQUEST', 'SALE_VOID_APPROVE', 'SALE_VOID_REJECT', 'UPDATE_VAT_SETTINGS', 'SETTINGS_UPDATE',
   // User & Supplier Management
   'USER_CREATE', 'USER_UPDATE', 'USER_DEACTIVATE', 'USER_REACTIVATE', 'USER_ROLE_CHANGE', 'USER_STATUS',
   'SUPPLIER_CREATE', 'SUPPLIER_UPDATE', 'SUPPLIER_STATUS',

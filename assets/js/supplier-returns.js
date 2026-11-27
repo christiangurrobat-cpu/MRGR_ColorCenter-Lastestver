@@ -508,24 +508,23 @@ function renderSupplierReturnsHistoryModalBody() {
       <div class="sr-topbar">
         <div class="sr-subtabs">
           <button type="button" class="btn ${srState.subTab === 'replacements' ? '' : 'ghost'} small" onclick="srSwitchSubTab('replacements')">
-            🔄 Replacements (${srState.replacementRequests.length})${activeRepCount > 0 ? ` <span class="rcv-tab-count" style="margin-left:4px;">${activeRepCount}</span>` : ''}
-          </button>
-          <button type="button" class="btn ${srState.subTab === 'history' ? '' : 'ghost'} small" onclick="srSwitchSubTab('history')">
-            📋 Supplier Returns (${srState.returns.length})
+            🔄 Replacements &amp; Credits (${srState.replacementRequests.length})${activeRepCount > 0 ? ` <span class="rcv-tab-count" style="margin-left:4px;">${activeRepCount}</span>` : ''}
           </button>
           <button type="button" class="btn ${srState.subTab === 'damaged' ? '' : 'ghost'} small" onclick="srSwitchSubTab('damaged')">
             ⚠️ Damaged Stock (${srState.damagedRecords.length})${eligibleCount > 0 ? ` <span class="rcv-tab-count" style="margin-left:4px;">${eligibleCount}</span>` : ''}
           </button>
+          ${(srState.returns && srState.returns.length > 0) ? `
+            <button type="button" class="btn ${srState.subTab === 'history' ? '' : 'ghost'} small" onclick="srSwitchSubTab('history')" title="Read-only archive of historical SRET supplier return records">
+              📋 Legacy Returns Archive (${srState.returns.length})
+            </button>
+          ` : ''}
         </div>
         <div class="sr-top-actions">
-          <button type="button" class="btn secondary small" onclick="openCreateReplacementRequestModal()">
+          <button type="button" class="btn small" onclick="openCreateReplacementRequestModal()">
             🔄 Create Replacement Request
           </button>
           <button type="button" class="btn secondary small" onclick="openPostReceivingDamageModal()">
             ⚠️ Report Post-Receiving Damage
-          </button>
-          <button type="button" class="btn small" onclick="openCreateSupplierReturnModal()">
-            + New Supplier Return
           </button>
         </div>
       </div>
@@ -1122,8 +1121,8 @@ function openReceiveReplacementModal(returnId) {
       </div>
       <div class="sr-form-grid" style="margin-top:8px;">
         <label class="sr-field">
-          <span>Expiration Date (Optional)</span>
-          <input type="date" class="sr-rep-exp" data-item-id="${escapeAttr(it.id)}">
+          <span>Expiration Date *</span>
+          <input type="date" class="sr-rep-exp" data-item-id="${escapeAttr(it.id)}" min="${todayISO()}" required>
         </label>
         <label class="sr-field">
           <span>Batch / Delivery Note</span>
@@ -1168,10 +1167,21 @@ async function submitReceiveReplacement(returnId) {
     if (val > 0) {
       const expEl = document.querySelector(`.sr-rep-exp[data-item-id="${itemId}"]`);
       const noteEl = document.querySelector(`.sr-rep-note[data-item-id="${itemId}"]`);
+      const expVal = expEl ? expEl.value.trim() : '';
+      if (!expVal) {
+        showToast('Please enter an Expiration Date for every replacement item being received.', 'error');
+        if (expEl) expEl.focus();
+        return;
+      }
+      if (expVal < todayISO()) {
+        showToast('Expiration Date cannot be in the past. Please select today or a future date.', 'error');
+        if (expEl) expEl.focus();
+        return;
+      }
       items.push({
         itemId,
         receiveQty: val,
-        expirationDate: expEl ? expEl.value : '',
+        expirationDate: expVal,
         notes: noteEl ? noteEl.value.trim() : ''
       });
       totalNow += val;
@@ -2063,8 +2073,8 @@ function openReceiveReplacementDeliveryModal(requestId) {
         <input type="number" id="sr-rdel-damaged" min="0" max="${req.remainingQty}" step="1" value="0" oninput="srRepDelSync('damaged', ${req.remainingQty})">
       </label>
       <label class="sr-field">
-        <span>Expiration Date (Optional)</span>
-        <input type="date" id="sr-rdel-exp">
+        <span>Expiration Date (Required when Accepted &gt; 0) *</span>
+        <input type="date" id="sr-rdel-exp" min="${todayISO()}">
       </label>
       <label class="sr-field full hidden" id="sr-rdel-reason-wrap">
         <span>Damage Reason (Required when Damaged > 0) *</span>
@@ -2139,6 +2149,19 @@ async function submitReceiveReplacementDelivery(requestId) {
   if (dmg > 0 && !damageReason) {
     showToast('Please select a Damage Reason for damaged replacement units.', 'error');
     return;
+  }
+  if (acc > 0) {
+    const expEl = document.getElementById('sr-rdel-exp');
+    if (!expirationDate) {
+      showToast('Please enter an Expiration Date for accepted replacement units.', 'error');
+      if (expEl) expEl.focus();
+      return;
+    }
+    if (expirationDate < todayISO()) {
+      showToast('Expiration Date cannot be in the past. Please select today or a future date.', 'error');
+      if (expEl) expEl.focus();
+      return;
+    }
   }
 
   window._isSubmittingRepDelivery = true;

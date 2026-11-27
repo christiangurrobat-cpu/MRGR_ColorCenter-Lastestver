@@ -207,9 +207,11 @@ function inventoryPage() {
     </div>
     <div class="spacer"></div>
     <div class="inv-header-actions">
-      <button type="button" class="btn secondary small" onclick="goToExpiration('all')" title="Open Expiration Tracking module">
-        🗓️ Expiration Tracking
-      </button>
+      ${canManage ? `
+        <button type="button" class="btn secondary small" onclick="goToExpiration('all')" title="Open Expiration Tracking module">
+          🗓️ Expiration Tracking
+        </button>
+      ` : ''}
       <button type="button" class="btn secondary small" onclick="goToDiscounts('all')" title="Open Near-Expiry Discount Management">
         🏷️ Near-Expiry Discounts
       </button>
@@ -720,7 +722,11 @@ function productInventoryExpirationSectionHtml(p, sortedSizes) {
 
   let bodyHtml = '';
   if (!isLoaded) {
-    bodyHtml = `<div class="muted small" style="padding:12px 4px;">⏳ Loading batch expiration data…</div>`;
+    if (typeof EXP !== 'undefined' && EXP.error) {
+      bodyHtml = `<div class="muted small" style="padding:12px 4px;">⚠️ Could not load batch expiration data: ${escapeHtml(EXP.error)} <button type="button" class="btn ghost small" style="margin-left:6px;" onclick="expLoad(false)">↻ Retry</button></div>`;
+    } else {
+      bodyHtml = `<div class="muted small" style="padding:12px 4px;">⏳ Loading batch expiration data…</div>`;
+    }
   } else if (!sortedSizes || sortedSizes.length === 0) {
     bodyHtml = `<div class="inv-can-empty-sizes">No container sizes configured for this product.</div>`;
   } else {
@@ -877,7 +883,9 @@ function productInventoryDetailsHtml(p, statusFilter = '', sizeFilter = '') {
   const detected = detectMixedColorName(rgb.r, rgb.g, rgb.b);
   const canManage = currentUser && (currentUser.role === 'admin' || currentUser.role === 'staff');
   const isAuthorized = Boolean(currentUser && (currentUser.role === 'admin' || currentUser.role === 'staff'));
-  const stock = Number(p.stock) || 0;
+  const physicalStock = Number(p.stock) || 0;
+  const expiredStockLiters = productExpiredStock(p);
+  const stock = productSellableStock(p);
   const threshold = productTotalThresholdLiters(p) || Number(p.threshold) || 0;
   const isOutOfStock = isProductOutOfStock(p);
   const lowSizes = productLowStockOnlySizes(p);
@@ -890,7 +898,7 @@ function productInventoryDetailsHtml(p, statusFilter = '', sizeFilter = '') {
   let statusClass = 'ok';
   let statusIcon = '🟢';
   let statusTitle = 'Stock is Healthy';
-  let statusSubtitle = `Total ${formatLiters(stock)} available across ${productSizes(p).length} container sizes. All sizes meet their minimum limits.`;
+  let statusSubtitle = `Total ${formatLiters(stock)} sellable stock available across ${productSizes(p).length} container sizes${expiredStockLiters > 0 ? ` (${formatLiters(expiredStockLiters)} expired stock quarantined separately)` : ''}. All sizes meet their minimum limits.`;
 
   if (p.status === 'inactive') {
     statusClass = 'inactive';
@@ -947,7 +955,7 @@ function productInventoryDetailsHtml(p, statusFilter = '', sizeFilter = '') {
   let stockAlertIndicatorsHtml = '';
   if (affectedSizes.length > 0) {
     stockAlertIndicatorsHtml = affectedSizes.map(s => {
-      const count = productCanCount(p, s);
+      const count = productSellableCanCount(p, s);
       const thresh = productSizeThreshold(p, s);
       const st = productSizeStatus(p, s);
       const isOut = st === 'out' || count === 0;
@@ -967,12 +975,13 @@ function productInventoryDetailsHtml(p, statusFilter = '', sizeFilter = '') {
     }).join('');
   }
 
-  // 1. Sealed Cans Rows (Requirement 2: separate row for every size, Size ID, Container Size, Price per Can, Stock Quantity, Total Volume, Stock Level)
+  // 1. Sealed Cans Rows (Requirement 2: separate row for every size, Size ID, Container Size, Price per Can, Sellable Stock Quantity, Total Volume, Stock Level)
   const sortedSizes = (productSizes(p) || []).slice().sort((a, b) => Number(a) - Number(b));
   const canRowsHtml = sortedSizes.map(s => {
     const variant = productSizeVariantBySize(p, s);
     const sizeId = variant ? variant.sizeId : '';
-    const count = productCanCount(p, s);
+    const count = productSellableCanCount(p, s);
+    const expCount = productExpiredCanCount(p, s);
     const sizeThresh = productSizeThreshold(p, s);
     const totalLitersForSize = count * s;
     const threshLitersForSize = sizeThresh * s;
@@ -1035,6 +1044,7 @@ function productInventoryDetailsHtml(p, statusFilter = '', sizeFilter = '') {
           <span class="inv-can-qty-pill ${status === 'out' ? 'is-out' : (status === 'low' ? 'is-low' : '')}">
             <strong>${count}</strong> <small>${count === 1 ? 'unit' : 'units'}</small>
           </span>
+          ${expCount > 0 ? `<div style="font-size:10.5px; color:var(--danger-text); font-weight:700; margin-top:3px;" title="${expCount} expired unit(s) quarantined from sale (${count + expCount} physical units total)">⛔ +${expCount} expired</div>` : ''}
         </td>
         <td class="inv-td-vol" style="text-align:right;">
           <span class="inv-can-vol-pill">${formatLiters(totalLitersForSize)}</span>
@@ -1233,7 +1243,7 @@ function productInventoryDetailsHtml(p, statusFilter = '', sizeFilter = '') {
         <div class="inv-friendly-box">
           <div class="inv-box-header">
             <span class="inv-box-title">📦 Ready-to-Sell Sealed Containers</span>
-            <span class="inv-box-meta">Total Sealed: <b>${formatLiters(stock)}</b></span>
+            <span class="inv-box-meta">Sellable Sealed: <b>${formatLiters(stock)}</b>${expiredStockLiters > 0 ? ` <span style="color:var(--danger-text); font-weight:700;">· ⛔ ${formatLiters(expiredStockLiters)} Expired (${formatLiters(physicalStock)} physical)</span>` : ''}</span>
           </div>
           ${sortedSizes.length ? `
             <div class="inv-can-table-wrap">
@@ -1620,8 +1630,8 @@ function inventoryTableHtml() {
       valA = Number(a ? a.price : 0) || 0;
       valB = Number(b ? b.price : 0) || 0;
     } else if (invSortField === 'stock') {
-      valA = Number(a ? a.stock : 0) || 0;
-      valB = Number(b ? b.stock : 0) || 0;
+      valA = a ? productSellableStock(a) : 0;
+      valB = b ? productSellableStock(b) : 0;
     } else if (invSortField === 'openedStock') {
       valA = a ? productOpenedStock(a) : 0;
       valB = b ? productOpenedStock(b) : 0;
@@ -1781,7 +1791,8 @@ function inventoryTableHtml() {
         ${p.recentPrice != null && Number(p.recentPrice) > 0 && Math.abs(Number(p.recentPrice) - Number(p.price)) > 0.01 ? `<div class="muted small" style="font-size:11px; opacity:0.85; margin-top:2px;" title="Recent price before last change">Recent: <del>${peso(p.recentPrice)}</del></div>` : ''}
       </td>
       <td class="right inv-td-total-stock">
-        <div class="inv-total-stock-num">${formatLiters(p.stock)}</div>
+        <div class="inv-total-stock-num">${formatLiters(productSellableStock(p))}</div>
+        ${productExpiredStock(p) > 0 ? `<div style="font-size:11px; color:var(--danger-text); font-weight:700; margin-top:2px;" title="Quarantined expired batch stock excluded from sellable stock (${formatLiters(p.stock)} physical total)">⛔ +${formatLiters(productExpiredStock(p))} expired</div>` : ''}
         <div class="inv-total-stock-sub muted small">${sizes.length} container size${sizes.length === 1 ? '' : 's'}</div>
       </td>
       <td class="inv-td-alerts">

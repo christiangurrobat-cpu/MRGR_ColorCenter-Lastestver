@@ -223,7 +223,7 @@ function renderCashierSalesSummaryHtml(cashierSales, fromDate, toDate) {
     ? sumSales(completedSales)
     : completedSales.reduce((sum, s) => {
       const refund = Number(s.refundTotal || 0);
-      return sum + (Number(s.total || 0) - refund);
+      return sum + Math.max(0, Number(s.total || 0) - refund);
     }, 0);
   const totalTx = completedSales.length;
   const returnTx = cashierSales.filter(s => Array.isArray(s.returns) && s.returns.length > 0).length;
@@ -456,7 +456,7 @@ function getSaleReturnedValue(sale) {
     const sumRet = sale.returns.reduce((sum, r) => sum + Number(r.refundAmount || 0), 0);
     if (sumRet > 0) return Number(sumRet.toFixed(2));
   }
-  return Number(sale.refundTotal || 0);
+  return Math.max(0, Number(sale.refundTotal || 0));
 }
 
 function isSaleReturnWithinDay(sale) {
@@ -624,19 +624,19 @@ function salesHistoryTableHtml() {
           <td>
             <div>${s.items.length} item${s.items.length === 1 ? '' : 's'}</div>
             ${(() => {
-              const mixes = (s.items || []).filter(it => it && it.type === 'colormix');
-              if (!mixes.length) return '';
-              return mixes.slice(0, 2).map(mx => `
+            const mixes = (s.items || []).filter(it => it && it.type === 'colormix');
+            if (!mixes.length) return '';
+            return mixes.slice(0, 2).map(mx => `
                 <div class="muted small" style="display:flex; align-items:center; gap:4px; font-size:11px; margin-top:2px;">
                   <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${escapeAttr(mx.hexColor || '#1F6F6B')}; border:1px solid rgba(0,0,0,0.2); flex-shrink:0;"></span>
                   <span>Mix: <b>${escapeHtml(mx.colorName || 'Custom')}</b> (${formatStock(mx.liters || mx.qty || 1)}L)</span>
                 </div>
               `).join('') + (mixes.length > 2 ? `<div class="muted small" style="font-size:10.5px;">+${mixes.length - 2} more mix</div>` : '');
-            })()}
+          })()}
           </td>
           <td class="center">${saleStatusBadge(status)}</td>
           <td class="right">
-            ${(returnedVal > 0 || refundTotal > 0)
+            ${(returnedVal > 0 || refundTotal !== 0)
             ? `<div><strong style="font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif; font-size:13.5px;">${peso(netTotal)}</strong></div>
                  <div class="muted small" style="color:${exchangeTotal > 0 ? 'var(--teal)' : 'var(--danger)'}; font-size:11px;">
                    ${exchangeTotal > 0
@@ -1338,15 +1338,34 @@ function openReturnRefundModal(saleId, keepState = false) {
   const saleSubtotal = Number(sale.subtotal || 0);
   const saleTotal = Number(sale.total || 0);
   const saleDiscountPct = Number(sale.discountPct || sale.discountPercentage || 0);
+  const saleDiscountAmount = Number(sale.discountAmount ?? sale.discount ?? 0);
   const salePricingType = sale.pricingType || sale.pricing_type || 'inclusive';
   const saleTaxStatus = sale.taxStatus || sale.tax_status || 'vat_registered';
   const saleVatRate = Number(sale.vatRate ?? sale.vat_rate ?? 12);
   const isExclusiveVat = salePricingType === 'exclusive' && saleTaxStatus === 'vat_registered' && saleVatRate > 0;
-  const discountRatio = isExclusiveVat
-    ? (saleDiscountPct > 0 ? Math.max(0, 1 - saleDiscountPct / 100) : 1)
-    : ((saleSubtotal > 0 && saleTotal > 0 && saleTotal < saleSubtotal)
-      ? (saleTotal / saleSubtotal)
-      : (saleDiscountPct > 0 ? Math.max(0, 1 - saleDiscountPct / 100) : 1));
+
+  // Bulk promo discounts never stack on Near-Expiry discounted items (see pos.js cartTotals).
+  // Compute promo discount ratio strictly against promo-eligible (non-near-expiry) items.
+  const promoEligibleSubtotal = Number(
+    saleItems.reduce((sum, it) => {
+      if (Number(it.nearExpiryDiscountPct || 0) > 0) return sum;
+      const lineAmt = it.lineTotal !== undefined
+        ? Number(it.lineTotal || 0)
+        : (Number(it.qty || 0) * Number(it.unitPrice ?? it.price ?? 0));
+      return sum + (Number.isFinite(lineAmt) ? lineAmt : 0);
+    }, 0).toFixed(2)
+  );
+  let promoItemDiscountRatio = 1;
+  if (promoEligibleSubtotal > 0 && saleDiscountAmount > 0) {
+    promoItemDiscountRatio = Math.max(0, 1 - (saleDiscountAmount / promoEligibleSubtotal));
+  } else if (saleDiscountPct > 0) {
+    promoItemDiscountRatio = Math.max(0, 1 - saleDiscountPct / 100);
+  } else if (!isExclusiveVat && saleSubtotal > 0 && saleTotal > 0 && saleTotal < saleSubtotal) {
+    const inferredDiscount = saleSubtotal - saleTotal;
+    promoItemDiscountRatio = promoEligibleSubtotal > 0
+      ? Math.max(0, 1 - (inferredDiscount / promoEligibleSubtotal))
+      : (saleTotal / saleSubtotal);
+  }
 
   const rowsHtml = saleItems.map((item, idx) => {
     const qtyPurchased = Number(item.qty || 0);
@@ -1357,7 +1376,9 @@ function openReturnRefundModal(saleId, keepState = false) {
     const itemProd = item.type === 'product' ? productById(item.productId) : null;
     const itemTaxClass = item.taxClassification || item.tax_classification || (itemProd && (itemProd.taxClassification || itemProd.tax_classification)) || 'vatable';
     const vatMult = (isExclusiveVat && itemTaxClass === 'vatable') ? (1 + saleVatRate / 100) : 1;
-    const effectiveUnitPrice = Number((rawUnitPrice * discountRatio * vatMult).toFixed(2));
+    const isNearExpiryItem = Number(item.nearExpiryDiscountPct || 0) > 0;
+    const itemDiscountRatio = isNearExpiryItem ? 1 : promoItemDiscountRatio;
+    const effectiveUnitPrice = Number((rawUnitPrice * itemDiscountRatio * vatMult).toFixed(2));
 
     const isBlend = item.type === 'colormix';
     const policy = getItemReturnPolicy(item, isSameDay, adminReviewApproved);
@@ -1533,11 +1554,11 @@ function openReturnRefundModal(saleId, keepState = false) {
       </label>
     </div>
 
-    <!-- STEP 2: REPLACEMENT ITEMS FOR EXCHANGE (FIXED SIZE, QTY & SAME PRICE) -->
+    <!-- STEP 2: REPLACEMENT ITEMS FOR EXCHANGE (FLEXIBLE PRICE-DIFFERENCE SUPPORT) -->
     <div id="ret-exchange-step-container" style="margin-top:16px; padding:12px 14px; background:var(--teal-tint); border:1px solid var(--teal-tint-border); border-radius:var(--radius-sm);">
       <div class="ret-exchange-header" style="display:${currentReturnResolution === 'refund' ? 'none' : 'block'}; margin-bottom:10px;">
-        <strong style="font-size:13.5px; color:var(--teal-text);">2. Replacement Item(s) for Exchange <span class="badge mid" style="font-size:10.5px; margin-left:6px;">🔒 Fixed Size, Qty &amp; Same Price Only</span></strong>
-        <div class="muted small">Container size, quantity, and unit price are automatically fixed to match each item being returned above. Only products with the <b>exact same price</b> and container size are eligible for replacement:</div>
+        <strong style="font-size:13.5px; color:var(--teal-text);">2. Replacement Item(s) for Exchange <span class="badge mid" style="font-size:10.5px; margin-left:6px;">🎨 Same Container Size · Price Difference Allowed</span></strong>
+        <div class="muted small">Select any in-stock replacement product in the same container size. If the replacement costs more, the customer pays the balance; if it costs less, Administrator approval is required for the cash difference:</div>
       </div>
 
       <div id="ret-exchange-cart-wrap"></div>
@@ -1563,12 +1584,12 @@ function openReturnRefundModal(saleId, keepState = false) {
       </div>
     </div>
 
-    <!-- ADMIN REVIEW EXCEPTION PANEL (for Custom Color Mix or Post-Purchase-Day Exceptions) -->
-    ${(anyRestrictedMixItems || !isSameDay) ? `
+    <!-- ADMIN AUTHORIZATION PANEL (Required for ALL Cash Refunds, Custom Mix, or Post-Purchase-Day Exceptions) -->
+    ${(!(currentUser && currentUser.role === 'admin') || anyRestrictedMixItems || !isSameDay) ? `
       <div style="margin-top:10px; background:var(--warning-bg); border:1px solid var(--warning-border); border-radius:var(--radius-sm); padding:10px 14px;">
         <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
           <div style="font-size:12px; color:var(--warning-text); font-weight:700;">
-            🛡️ Administrator Exception Review ${adminReviewApproved ? `<span class="badge ok" style="margin-left:6px;">✓ Authorized (${escapeHtml(adminReviewAdminName || 'Admin')})</span>` : '<span class="badge mid" style="margin-left:6px;">Restricted Items Require Admin Review</span>'}
+            🛡️ Administrator Authorization ${adminReviewApproved ? `<span class="badge ok" style="margin-left:6px;">✓ Authorized (${escapeHtml(adminReviewAdminName || 'Admin')})</span>` : '<span class="badge mid" style="margin-left:6px;">Required for Cash Refunds &amp; Exceptions</span>'}
           </div>
           ${adminReviewApproved ? `
             <button type="button" class="btn ghost small" onclick="cancelInlineAdminReview('${sale.id}')" style="font-size:11px;">Revoke Authorization</button>
@@ -1724,6 +1745,7 @@ async function submitInlineAdminReview(saleId) {
         throw new Error(data.error || 'Invalid administrator credentials.');
       }
       adminName = data.admin.name;
+      window._adminVerifyToken = data.verifyToken || '';
     } catch (err) {
       showToast(err.message, 'error');
       if (btn) {
@@ -1746,26 +1768,44 @@ function cancelInlineAdminReview(saleId) {
   adminReviewApproved = false;
   adminReviewReason = '';
   adminReviewAdminName = '';
+  window._adminVerifyToken = '';
   showToast('Admin review exception revoked.', 'ok');
   openReturnRefundModal(saleId, true);
 }
 
-function getReplacementUnitPriceForSize(p, fixedSize, origProductId, origUnitPrice) {
+function getReplacementUnitPriceForSize(p, fixedSize, origProductId, origUnitPrice, sale) {
   if (!p) return 0;
   if (origProductId && p.id === origProductId && origUnitPrice !== undefined) {
     return Number(Number(origUnitPrice).toFixed(2));
   }
   const sz = Number(fixedSize) || 1;
   const variant = typeof productSizeVariantBySize === 'function' ? productSizeVariantBySize(p, sz) : null;
-  const raw = (variant && variant.pricePerCan !== undefined && Number(variant.pricePerCan) > 0)
+  let raw = (variant && variant.pricePerCan !== undefined && Number(variant.pricePerCan) > 0)
     ? Number(variant.pricePerCan)
     : Number(p.price || 0) * sz;
+  // Align replacement pricing with the original sale's promo discount and VAT-exclusive multiplier
+  if (sale) {
+    const discPct = Number(sale.discountPct || sale.discountPercentage || 0);
+    if (discPct > 0 && discPct <= 100) {
+      raw = raw * (1 - discPct / 100);
+    }
+    const taxStatus = String(sale.taxStatus || sale.tax_status || 'vat_registered').toLowerCase();
+    const pricingType = String(sale.pricingType || sale.pricing_type || 'inclusive').toLowerCase();
+    const vatRate = Number(sale.vatRate ?? sale.vat_rate ?? 12);
+    const prodTaxClass = String(p.taxClassification || p.tax_classification || 'vatable').toLowerCase();
+    if (taxStatus === 'vat_registered' && pricingType === 'exclusive' && prodTaxClass === 'vatable' && vatRate > 0) {
+      raw = raw * (1 + vatRate / 100);
+    }
+  }
   return Number(raw.toFixed(2));
 }
 
 function isSameReplacementPrice(p, fixedSize, origProductId, origUnitPrice) {
-  const unitP = getReplacementUnitPriceForSize(p, fixedSize, origProductId, origUnitPrice);
-  return Math.abs(unitP - Number(origUnitPrice || 0)) < 0.005;
+  if (!p) return false;
+  const sz = Number(fixedSize) || 1;
+  if (typeof productHasSize === 'function' && !productHasSize(p, sz)) return false;
+  const unitP = getReplacementUnitPriceForSize(p, sz, origProductId, origUnitPrice);
+  return unitP > 0;
 }
 
 function syncFixedExchangeLines(saleId) {
@@ -1828,21 +1868,23 @@ function syncFixedExchangeLines(saleId) {
         p = productById(item.productId);
       }
 
-      // If original product isn't found or has 0 stock, fallback to first active product with enough stock of fixedSize AND exact same price
-      if (!p || p.stock < fixedQty * fixedSize) {
+      // If original product isn't found or has insufficient non-expired sellable stock, fallback to first active product with enough sellable stock of fixedSize
+      const origHasSellable = p && productSellableStock(p) >= fixedQty * fixedSize
+        && (!productHasCanBreakdown(p) || productSellableCanCount(p, fixedSize) >= fixedQty);
+      if (!origHasSellable) {
         const fallback = activeProducts().find(cand => {
           if (!isSameReplacementPrice(cand, fixedSize, item.productId, effectiveUnitPrice)) return false;
-          if (cand.stock < fixedQty * fixedSize) return false;
-          if (productHasCanBreakdown(cand) && productCanCount(cand, fixedSize) < fixedQty) return false;
+          if (productSellableStock(cand) < fixedQty * fixedSize) return false;
+          if (productHasCanBreakdown(cand) && productSellableCanCount(cand, fixedSize) < fixedQty) return false;
           return true;
         });
-        if (fallback && (!p || p.stock < fixedQty * fixedSize)) {
+        if (fallback) {
           p = fallback;
         }
       }
 
       if (p) {
-        const unitPrice = effectiveUnitPrice;
+        const unitPrice = getReplacementUnitPriceForSize(p, fixedSize, item.productId, effectiveUnitPrice, sale);
         nextCart.push({
           sourceRowIdx: idx,
           origProductId: item.productId,
@@ -1899,19 +1941,20 @@ function onChangeFixedReplacementProduct(saleId, sourceRowIdx, newProductId) {
   const fixedQty = Number(line.qty) || 1;
 
   if (!isSameReplacementPrice(p, fixedSize, line.origProductId, line.origUnitPrice)) {
-    showToast(`Replacement product must have the exact same price (${peso(line.origUnitPrice)}/${fixedSize}L) as the returned item.`, 'error');
+    showToast(`Replacement product must be available in ${fixedSize}L container size with a valid selling price.`, 'error');
     return;
   }
 
-  if (p.stock < fixedQty * fixedSize) {
-    showToast(`Not enough stock for ${p.name} (${formatLiters(p.stock)} available, need ${fixedQty * fixedSize}L).`, 'error');
+  if (productSellableStock(p) < fixedQty * fixedSize) {
+    showToast(`Not enough sellable (non-expired) stock for ${p.name} (${formatLiters(productSellableStock(p))} available, need ${fixedQty * fixedSize}L).`, 'error');
     return;
   }
-  if (productHasCanBreakdown(p) && productCanCount(p, fixedSize) < fixedQty) {
-    showToast(`Only ${productCanCount(p, fixedSize)} × ${fixedSize}L unit(s) in stock for ${p.name} (need ${fixedQty}).`, 'error');
+  if (productHasCanBreakdown(p) && productSellableCanCount(p, fixedSize) < fixedQty) {
+    showToast(`Only ${productSellableCanCount(p, fixedSize)} sellable × ${fixedSize}L unit(s) in stock for ${p.name} (need ${fixedQty}).`, 'error');
     return;
   }
 
+  const sale = (db.sales || []).find(s => s.id === saleId) || null;
   const variant = productSizeVariantBySize(p, fixedSize);
   line.productId = p.productId || p.id;
   line.product_id = p.productId || p.id;
@@ -1920,7 +1963,7 @@ function onChangeFixedReplacementProduct(saleId, sourceRowIdx, newProductId) {
   line.name = p.name;
   line.brand = p.brand || '';
   line.color = p.color || '';
-  line.unitPrice = Number(line.origUnitPrice || getReplacementUnitPriceForSize(p, fixedSize, line.origProductId, line.origUnitPrice));
+  line.unitPrice = getReplacementUnitPriceForSize(p, fixedSize, line.origProductId, line.origUnitPrice, sale);
   line.lineTotal = Number((fixedQty * line.unitPrice).toFixed(2));
 
   openExchangePickerRow = null;
@@ -1929,6 +1972,7 @@ function onChangeFixedReplacementProduct(saleId, sourceRowIdx, newProductId) {
 }
 
 function buildExchangePickerCardsHtml(saleId, ex) {
+  const sale = (db.sales || []).find(s => s.id === saleId) || null;
   const fixedSize = Number(ex.size) || 1;
   const fixedQty = Number(ex.qty) || 1;
   const origProd = productById(ex.origProductId);
@@ -1958,8 +2002,8 @@ function buildExchangePickerCardsHtml(saleId, ex) {
     const bOrig = b.id === ex.origProductId ? 0 : 1;
     if (aOrig !== bOrig) return aOrig - bOrig;
 
-    const aHasStock = (productHasCanBreakdown(a) ? (productCanCount(a, fixedSize) >= fixedQty && a.stock >= fixedQty * fixedSize) : (a.stock >= fixedQty * fixedSize)) ? 0 : 1;
-    const bHasStock = (productHasCanBreakdown(b) ? (productCanCount(b, fixedSize) >= fixedQty && b.stock >= fixedQty * fixedSize) : (b.stock >= fixedQty * fixedSize)) ? 0 : 1;
+    const aHasStock = (productHasCanBreakdown(a) ? (productSellableCanCount(a, fixedSize) >= fixedQty && productSellableStock(a) >= fixedQty * fixedSize) : (productSellableStock(a) >= fixedQty * fixedSize)) ? 0 : 1;
+    const bHasStock = (productHasCanBreakdown(b) ? (productSellableCanCount(b, fixedSize) >= fixedQty && productSellableStock(b) >= fixedQty * fixedSize) : (productSellableStock(b) >= fixedQty * fixedSize)) ? 0 : 1;
     if (aHasStock !== bHasStock) return aHasStock - bHasStock;
 
     const aSameBrand = origProd && a.brand === origProd.brand ? 0 : 1;
@@ -1970,15 +2014,17 @@ function buildExchangePickerCardsHtml(saleId, ex) {
   });
 
   if (!list.length) {
-    return `<div class="muted small center" style="padding:18px; grid-column:1 / -1;">No matching paint products with the same price (${peso(ex.origUnitPrice)}/${fixedSize}L) found.</div>`;
+    return `<div class="muted small center" style="padding:18px; grid-column:1 / -1;">No matching ${fixedSize}L paint products found.</div>`;
   }
 
   return list.map(p => {
     const hasBreakdown = productHasCanBreakdown(p);
-    const canCount = productCanCount(p, fixedSize);
+    const canCount = productSellableCanCount(p, fixedSize);
+    const expiredCans = typeof productExpiredCanCount === 'function' ? productExpiredCanCount(p, fixedSize) : 0;
+    const sellableLiters = productSellableStock(p);
     const enoughStock = hasBreakdown
-      ? (canCount >= fixedQty && p.stock >= fixedQty * fixedSize)
-      : (p.stock >= fixedQty * fixedSize);
+      ? (canCount >= fixedQty && sellableLiters >= fixedQty * fixedSize)
+      : (sellableLiters >= fixedQty * fixedSize);
 
     const isSelected = p.id === ex.productId;
     const isOrig = p.id === ex.origProductId;
@@ -1987,14 +2033,19 @@ function buildExchangePickerCardsHtml(saleId, ex) {
     const rgb = hexToRgb(hex);
     const detected = detectMixedColorName(rgb.r, rgb.g, rgb.b);
     const colorLabel = p.color && p.color !== '-' ? p.color : detected.name;
-    const unitP = getReplacementUnitPriceForSize(p, fixedSize, ex.origProductId, ex.origUnitPrice);
+    const unitP = getReplacementUnitPriceForSize(p, fixedSize, ex.origProductId, ex.origUnitPrice, sale);
+    const priceDiff = Number((unitP - Number(ex.origUnitPrice || 0)).toFixed(2));
     const stockLabel = hasBreakdown
-      ? `${canCount} × ${fixedSize}L in stock`
-      : `${formatLiters(p.stock)} in stock`;
+      ? `${canCount} × ${fixedSize}L sellable${expiredCans > 0 ? ` (${expiredCans} expired)` : ''}`
+      : `${formatLiters(sellableLiters)} sellable`;
 
     const diffTag = isOrig
       ? `<span class="badge ok" style="font-size:10px; padding:1px 6px;">★ Same Item · Even Exchange</span>`
-      : `<span class="badge ok" style="font-size:10px; padding:1px 6px;">Same Price · Even Exchange</span>`;
+      : (Math.abs(priceDiff) < 0.01
+        ? `<span class="badge ok" style="font-size:10px; padding:1px 6px;">Same Price · Even Exchange</span>`
+        : (priceDiff > 0
+          ? `<span class="badge mid" style="font-size:10px; padding:1px 6px;">Upgrade · +${peso(priceDiff)}/unit</span>`
+          : `<span class="badge low" style="font-size:10px; padding:1px 6px;">Lower Price · -${peso(Math.abs(priceDiff))}/unit</span>`));
 
     return `
       <div onclick="${enoughStock ? `onChangeFixedReplacementProduct('${saleId}', ${ex.sourceRowIdx}, '${p.id}')` : ''}"
@@ -2159,7 +2210,7 @@ function renderExchangeReplacementCart(saleId) {
                           🎨 Same Brand / Category (${recCount})
                         </button>
                         <button type="button" class="pos-cat-pill ${exchangePickerTab === 'all' ? 'active' : ''}" onclick="setExchangePickerTab('${saleId}', 'all')">
-                          🌈 All Same-Price (${samePriceProds.length})
+                          🌈 All ${fixedSize}L Products (${samePriceProds.length})
                         </button>
                         ${!isOrig && ex.origProductId ? `
                           <button type="button" class="btn ghost small" style="font-size:11px; padding:3px 8px;" onclick="onChangeFixedReplacementProduct('${saleId}', ${ex.sourceRowIdx}, '${ex.origProductId}')">
@@ -2167,7 +2218,7 @@ function renderExchangeReplacementCart(saleId) {
                           </button>
                         ` : ''}
                       </div>
-                      <input type="text" placeholder="🔍 Search same-price shade or brand..." value="${escapeHtml(exchangePickerQuery)}"
+                      <input type="text" placeholder="🔍 Search shade, product, or brand..." value="${escapeHtml(exchangePickerQuery)}"
                              oninput="onExchangePickerSearch('${saleId}', this.value)"
                              style="width:220px; padding:5px 10px; font-size:12px; border-radius:6px; background:var(--surface);">
                     </div>
@@ -2496,10 +2547,12 @@ async function processSaleReturn(saleId) {
     return;
   }
 
-  // 2. Processed By / Authorization Resolution
-  const authorizedAdminName = (adminReviewApproved && adminReviewAdminName)
-    ? adminReviewAdminName
-    : ((currentUser && currentUser.name) || 'Cashier');
+  // 2. Processed By / Authorization Resolution (never stamp a Cashier's name as Administrator)
+  const isAdminActor = Boolean(currentUser && currentUser.role === 'admin');
+  const hasAdminAuth = Boolean(isAdminActor || (adminReviewApproved && adminReviewAdminName));
+  const authorizedAdminName = isAdminActor
+    ? currentUser.name
+    : (adminReviewApproved && adminReviewAdminName ? adminReviewAdminName : '');
 
   const reason = document.getElementById('ret-reason') ? document.getElementById('ret-reason').value : 'Return / exchange';
   const note = document.getElementById('ret-note') ? document.getElementById('ret-note').value.trim() : '';
@@ -2508,9 +2561,23 @@ async function processSaleReturn(saleId) {
   const receiptNo = getReceiptNo(sale);
   const isRefund = currentReturnResolution === 'refund';
 
-  // 3. Check Policy Restrictions for after purchase day
-  if (!isSameDay && isRefund && !adminReviewApproved) {
-    showToast('Ordinary cash refunds after the purchase day are restricted under standard store policy. Administrator Review is required for refund exceptions.', 'error');
+  // 3. Require Administrator Authorization for ALL Cash Refunds (same-day or later) and cash-payout exchanges
+  let previewReturnVal = 0;
+  sale.items.forEach((item, idx) => {
+    const inp = document.getElementById(`ret-qty-input-${idx}`);
+    const q = inp ? Math.max(0, parseFloat(inp.value) || 0) : 0;
+    if (q > 0) {
+      const up = parseFloat(inp.dataset.unitPrice) || Number(item.unitPrice || 0);
+      previewReturnVal += Number((q * up).toFixed(2));
+    }
+  });
+  const previewExchangeVal = isRefund ? 0 : returnExchangeCart.reduce((s, ex) => s + Number(ex.lineTotal || 0), 0);
+  const requiresCashPayout = isRefund || (previewReturnVal > previewExchangeVal + 0.005);
+
+  if (requiresCashPayout && !hasAdminAuth) {
+    const panel = document.getElementById('ret-admin-review-panel');
+    if (panel) panel.style.display = 'block';
+    showToast('Administrator authorization is required before processing any Cash Refund or cash-difference payout. Enter Admin credentials in the Authorization panel above.', 'error');
     return;
   }
 
@@ -2529,16 +2596,16 @@ async function processSaleReturn(saleId) {
         }
       } else {
         const p = productById(exItem.productId);
-        if (!p || p.stock < exItem.qty * exItem.size) {
-          showToast(`Insufficient stock for replacement item: ${exItem.name}.`, 'error');
+        if (!p || productSellableStock(p) < exItem.qty * exItem.size) {
+          showToast(`Insufficient sellable (non-expired) stock for replacement item: ${exItem.name}.`, 'error');
           return;
         }
-        if (productHasCanBreakdown(p) && productCanCount(p, exItem.size || 1) < exItem.qty) {
-          showToast(`Insufficient ${exItem.size || 1}L units in stock for replacement item: ${exItem.name}.`, 'error');
+        if (productHasCanBreakdown(p) && productSellableCanCount(p, exItem.size || 1) < exItem.qty) {
+          showToast(`Insufficient sellable ${exItem.size || 1}L units in stock for replacement item: ${exItem.name}.`, 'error');
           return;
         }
         if (!isSameReplacementPrice(p, exItem.size || 1, exItem.origProductId, exItem.origUnitPrice !== undefined ? exItem.origUnitPrice : exItem.unitPrice)) {
-          showToast(`Replacement item "${exItem.name}" must have the exact same price as the returned product.`, 'error');
+          showToast(`Replacement item "${exItem.name}" must be available in ${exItem.size || 1}L container size with a valid selling price.`, 'error');
           return;
         }
       }
@@ -2553,15 +2620,15 @@ async function processSaleReturn(saleId) {
       const sz = Number(exItem.size) || 1;
       const q = Number(exItem.qty) || 0;
       exLitersByProd[p.id] = (exLitersByProd[p.id] || 0) + (q * sz);
-      if (exLitersByProd[p.id] > p.stock + 1e-6) {
-        showToast(`Combined replacement quantity exceeds available stock for ${p.name}.`, 'error');
+      if (exLitersByProd[p.id] > productSellableStock(p) + 1e-6) {
+        showToast(`Combined replacement quantity exceeds available sellable stock for ${p.name}.`, 'error');
         return;
       }
       if (productHasCanBreakdown(p)) {
         const sk = `${p.id}_${sz}`;
         exCansBySize[sk] = (exCansBySize[sk] || 0) + q;
-        if (exCansBySize[sk] > productCanCount(p, sz)) {
-          showToast(`Combined replacement ${sz}L units exceed available stock for ${p.name}.`, 'error');
+        if (exCansBySize[sk] > productSellableCanCount(p, sz)) {
+          showToast(`Combined replacement ${sz}L units exceed available sellable stock for ${p.name}.`, 'error');
           return;
         }
       }
@@ -2826,10 +2893,11 @@ async function processSaleReturn(saleId) {
     }
   }
 
-  // 7. Update Sale Financials & Status (cap refundTotal at sale.total so netTotal never goes negative)
+  // 7. Update Sale Financials & Status (signed refundTotal: positive = cash refunded to customer, negative = extra top-up cash collected on upgrade exchange)
   const netReduction = Number((thisRefundAmount - thisExchangeAmount).toFixed(2));
   const maxRefundable = Number(sale.total || 0);
-  sale.refundTotal = Math.min(maxRefundable, Math.max(0, Number(((sale.refundTotal || 0) + netReduction).toFixed(2))));
+  const prevRefundTotal = Number(sale.refundTotal || 0);
+  sale.refundTotal = Math.min(maxRefundable, Number((prevRefundTotal + netReduction).toFixed(2)));
   const allFullyReturned = sale.items.every(it => Number(it.returnedQty || 0) >= Number(it.qty || 0));
   sale.status = allFullyReturned ? 'refunded' : 'partially_refunded';
 
@@ -2845,8 +2913,8 @@ async function processSaleReturn(saleId) {
     inspectionConducted: true,
     cashierId: (currentUser && currentUser.id) || null,
     cashierName: (currentUser && currentUser.name) || 'Cashier',
-    authorizedBy: authorizedAdminName || (currentUser && currentUser.role === 'admin' ? currentUser.name : 'Administrator'),
-    adminApproved: true,
+    authorizedBy: authorizedAdminName || 'Not Required (Even / Top-Up Exchange)',
+    adminApproved: Boolean(hasAdminAuth),
     adminException: Boolean(adminReviewApproved),
     adminExceptionReason: adminReviewReason || '',
     restocked: Boolean(anySealedRestocked),
@@ -2868,6 +2936,33 @@ async function processSaleReturn(saleId) {
     : '';
   const prevNetTotal = Number((sale.total - (sale.refundTotal - netReduction)).toFixed(2));
   const newNetTotal = Number((sale.total - sale.refundTotal).toFixed(2));
+
+  try {
+    const retResp = await fetch('api/transactions.php?action=process_return', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        saleId: sale.id,
+        returnRecord,
+        updatedItems: sale.items,
+        refundTotal: sale.refundTotal,
+        status: sale.status,
+        requiresAdminAuth: Boolean(requiresCashPayout || !isSameDay || adminReviewApproved),
+        adminVerifyToken: window._adminVerifyToken || ''
+      })
+    });
+    const retJson = await retResp.json().catch(() => ({}));
+    if (!retResp.ok || !retJson.success) {
+      throw new Error(retJson.error || 'Failed to process return/exchange on server.');
+    }
+  } catch (retErr) {
+    showToast(retErr.message || 'Return/exchange failed.', 'error');
+    if (typeof loadDB === 'function') await loadDB();
+    return;
+  }
+
+  window._adminVerifyToken = '';
+  if (typeof loadDB === 'function') await loadDB();
 
   logAudit(
     auditAction,
@@ -2895,12 +2990,6 @@ async function processSaleReturn(saleId) {
       }
     }
   );
-
-  const saved = await saveDB();
-  if (!saved) {
-    if (typeof loadDB === 'function') await loadDB();
-    return;
-  }
   closeModal();
 
   showToast(

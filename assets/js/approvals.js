@@ -1171,11 +1171,15 @@ async function approveAllPendingProductsBatch() {
       const p = productById(it.id);
       if (p && p.pendingEdit) {
         const prop = p.pendingEdit.proposed || {};
-        if (prop.name) p.name = prop.name;
+        if (prop.name) { p.name = prop.name; p.productName = prop.name; p.product_name = prop.name; }
         if (prop.brand) p.brand = prop.brand;
         if (prop.type) p.type = prop.type;
+        if (prop.category) p.category = prop.category;
+        if (prop.taxClassification) { p.taxClassification = prop.taxClassification; p.tax_classification = prop.taxClassification; }
         if (prop.color) p.color = prop.color;
         if (prop.colorHex) { p.colorHex = prop.colorHex; p.color_hex = prop.colorHex; }
+        if (prop.status) p.status = prop.status;
+        if (prop.supplierId !== undefined) p.supplierId = prop.supplierId || null;
         if (prop.threshold !== undefined && !isNaN(Number(prop.threshold))) {
           p.threshold = Number(prop.threshold);
         }
@@ -1183,7 +1187,7 @@ async function approveAllPendingProductsBatch() {
           p.thresholdBySize = prop.thresholdBySize;
         }
         if (Array.isArray(prop.sizes) && prop.sizes.length > 0) {
-          p.sizes = sanitizeSizeList([...(p.sizes || []), ...prop.sizes]);
+          p.sizes = sanitizeSizeList(prop.sizes);
         }
         if (prop.price !== undefined && !isNaN(Number(prop.price))) {
           const oldP = Number(p.price);
@@ -1191,6 +1195,12 @@ async function approveAllPendingProductsBatch() {
           if (oldP !== newP) {
             p.recentPrice = oldP;
             p.price = newP;
+            if (Array.isArray(p.sizesData)) {
+              p.sizesData.forEach(sz => {
+                sz.pricePerLiter = newP;
+                sz.pricePerCan = Number((newP * (Number(sz.containerSize) || 1)).toFixed(2));
+              });
+            }
           }
         }
         p.pendingEdit = null;
@@ -1237,29 +1247,71 @@ async function approveAllPendingAdjustmentsBatch() {
   });
   if (!confirmed) return;
 
+  const approvedReqs = [];
+  const skippedReqs = [];
   for (const req of list) {
     const rows = parseReqRows(req);
+    let insufficientMsg = '';
+    for (const r of rows) {
+      if (r.type !== 'deduct') continue;
+      const p = productById(r.productId);
+      if (!p) { insufficientMsg = `Product ${r.productId} not found`; break; }
+      const sz = Number(r.size) || 1;
+      if (r.stockKind === 'opened') {
+        const availOpened = (typeof productOpenedStockBySize === 'function' ? productOpenedStockBySize(p)[sz] : 0) || 0;
+        if (Number(r.liters || 0) > availOpened + 1e-6) {
+          insufficientMsg = `${p.name} (${sz}L opened): need ${r.liters}L, have ${availOpened}L`;
+          break;
+        }
+      } else {
+        const availCans = typeof productCanCount === 'function' ? productCanCount(p, sz) : 0;
+        if (Number(r.cans || 0) > availCans) {
+          insufficientMsg = `${p.name} (${sz}L sealed): need ${r.cans}, have ${availCans}`;
+          break;
+        }
+      }
+    }
+    if (insufficientMsg) {
+      skippedReqs.push(`${req.reqNumber} (${insufficientMsg})`);
+      continue;
+    }
     await executeStockAdjustment(rows, req.requestedBy, { skipSave: true, skipReset: true, skipToast: true, skipRender: true });
     req.status = 'approved';
     req.reviewedBy = (currentUser && currentUser.name) || 'Administrator';
     req.reviewedAt = nowISO();
+    approvedReqs.push(req);
   }
 
+  if (!approvedReqs.length) {
+    showToast(`Cannot approve adjustment(s) due to insufficient stock: ${skippedReqs.join('; ')}`, 'error');
+    renderPage();
+    return;
+  }
+
+  const saved = await saveDB();
+  if (!saved) {
+    await loadDB();
+    renderPage();
+    return;
+  }
   logAudit(
     'ADJ_BATCH_APPROVE',
     'Stock Adjustment',
-    `Batch approved ${list.length} stock adjustment request(s): ${list.map(r => r.reqNumber).join(', ')}`,
+    `Batch approved ${approvedReqs.length} stock adjustment request(s): ${approvedReqs.map(r => r.reqNumber).join(', ')}`,
     {
-      entityName: `Stock Adjustments (${list.length} requests)`,
+      entityName: `Stock Adjustments (${approvedReqs.length} requests)`,
       fieldChanged: 'Batch Stock Adjustment Approval',
-      oldValue: `${list.length} Pending Request(s)`,
-      newValue: `${list.length} Approved & Committed`,
-      referenceNo: list.map(r => r.reqNumber).join(', '),
+      oldValue: `${approvedReqs.length} Pending Request(s)`,
+      newValue: `${approvedReqs.length} Approved & Committed`,
+      referenceNo: approvedReqs.map(r => r.reqNumber).join(', '),
       reason: 'Administrator batch approval in Pending Approvals Hub'
     }
   );
-  await saveDB();
-  showToast(`Approved all ${list.length} adjustment request(s) and updated stock!`, 'ok');
+  if (skippedReqs.length) {
+    showToast(`Approved ${approvedReqs.length} request(s). Skipped ${skippedReqs.length} with insufficient stock: ${skippedReqs.join('; ')}`, 'warn');
+  } else {
+    showToast(`Approved all ${approvedReqs.length} adjustment request(s) and updated stock!`, 'ok');
+  }
   renderPage();
 }
 
@@ -2094,11 +2146,15 @@ function openRejectAdjRequestModal(reqId) {
   const req = (db.adjustmentRequests || []).find(r => r.id === reqId);
   if (!req || req.status !== 'pending') return;
 
+  const reqRows = typeof parseReqRows === 'function' ? parseReqRows(req) : (Array.isArray(req.rows) ? req.rows : []);
+  const reasonList = Array.from(new Set(reqRows.map(r => r.reason).filter(Boolean)));
+  const categoryLabel = req.reason || (reasonList.length ? reasonList.join(', ') : 'Stock Adjustment');
+
   const bodyHtml = `
     <div>
       <div style="background:var(--surface-2); border:1px solid var(--line); border-radius:6px; padding:12px 14px; margin-bottom:14px; font-size:13px;">
         <div>Request: <b style="font-family:'Space Grotesk',monospace; color:var(--ink);">${escapeHtml(req.reqNumber)}</b></div>
-        <div class="muted small" style="margin-top:2px;">Submitted by <b>${escapeHtml(req.requestedBy)}</b> · Category: <b>${escapeHtml(req.reason)}</b></div>
+        <div class="muted small" style="margin-top:2px;">Submitted by <b>${escapeHtml(req.requestedBy)}</b> · Category: <b>${escapeHtml(categoryLabel)}</b></div>
       </div>
 
       <label style="font-weight:600; font-size:13px; color:var(--ink); display:block; margin-bottom:6px;">
@@ -2180,7 +2236,11 @@ function openProductApprovalPreviewModal(productId) {
       ${hasEdit && p.pendingEdit.proposed ? `
         <div style="background:var(--surface-2); border:1px solid var(--line); border-radius:6px; padding:10px 14px; margin-bottom:14px; font-size:12.5px;">
           <b>Proposed Edits:</b>
-          <div style="margin-top:4px;">${JSON.stringify(p.pendingEdit.proposed)}</div>
+          <div style="margin-top:6px; display:flex; flex-direction:column; gap:4px;">
+            ${Object.entries(p.pendingEdit.proposed).map(([k, v]) =>
+              `<div><span class="muted">${escapeHtml(k)}:</span> <b>${escapeHtml(typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v))}</b></div>`
+            ).join('')}
+          </div>
         </div>
       ` : ''}
     </div>

@@ -1843,24 +1843,7 @@ async function handleLogin(e) {
 
     if (!res.ok || !data.success || !data.user) {
       const errMsg = data.error || 'Incorrect username or password.';
-      const matchedUser = db && db.users ? db.users.find(u => u.username.toLowerCase() === username.toLowerCase()) : null;
-      logAudit(
-        'LOGIN_FAILED',
-        'Authentication',
-        `Failed login attempt for username "${username || 'unknown'}" (${errMsg})`,
-        {
-          userOverride: {
-            id: matchedUser ? matchedUser.id : '',
-            name: matchedUser ? `${matchedUser.name} (@${username})` : (username || 'Unknown User'),
-            role: matchedUser ? matchedUser.role : 'unauthenticated'
-          },
-          entityName: matchedUser ? `${matchedUser.name} (@${username})` : `Username: ${username || 'Unknown'}`,
-          fieldChanged: 'User Authentication',
-          oldValue: 'Signed Out',
-          newValue: 'Login Failed',
-          reason: errMsg
-        }
-      );
+      // Note: api/auth.php already records LOGIN_FAILED server-side; avoid redundant unauthenticated 401 audit POST.
       if (errorSlot) {
         errorSlot.innerHTML = `<div class="login-error">${escapeHtml(errMsg)}</div>`;
       }
@@ -2013,10 +1996,11 @@ function productSizeThreshold(p, size) {
   return Math.max(5, Math.round(overall / s)) || 5;
 }
 
-/* Status for a single can size: 'out' (0 cans), 'low' (<= threshold), 'ok' (> threshold) */
+/* Status for a single can size based strictly on NON-EXPIRED sellable cans:
+   'out' (0 sellable cans), 'low' (<= threshold), 'ok' (> threshold) */
 function productSizeStatus(p, size) {
   const s = normalizeCanSize(size);
-  const count = productCanCount(p, s);
+  const count = productSellableCanCount(p, s);
   const thresh = productSizeThreshold(p, s);
   if (count <= 0) return 'out';
   if (count <= thresh) return 'low';
@@ -2044,48 +2028,48 @@ function productLowSizes(p) {
 }
 
 /**
- * Returns container sizes of product p that are strictly Low Stock (available > 0 and <= threshold).
- * Mutually exclusive with Out of Stock (0 units).
+ * Returns container sizes of product p that are strictly Low Stock (sellable available > 0 and <= threshold).
+ * Mutually exclusive with Out of Stock (0 sellable units).
  */
 function productLowStockOnlySizes(p) {
   if (!p) return [];
   return productSizes(p).filter(s => {
-    const count = productCanCount(p, s);
+    const count = productSellableCanCount(p, s);
     const thresh = productSizeThreshold(p, s);
     return count > 0 && count <= thresh;
   });
 }
 
 /**
- * Returns container sizes of product p that are Out of Stock (available = 0).
+ * Returns container sizes of product p that are Out of Stock (sellable available = 0).
  */
 function productOutOfStockSizes(p) {
   if (!p) return [];
-  return productSizes(p).filter(s => productCanCount(p, s) <= 0);
+  return productSizes(p).filter(s => productSellableCanCount(p, s) <= 0);
 }
 
 /**
  * Returns container sizes of product p that are In Stock (available > threshold).
  */
 /**
- * A product is Out of Stock if all its container sizes have zero available quantity
- * AND its total stock is 0.
+ * A product is Out of Stock if all its container sizes have zero sellable quantity
+ * AND its total sellable stock is 0.
  * "Do not classify an entire product as Out of Stock simply because one of its container sizes has zero stock."
  */
 function isProductOutOfStock(p) {
   if (!p) return false;
   const sizes = productSizes(p);
   if (sizes.length > 0) {
-    const totalCans = sizes.reduce((sum, s) => sum + productCanCount(p, s), 0);
+    const totalCans = sizes.reduce((sum, s) => sum + productSellableCanCount(p, s), 0);
     if (totalCans > 0) return false;
   }
-  return (Number(p.stock) || 0) <= 0;
+  return productSellableStock(p) <= 0;
 }
 
 /**
- * A product is Low Stock if it has available stock > 0 AND at least one container size has positive quantity
+ * A product is Low Stock if it has sellable stock > 0 AND at least one container size has positive sellable quantity
  * at or below its configured threshold.
- * Mutually exclusive with Out of Stock. Zero available stock must never appear in Low Stock.
+ * Mutually exclusive with Out of Stock. Zero sellable stock must never appear in Low Stock.
  */
 function isProductLowStock(p) {
   if (!p) return false;
@@ -2093,18 +2077,18 @@ function isProductLowStock(p) {
   const sizes = productSizes(p);
   if (sizes.length > 0) {
     return sizes.some(s => {
-      const count = productCanCount(p, s);
+      const count = productSellableCanCount(p, s);
       const thresh = productSizeThreshold(p, s);
       return count > 0 && count <= thresh;
     });
   }
-  const stock = Number(p.stock) || 0;
+  const stock = productSellableStock(p);
   const thresh = Number(p.threshold) || 0;
   return stock > 0 && stock <= thresh;
 }
 
 /**
- * A product is In Stock if it is not Out of Stock, not Low Stock, and has available stock above threshold.
+ * A product is In Stock if it is not Out of Stock, not Low Stock, and has sellable stock above threshold.
  */
 function isProductInStock(p) {
   if (!p) return false;
@@ -2112,10 +2096,10 @@ function isProductInStock(p) {
   if (isProductLowStock(p)) return false;
   const sizes = productSizes(p);
   if (sizes.length > 0) {
-    if (sizes.some(s => productCanCount(p, s) <= 0)) return false;
-    return sizes.every(s => productCanCount(p, s) > productSizeThreshold(p, s));
+    if (sizes.some(s => productSellableCanCount(p, s) <= 0)) return false;
+    return sizes.every(s => productSellableCanCount(p, s) > productSizeThreshold(p, s));
   }
-  return (Number(p.stock) || 0) > (Number(p.threshold) || 0);
+  return productSellableStock(p) > (Number(p.threshold) || 0);
 }
 
 /**
@@ -2130,9 +2114,9 @@ function isProductOnOrder(p) {
  * Unified stock filter matcher for products across the entire system.
  * Standardizes:
  * - All Products: Active products regardless of stock status.
- * - In Stock: Available stock above low-stock threshold.
- * - Low Stock: Available stock > 0 AND <= threshold (at least one container size > 0 and <= threshold).
- * - Out of Stock: Zero available stock across relevant/all container sizes.
+ * - In Stock: Sellable stock above low-stock threshold.
+ * - Low Stock: Sellable stock > 0 AND <= threshold (at least one container size > 0 and <= threshold).
+ * - Out of Stock: Zero sellable stock across relevant/all container sizes.
  * - On Order: Pending purchase orders, evaluated separately from stock status.
  */
 function isProductMatchingStockFilter(p, statusFilter, sizeFilter = null) {
@@ -2166,7 +2150,7 @@ function isProductMatchingStockFilter(p, statusFilter, sizeFilter = null) {
   }
 
   if (targetSz) {
-    const count = productCanCount(p, targetSz);
+    const count = productSellableCanCount(p, targetSz);
     const thresh = productSizeThreshold(p, targetSz);
     const st = productSizeStatus(p, targetSz);
 
@@ -2186,9 +2170,9 @@ function isProductMatchingStockFilter(p, statusFilter, sizeFilter = null) {
     if (sf === 'out') {
       const sizes = productSizes(p);
       if (sizes.length > 0) {
-        return sizes.some(s => productCanCount(p, s) <= 0) || (Number(p.stock) || 0) <= 0;
+        return sizes.some(s => productSellableCanCount(p, s) <= 0) || productSellableStock(p) <= 0;
       }
-      return (Number(p.stock) || 0) <= 0;
+      return productSellableStock(p) <= 0;
     }
     if (sf === 'low') {
       return isProductLowStock(p);
@@ -2209,7 +2193,7 @@ function productLowSizesSummary(p) {
   const lowSizes = productLowSizes(p);
   if (!lowSizes.length) return '';
   return lowSizes.map(s => {
-    const count = productCanCount(p, s);
+    const count = productSellableCanCount(p, s);
     const thresh = productSizeThreshold(p, s);
     return `${fmtSize(s)}: ${count}/${thresh} units (${count === 0 ? 'Out' : 'Low'})`;
   }).join(' · ');
@@ -2227,7 +2211,7 @@ function productSizeThresholdBadgesHtml(p, options = {}) {
   if (!sizes.length) return '<span class="muted small">No sizes</span>';
   return sizes.map(s => {
     const thresh = productSizeThreshold(p, s);
-    const count = productCanCount(p, s);
+    const count = productSellableCanCount(p, s);
     const st = productSizeStatus(p, s);
     const canWord = thresh === 1 ? 'unit' : 'units';
     const liters = formatLiters(thresh * s);
@@ -2251,7 +2235,7 @@ function productSizeThresholdBadgesHtml(p, options = {}) {
       }
     }
 
-    const title = `${fmtSize(s)}: Minimum threshold is ${thresh} ${canWord} (${liters})${st !== 'ok' ? ' — Stock currently ' + st.toUpperCase() + ' (' + count + ' ' + (count === 1 ? 'unit' : 'units') + ' available)' : ' — Stock healthy (' + count + ' ' + (count === 1 ? 'unit' : 'units') + ' available)'}`;
+    const title = `${fmtSize(s)}: Minimum threshold is ${thresh} ${canWord} (${liters})${st !== 'ok' ? ' — Stock currently ' + st.toUpperCase() + ' (' + count + ' sellable ' + (count === 1 ? 'unit' : 'units') + ' available)' : ' — Stock healthy (' + count + ' sellable ' + (count === 1 ? 'unit' : 'units') + ' available)'}`;
 
     return `<span style="display:inline-flex; align-items:center; gap:3px; padding:2px 6px; background:${bg}; border:1px solid ${border}; border-radius:4px; font-size:11px; font-weight:600; color:${color}; font-family:'Space Grotesk',sans-serif; white-space:nowrap; line-height:1.3;" title="${escapeHtml(title)}">
       <span>${fmtSize(s)}:</span> <span style="font-weight:700;">${thresh} ${canWord}</span> <span style="font-size:10px; opacity:0.8; font-weight:400;">(${liters})</span>${statusLabel ? `<span style="font-size:10px; font-weight:700;">${statusLabel}</span>` : ''}
@@ -2261,13 +2245,13 @@ function productSizeThresholdBadgesHtml(p, options = {}) {
 
 /* Renders the Threshold table cell with accurate total liters and clearly formatted per-liter can thresholds */
 /* A product has low stock if ANY individual container size is at or below its separate threshold,
-   or if it is out of stock. Evaluates stock status independently for each product size. */
+   or if it is out of stock. Evaluates sellable stock status independently for each product size. */
 function productHasLowStock(p) {
   if (!p) return false;
   const lowSizes = productLowSizes(p);
   if (lowSizes.length > 0) return true;
   if (!p.canStock || typeof p.canStock !== 'object') {
-    return Number(p.stock) <= Number(p.threshold || 0);
+    return productSellableStock(p) <= Number(p.threshold || 0);
   }
   return false;
 }
@@ -2333,6 +2317,66 @@ function productCanCount(p, size) {
   const c = p && p.canStock && !Array.isArray(p.canStock) && typeof p.canStock === 'object' ? p.canStock : {};
   const val = c[s] !== undefined ? c[s] : c[size];
   return Math.max(0, Math.floor(Number(val) || 0));
+}
+
+/* Quarantined expired sealed cans for ONE container size (from live EXP batches or DB snapshot) */
+function productExpiredCanCount(p, size) {
+  if (!p) return 0;
+  const s = normalizeCanSize(size);
+  const physical = productCanCount(p, s);
+  if (physical <= 0) return 0;
+
+  if (typeof EXP !== 'undefined' && EXP.loaded && EXP.data && Array.isArray(EXP.data.batches)) {
+    const variant = Array.isArray(p.sizesData) ? p.sizesData.find(x => normalizeCanSize(x.containerSize) === s) : null;
+    const targetSizeId = variant && variant.sizeId ? String(variant.sizeId) : '';
+    const pId = String(p.id);
+    let expQty = 0;
+    EXP.data.batches.forEach(b => {
+      if (!b || b.depleted || b.expiryStatus !== 'expired') return;
+      const rem = Math.max(0, Math.floor(Number(b.remainingQty) || 0));
+      if (rem <= 0) return;
+      const matches = (targetSizeId && b.sizeId)
+        ? String(b.sizeId) === targetSizeId
+        : (String(b.productId) === pId && normalizeCanSize(b.containerSize) === s);
+      if (matches) expQty += rem;
+    });
+    return Math.min(physical, expQty);
+  }
+
+  if (Array.isArray(p.sizesData) && p.sizesData.length > 0) {
+    const v = p.sizesData.find(x => normalizeCanSize(x.containerSize) === s);
+    if (v && v.expiredQuantity !== undefined && v.expiredQuantity !== null) {
+      return Math.min(physical, Math.max(0, Math.floor(Number(v.expiredQuantity) || 0)));
+    }
+  }
+  if (p.expiredBySize && typeof p.expiredBySize === 'object') {
+    const val = p.expiredBySize[s] !== undefined ? p.expiredBySize[s] : p.expiredBySize[size];
+    return Math.min(physical, Math.max(0, Math.floor(Number(val) || 0)));
+  }
+  return 0;
+}
+
+/* Non-expired sellable sealed cans for ONE container size */
+function productSellableCanCount(p, size) {
+  if (!p) return 0;
+  return Math.max(0, productCanCount(p, size) - productExpiredCanCount(p, size));
+}
+
+/* Total expired sealed volume (liters) across all container sizes of product `p` */
+function productExpiredStock(p) {
+  if (!p) return 0;
+  const sizes = productSizes(p);
+  if (sizes.length > 0) {
+    return Number(sizes.reduce((sum, s) => sum + productExpiredCanCount(p, s) * s, 0).toFixed(2));
+  }
+  return Math.max(0, Number((Number(p.expiredStock) || 0).toFixed(2)));
+}
+
+/* Total non-expired sellable stock (liters) for product `p` */
+function productSellableStock(p) {
+  if (!p) return 0;
+  const total = Number(p.stock) || 0;
+  return Math.max(0, Number((total - productExpiredStock(p)).toFixed(2)));
 }
 
 function productHasCanBreakdown(p) {
@@ -2560,7 +2604,9 @@ function previewColorMixConsumption(p, litersNeeded, preferredCanSize = 0) {
   if (stillNeeded > 0) {
     if (productHasCanBreakdown(p)) {
       const tempCans = {};
-      sizes.forEach(s => { tempCans[s] = productCanCount(p, s); });
+      sizes.forEach(s => {
+        tempCans[s] = (typeof productSellableCanCount === 'function') ? productSellableCanCount(p, s) : productCanCount(p, s);
+      });
       let rem = stillNeeded;
 
       // 1. If a preferred can size was explicitly chosen, pull from that size first
@@ -2587,13 +2633,7 @@ function previewColorMixConsumption(p, litersNeeded, preferredCanSize = 0) {
         rem = Number((rem - chosen).toFixed(2));
       }
 
-      if (rem > 0) {
-        const fallbackSize = prefValid ? pref : bestFitSize(sizes, rem);
-        const countNeeded = Math.ceil(rem / fallbackSize - 1e-9);
-        cansOpened[fallbackSize] += countNeeded;
-        openedLitersFromCans += countNeeded * fallbackSize;
-        lastOpenedCanSize = fallbackSize;
-      }
+      // If rem > 0 after exhausting all non-expired sellable cans, do NOT fabricate phantom cans/leftovers.
     } else {
       // No per-size breakdown recorded yet - honor preferredCanSize or smart-fit size based on volume needed
       const availWhole = Math.floor(Number(p && p.stock) || 0);
@@ -2659,6 +2699,9 @@ function consumeProductForColorMix(p, litersNeeded, preferredCanSize = 0) {
     });
   }
   setProductOpenedBySize(p, plan.newOpenedBySize);
+  if (hadBreakdown && typeof syncProductVariants === 'function') {
+    syncProductVariants(p);
+  }
   // Deduct the whole sealed liters that were opened from `p.stock`
   const sealedDeducted = plan.openedLitersFromCans > 0 ? plan.openedLitersFromCans : plan.stillNeeded;
   p.stock = hadBreakdown
@@ -3569,11 +3612,11 @@ function renderStockMovementsTable(moves, options = {}) {
 }
 
 function stockBadge(p) {
-  const stock = Number(p && p.stock) || 0;
+  const stock = productSellableStock(p);
   if (stock <= 0) return `<span class="badge out">Out of Stock</span>`;
   if (productHasLowStock(p)) {
     const summary = productLowSizesSummary(p);
-    const tip = summary ? `Low stock sizes: ${summary}` : `Stock (${formatLiters(stock)}) ≤ threshold (${formatLiters(p?.threshold || 0)})`;
+    const tip = summary ? `Low stock sizes: ${summary}` : `Sellable stock (${formatLiters(stock)}) ≤ threshold (${formatLiters(p?.threshold || 0)})`;
     return `<span class="badge low" title="${escapeHtml(tip)}">Low Stock</span>`;
   }
   return `<span class="badge ok">In Stock</span>`;
@@ -3718,7 +3761,7 @@ if (typeof window.poSuggestedQty !== 'function') {
   window.poSuggestedQty = function (p, size = 0) {
     if (!p) return 10;
     const s = size > 0 ? normalizeCanSize(size) : ((productSizes(p) || [])[0] || 1);
-    const count = productCanCount(p, s);
+    const count = productSellableCanCount(p, s);
     const thresh = productSizeThreshold(p, s);
     const needed = Math.max(10, (thresh * 2) - count);
     return Math.min(1000, needed);
@@ -3732,10 +3775,10 @@ function getAlertSizeKey(productId, size, sizeId = null) {
 const LowStockService = {
   selectedKeys: new Set(),
 
-  // 1. Core Stock & PO Detection
+  // 1. Core Stock & PO Detection (strictly non-expired sellable cans)
   getVariantStockStatus(p, size) {
     const s = normalizeCanSize(size);
-    const count = productCanCount(p, s);
+    const count = productSellableCanCount(p, s);
     const thresh = productSizeThreshold(p, s);
     if (count <= 0) return 'out'; // Out of Stock
     if (count <= thresh) return 'low'; // Low Stock
@@ -4155,6 +4198,61 @@ const LowStockService = {
   },
 
   // 6. Unified Purchase Order Creation & Confirmation Service
+  getDefaultMOQForSize(size) {
+    const s = normalizeCanSize(size);
+    if (s >= 16) return 2;
+    if (s >= 4) return 4;
+    return 6;
+  },
+
+  getSupplierCostAndMOQ(product, supplier, size) {
+    const s = normalizeCanSize(size) || 1;
+    const defaultMOQ = this.getDefaultMOQForSize(s);
+    const sellingPricePerLiter = typeof poSellingPricePerLiter === 'function' ? poSellingPricePerLiter(product) : (Number(product && product.price) || 0);
+    const fallbackCostPerLiter = Number((sellingPricePerLiter * 0.85).toFixed(2));
+    const fallbackUnitCost = Number((fallbackCostPerLiter * s).toFixed(2));
+
+    const mappings = (db && Array.isArray(db.productSuppliers)) ? db.productSuppliers : [];
+    const pid = String(product && product.id || '');
+    const altPid = String(product && (product.productId || product.product_id || product.id) || '');
+    const supId = String(supplier && supplier.id || '');
+
+    const exact = mappings.find(m =>
+      String(m.supplierId || m.supplier_id) === supId &&
+      (String(m.productId || m.product_id) === pid || String(m.productId || m.product_id) === altPid) &&
+      Math.abs((Number(m.containerSize ?? m.container_size) || 0) - s) < 0.01
+    );
+    const generic = exact || mappings.find(m =>
+      String(m.supplierId || m.supplier_id) === supId &&
+      (String(m.productId || m.product_id) === pid || String(m.productId || m.product_id) === altPid) &&
+      (Number(m.containerSize ?? m.container_size) || 0) === 0
+    );
+
+    let unitCost = fallbackUnitCost;
+    let purchaseCostPerLiter = fallbackCostPerLiter;
+    let minOrderQty = defaultMOQ;
+
+    if (generic) {
+      const savedCost = Number(generic.purchaseCost ?? generic.purchase_cost) || 0;
+      const savedSz = Number(generic.containerSize ?? generic.container_size) || 0;
+      if (savedCost > 0) {
+        if (savedSz > 0) {
+          unitCost = Number(savedCost.toFixed(2));
+          purchaseCostPerLiter = Number((unitCost / s).toFixed(2));
+        } else {
+          purchaseCostPerLiter = Number(savedCost.toFixed(2));
+          unitCost = Number((purchaseCostPerLiter * s).toFixed(2));
+        }
+      }
+      const savedMoq = Math.floor(Number(generic.minOrderQty ?? generic.min_order_qty) || 0);
+      if (savedMoq > 0) {
+        minOrderQty = savedMoq;
+      }
+    }
+
+    return { sellingPricePerLiter, purchaseCostPerLiter, unitCost, minOrderQty };
+  },
+
   openPOCreationModal({ items = null, isSingle = false } = {}) {
     const bar = document.getElementById('alerts-floating-bar');
     if (bar) bar.style.display = 'none';
@@ -4193,7 +4291,7 @@ const LowStockService = {
 
       const st = this.getVariantStockStatus(p, s);
       if (st !== 'low' && st !== 'out') {
-        skippedItems.push(`<b>${escapeHtml(p.name)} (${fmtSize(s)})</b> stock is now healthy (${productCanCount(p, s)} units).`);
+        skippedItems.push(`<b>${escapeHtml(p.name)} (${fmtSize(s)})</b> stock is now healthy (${productSellableCanCount(p, s)} units).`);
         return;
       }
 
@@ -4205,10 +4303,11 @@ const LowStockService = {
         return;
       }
 
-      const suggestedQty = poSuggestedQty(p, s);
-      const sellingPricePerLiter = typeof poSellingPricePerLiter === 'function' ? poSellingPricePerLiter(p) : (Number(p.price) || 0);
-      const purchaseCostPerLiter = typeof poPurchaseCostPerLiter === 'function' ? poPurchaseCostPerLiter(p) : Number((sellingPricePerLiter * 0.85).toFixed(2));
-      const unitCost = poUnitCost(p, s);
+      const sellableStock = productSellableCanCount(p, s);
+      const thresh = productSizeThreshold(p, s);
+      const costMeta = this.getSupplierCostAndMOQ(p, supplier, s);
+      const minOrderQty = costMeta.minOrderQty;
+      const suggestedQty = Math.min(1000, Math.max(minOrderQty, (thresh * 2) - sellableStock));
 
       validatedItems.push({
         productId: p.id,
@@ -4220,12 +4319,13 @@ const LowStockService = {
         size: s,
         sizeId: sizeId,
         key: getAlertSizeKey(p.id, s, sizeId),
-        stock: productCanCount(p, s),
-        threshold: productSizeThreshold(p, s),
-        suggestedQty: Math.max(10, suggestedQty),
-        sellingPricePerLiter: sellingPricePerLiter,
-        purchaseCostPerLiter: purchaseCostPerLiter,
-        unitCost: unitCost,
+        stock: sellableStock,
+        threshold: thresh,
+        minOrderQty: minOrderQty,
+        suggestedQty: suggestedQty,
+        sellingPricePerLiter: costMeta.sellingPricePerLiter,
+        purchaseCostPerLiter: costMeta.purchaseCostPerLiter,
+        unitCost: costMeta.unitCost,
         supplier: supplier
       });
     });
@@ -4269,7 +4369,7 @@ const LowStockService = {
             ⚠️ Some items were excluded: ${skippedItems.join(' · ')}
           </div>
         ` : ''}
-        Review and confirm restock details for <b>${validatedItems.length} container size(s)</b> across <b>${groups.length} supplier order${groups.length === 1 ? '' : 's'}</b>. Minimum order quantity is <b>10 units</b> per product and container size.
+        Review and confirm restock details for <b>${validatedItems.length} container size(s)</b> across <b>${groups.length} supplier order${groups.length === 1 ? '' : 's'}</b>. Purchase costs and minimum order quantities (MOQ) match your linked supplier records.
       </div>
 
       <div style="display:flex; flex-direction:column; gap:16px; max-height:55vh; overflow-y:auto; padding-right:4px;">
@@ -4297,7 +4397,7 @@ const LowStockService = {
                       <th style="text-align:left;">Color Variant</th>
                       <th style="text-align:center;">Container Size</th>
                       <th style="text-align:right;">Current Stock</th>
-                      <th style="text-align:center; width:130px;">Order Quantity (Min: 10)</th>
+                      <th style="text-align:center; width:140px;">Order Quantity (MOQ)</th>
                       <th style="text-align:right;">Purchase Cost Per Liter</th>
                       <th style="text-align:right;">Purchase Cost Per Unit</th>
                       <th style="text-align:right; width:110px;">Line Total</th>
@@ -4330,18 +4430,20 @@ const LowStockService = {
                             <input type="number"
                                    id="po-qty-${escapeAttr(it.key)}"
                                    class="po-modal-qty-input"
-                                   min="10"
+                                   min="${it.minOrderQty}"
                                    max="1000"
                                    step="1"
                                    value="${it.suggestedQty}"
                                    data-gidx="${gIdx}"
                                    data-itidx="${itIdx}"
                                    data-key="${escapeAttr(it.key)}"
+                                   data-moq="${it.minOrderQty}"
                                    data-unit-cost="${it.unitCost}"
                                    oninput="LowStockService.updateModalTotals()"
                                    onkeydown="if(['-','e','E','+','.'].includes(event.key)){event.preventDefault();}"
                                    style="width:75px; padding:4px 6px; text-align:right; font-weight:700; font-size:12.5px; border:1px solid var(--line); border-radius:4px; background:var(--surface);">
-                            <div id="po-modal-qty-err-${escapeAttr(it.key)}" class="po-qty-validation-msg" style="display:none; margin-top:3px;">Minimum order quantity is 10 units.</div>
+                            <div class="muted small" style="font-size:10px; margin-top:2px;">Min: ${it.minOrderQty} unit${it.minOrderQty === 1 ? '' : 's'}</div>
+                            <div id="po-modal-qty-err-${escapeAttr(it.key)}" class="po-qty-validation-msg" style="display:none; margin-top:3px;">Minimum order quantity is ${it.minOrderQty} unit${it.minOrderQty === 1 ? '' : 's'}.</div>
                           </td>
                           <td style="text-align:right; font-family:'Space Grotesk',sans-serif; font-weight:600; color:var(--ink);">
                             ${peso(it.purchaseCostPerLiter)}
@@ -4401,14 +4503,16 @@ const LowStockService = {
       g.items.forEach((it, itIdx) => {
         const input = document.getElementById(`po-qty-${it.key}`);
         const errEl = document.getElementById(`po-modal-qty-err-${it.key}`);
+        const moq = Math.max(1, Number(it.minOrderQty) || this.getDefaultMOQForSize(it.size));
         const rawVal = input ? String(input.value).trim() : String(it.suggestedQty);
         let q = rawVal === '' ? 0 : Math.floor(Number(rawVal) || 0);
         if (q > 1000) {
           q = 1000;
           if (input) input.value = 1000;
         }
-        const isInvalid = rawVal === '' || q < 10;
+        const isInvalid = rawVal === '' || q < moq;
         if (errEl) {
+          errEl.textContent = `Minimum order quantity is ${moq} unit${moq === 1 ? '' : 's'}.`;
           errEl.style.display = isInvalid ? 'block' : 'none';
         }
         if (input) {
@@ -4435,30 +4539,38 @@ const LowStockService = {
       return;
     }
 
-    // Validate minimum order quantity of 10 units per product-size row
+    // Validate supplier/size-specific minimum order quantity per product-size row
     let hasInvalidQty = false;
     let firstInvalidInput = null;
+    let firstInvalidMsg = 'Please meet the minimum order quantity for all items.';
     for (const g of groups) {
       for (const it of g.items) {
         const input = document.getElementById(`po-qty-${it.key}`);
         const errEl = document.getElementById(`po-modal-qty-err-${it.key}`);
+        const moq = Math.max(1, Number(it.minOrderQty) || this.getDefaultMOQForSize(it.size));
         const rawVal = input ? String(input.value).trim() : String(it.suggestedQty);
         const q = rawVal === '' ? 0 : Math.floor(Number(rawVal) || 0);
-        if (rawVal === '' || q < 10) {
+        if (rawVal === '' || q < moq) {
           hasInvalidQty = true;
-          if (errEl) errEl.style.display = 'block';
+          if (errEl) {
+            errEl.textContent = `Minimum order quantity is ${moq} unit${moq === 1 ? '' : 's'}.`;
+            errEl.style.display = 'block';
+          }
           if (input) {
             input.style.borderColor = 'var(--danger, #C1443D)';
-            if (!firstInvalidInput) firstInvalidInput = input;
+            if (!firstInvalidInput) {
+              firstInvalidInput = input;
+              firstInvalidMsg = `Minimum order quantity for ${it.productName} (${fmtSize(it.size)}) is ${moq} unit${moq === 1 ? '' : 's'}.`;
+            }
           }
         }
       }
     }
 
     if (hasInvalidQty) {
-      showToast('Minimum order quantity is 10 units.', 'error');
+      showToast(firstInvalidMsg, 'error');
       if (firstInvalidInput) firstInvalidInput.focus();
-      return { success: false, error: 'Minimum order quantity is 10 units.' };
+      return { success: false, error: firstInvalidMsg };
     }
 
     const btn = document.getElementById('btn-submit-po-confirm');
@@ -4483,8 +4595,9 @@ const LowStockService = {
 
       for (const it of g.items) {
         const input = document.getElementById(`po-qty-${it.key}`);
+        const moq = Math.max(1, Number(it.minOrderQty) || this.getDefaultMOQForSize(it.size));
         let q = input ? parseInt(input.value, 10) : it.suggestedQty;
-        if (isNaN(q) || q < 10) q = 10;
+        if (isNaN(q) || q < moq) q = moq;
         if (q > 1000) q = 1000;
 
         const lineCost = Number((q * it.unitCost).toFixed(2));

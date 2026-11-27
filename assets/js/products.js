@@ -147,8 +147,11 @@ function canRemoveContainerSize(p, size) {
   }
 
   // 7. Batch & expiration tracking records
-  if (typeof EXP !== 'undefined' && Array.isArray(EXP.batches)) {
-    const batchMatch = EXP.batches.some(b => {
+  const expBatchesList = (typeof EXP !== 'undefined' && EXP && EXP.data && Array.isArray(EXP.data.batches))
+    ? EXP.data.batches
+    : ((typeof EXP !== 'undefined' && Array.isArray(EXP.batches)) ? EXP.batches : []);
+  if (expBatchesList.length > 0) {
+    const batchMatch = expBatchesList.some(b => {
       const bPid = b.productId || b.product_id;
       const bSz = Number(b.containerSize || b.container_size);
       const bSzId = b.sizeId || b.size_id;
@@ -1715,6 +1718,8 @@ async function rejectPendingProduct(id) {
   });
   if (!confirmed) return;
   db.products = db.products.filter(item => item.id !== id);
+  if (!Array.isArray(db.deletedProductIds)) db.deletedProductIds = [];
+  if (!db.deletedProductIds.includes(id)) db.deletedProductIds.push(id);
   logAudit('PRODUCT_REJECT', 'Product', `Rejected product request ${p.name}`, {
     productId: p.id,
     entityName: p.name,
@@ -1881,6 +1886,12 @@ async function approveProductPendingEdits(id) {
     if (oldPrice !== newPrice) {
       p.recentPrice = oldPrice;
       p.price = newPrice;
+      if (Array.isArray(p.sizesData)) {
+        p.sizesData.forEach(sz => {
+          sz.pricePerLiter = newPrice;
+          sz.pricePerCan = Number((newPrice * (Number(sz.containerSize) || 1)).toFixed(2));
+        });
+      }
     }
   }
 

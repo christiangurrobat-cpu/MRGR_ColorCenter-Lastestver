@@ -143,6 +143,12 @@ if ($action === 'submit_request') {
         exit;
     }
 
+    if ($currentStatus === 'void rejected' || $currentStatus === 'void_rejected') {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'A void request for this receipt was already rejected by an Administrator.']);
+        exit;
+    }
+
     $refundTotal = (float)($sale['refund_total'] ?? 0);
     $returns = json_decode($sale['returns_json'] ?? '[]', true) ?: [];
     if ($currentStatus === 'refunded' || $refundTotal > 0 || count($returns) > 0) {
@@ -612,6 +618,7 @@ if ($action === 'get_pending' || $action === 'list') {
         $vst->bind_param("s", $actingUser['id']);
         $vst->execute();
         $vres = $vst->get_result();
+        $vst->close();
     }
     $list = [];
     if ($vres) {

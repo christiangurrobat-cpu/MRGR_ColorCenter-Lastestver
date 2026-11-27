@@ -1084,6 +1084,10 @@ if (typeof window !== 'undefined') {
   window.syncColorMixingWithLibrary = syncColorMixingWithLibrary;
 }
 
+function canEditColorMixPrice() {
+  return Boolean(typeof currentUser !== 'undefined' && currentUser && currentUser.role === 'admin');
+}
+
 function calculateColorMixPriceBreakdown(s = colorMixStudioState) {
   const state = s || {};
   const totalLiters = Number(state.totalLiters) || 1;
@@ -1178,7 +1182,7 @@ function calculateColorMixPriceBreakdown(s = colorMixStudioState) {
   let otherCharges = 0.00;
   let grandTotal = standardTotal;
 
-  if (state.userCustomizedPrice && state.pricePerLiter != null) {
+  if (canEditColorMixPrice() && state.userCustomizedPrice && state.pricePerLiter != null) {
     const customTargetTotal = Number((totalLiters * Number(state.pricePerLiter)).toFixed(2));
     const diff = Number((customTargetTotal - standardTotal).toFixed(2));
     otherCharges = diff;
@@ -1380,6 +1384,13 @@ function renderColorMixPriceBreakdownHtml(s, breakdown, wasOpen = true) {
 }
 
 function onColorMixPriceLive(val) {
+  if (!canEditColorMixPrice()) {
+    colorMixStudioState.userCustomizedPrice = false;
+    updateColorMixCalculation(false);
+    const input = document.getElementById('cm-price');
+    if (input) input.value = colorMixStudioState.pricePerLiter;
+    return;
+  }
   const num = Number(val);
   if (!isNaN(num) && num >= 0) {
     colorMixStudioState.pricePerLiter = num;
@@ -1389,6 +1400,15 @@ function onColorMixPriceLive(val) {
 }
 
 function onColorMixPriceChange(val) {
+  if (!canEditColorMixPrice()) {
+    colorMixStudioState.userCustomizedPrice = false;
+    updateColorMixCalculation(false);
+    const input = document.getElementById('cm-price');
+    if (input) input.value = colorMixStudioState.pricePerLiter;
+    showToast('Only Administrators can modify the Price per Liter.', 'error');
+    syncColorMixVisuals();
+    return;
+  }
   const num = Number(Number(val).toFixed(2)) || 0;
   colorMixStudioState.pricePerLiter = num;
   colorMixStudioState.userCustomizedPrice = true;
@@ -1414,11 +1434,15 @@ function updateColorMixCalculation(autoUpdateName = false) {
     colorMixStudioState.colorName = detected.name;
   }
 
+  if (!canEditColorMixPrice()) {
+    colorMixStudioState.userCustomizedPrice = false;
+  }
+
   // Calculate price breakdown & grand total
   const breakdown = calculateColorMixPriceBreakdown(colorMixStudioState);
   const totalLiters = Number(colorMixStudioState.totalLiters) || 1;
 
-  if (!colorMixStudioState.userCustomizedPrice) {
+  if (!colorMixStudioState.userCustomizedPrice || !canEditColorMixPrice()) {
     colorMixStudioState.pricePerLiter = Number((breakdown.grandTotal / totalLiters).toFixed(2));
   }
 }
@@ -2984,9 +3008,13 @@ function colorMixStudioHtml() {
       </div>
 
       <div class="field full">
-        <label for="cm-price" style="font-size:12px; font-weight:700;">Price per Liter (₱)</label>
-        <input id="cm-price" type="number" min="0" step="any" value="${s.pricePerLiter}" oninput="onColorMixPriceLive(this.value)" onchange="onColorMixPriceChange(this.value)" required>
-        <small id="cm-price-helper" class="muted" style="display:block; margin-top:2px; font-size:10.5px;">${s.userCustomizedPrice ? `Custom price applied · <a href="javascript:void(0)" onclick="resetColorMixPriceToAuto()" style="color:var(--teal-text); font-weight:600; text-decoration:underline;">Reset to auto</a>` : 'Auto-calculated base materials + ₱50 service fee'}</small>
+        <label for="cm-price" style="font-size:12px; font-weight:700;">Price per Liter (₱) ${!canEditColorMixPrice() ? '<span class="muted" style="font-weight:500; font-size:11px;">(Read-only)</span>' : ''}</label>
+        ${canEditColorMixPrice()
+          ? `<input id="cm-price" type="number" min="0" step="any" value="${s.pricePerLiter}" oninput="onColorMixPriceLive(this.value)" onchange="onColorMixPriceChange(this.value)" required>`
+          : `<input id="cm-price" type="number" value="${s.pricePerLiter}" readonly tabindex="-1" aria-readonly="true" style="background:var(--surface-2); color:var(--ink-soft); cursor:not-allowed;" title="Auto-calculated price (read-only)">`}
+        <small id="cm-price-helper" class="muted" style="display:block; margin-top:2px; font-size:10.5px;">${canEditColorMixPrice()
+          ? (s.userCustomizedPrice ? `Custom price applied · <a href="javascript:void(0)" onclick="resetColorMixPriceToAuto()" style="color:var(--teal-text); font-weight:600; text-decoration:underline;">Reset to auto</a>` : 'Auto-calculated base materials + ₱50 service fee')
+          : '🔒 Auto-calculated base materials + ₱50 service fee'}</small>
       </div>
 
       <div class="field full">
@@ -3096,16 +3124,24 @@ function syncColorMixVisuals(activeIdx = -1, skipPresetRefresh = false) {
     if (nameInput && document.activeElement !== nameInput) nameInput.value = detected.name;
   }
 
-  // 4. Price recommendation (if not customized by user)
-  if (!s.userCustomizedPrice) {
-    const priceInput = document.getElementById('cm-price');
-    if (priceInput && document.activeElement !== priceInput) priceInput.value = s.pricePerLiter;
+  // 4. Price recommendation (if not customized by admin)
+  const isAdminPriceEditor = canEditColorMixPrice();
+  const priceInput = document.getElementById('cm-price');
+  if (priceInput) {
+    if (!isAdminPriceEditor) {
+      priceInput.readOnly = true;
+      priceInput.value = s.pricePerLiter;
+    } else if (!s.userCustomizedPrice && document.activeElement !== priceInput) {
+      priceInput.value = s.pricePerLiter;
+    }
   }
   const priceHelper = document.getElementById('cm-price-helper');
   if (priceHelper) {
-    priceHelper.innerHTML = s.userCustomizedPrice
-      ? `Custom price applied · <a href="javascript:void(0)" onclick="resetColorMixPriceToAuto()" style="color:var(--teal-text); font-weight:600; text-decoration:underline;">Reset to auto</a>`
-      : 'Auto-calculated base materials + ₱50 service fee';
+    priceHelper.innerHTML = isAdminPriceEditor
+      ? (s.userCustomizedPrice
+        ? `Custom price applied · <a href="javascript:void(0)" onclick="resetColorMixPriceToAuto()" style="color:var(--teal-text); font-weight:600; text-decoration:underline;">Reset to auto</a>`
+        : 'Auto-calculated base materials + ₱50 service fee')
+      : '🔒 Auto-calculated base materials + ₱50 service fee';
   }
 
   // 5. Detailed price breakdown & Grand total updates
@@ -4445,9 +4481,16 @@ async function submitColorMix() {
     return false;
   }
 
-  // Enforce category compatibility & actual usable stock for every ingredient before dispensing
+  // Enforce category compatibility, valid selling price (> ₱0), & actual usable stock for every ingredient before dispensing
   for (let i = 0; i < validComponents.length; i++) {
     const comp = validComponents[i];
+    const cp = (comp.productId && typeof productById === 'function') ? productById(comp.productId) : null;
+    const ingPrice = Number(cp ? cp.price : comp.price) || 0;
+    if (ingPrice <= 0) {
+      const pName = cp ? cp.name : (comp.name || `Ingredient #${i + 1}`);
+      showToast(`Cannot mix with "${pName}": selling price is ₱0.00. Ask Administrator to set a valid price first.`, 'error');
+      return false;
+    }
     const ev = evaluateColorMixIngredientStatus(comp, i, s.baseType, s.totalLiters);
     if (ev.status !== 'READY') {
       showToast(ev.simpleReason || `${ev.status}: ${ev.detail}`, 'error');
@@ -4511,6 +4554,9 @@ async function submitColorMix() {
   const mixed = subtractivePaintMix(validComponents);
   const detected = detectMixedColorName(mixed.r, mixed.g, mixed.b);
   const liters = Number(s.totalLiters) || 1;
+  if (!canEditColorMixPrice()) {
+    s.userCustomizedPrice = false;
+  }
   const breakdown = calculateColorMixPriceBreakdown(s);
   const grandTotal = breakdown.grandTotal;
   const price = Number((grandTotal / liters).toFixed(2));
@@ -4664,6 +4710,13 @@ async function submitColorMix() {
       staffName: (currentUser && currentUser.name) || 'Staff'
     });
 
+    const saved = await saveDB();
+    if (!saved) {
+      await loadDB();
+      renderPage();
+      return false;
+    }
+
     logAudit(
       'MIXING_COMPLETE',
       colorName,
@@ -4678,7 +4731,6 @@ async function submitColorMix() {
       }
     );
 
-    await saveDB();
     closeModal();
     showToast(`Successfully logged ${liters}L "${colorName}" (${detected.name}) mixing service and deducted ingredients.`, 'ok');
     renderPage();

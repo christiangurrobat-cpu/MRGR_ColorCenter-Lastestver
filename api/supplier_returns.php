@@ -880,6 +880,18 @@ try {
                     throw new Exception("Damaged stock record ({$dmgId}) not found.");
                 }
 
+                // Guard: prevent creating a duplicate legacy SRET return when a replacement request already tracks this damaged record
+                $dupRepSt = $conn->prepare("SELECT request_ref FROM supplier_replacement_requests WHERE damaged_record_id = ? AND status NOT IN ('Cancelled') LIMIT 1");
+                if ($dupRepSt) {
+                    $dupRepSt->bind_param('s', $dmgId);
+                    $dupRepSt->execute();
+                    $dupRepRow = $dupRepSt->get_result()->fetch_assoc();
+                    $dupRepSt->close();
+                    if ($dupRepRow) {
+                        throw new Exception("Damaged stock for {$dRow['product_name']} is already tracked under Replacement Request {$dupRepRow['request_ref']}. Manage it under Replacements & Credits instead of creating a duplicate return.");
+                    }
+                }
+
                 $eligible = max(0, (int)$dRow['damaged_qty'] - (int)$dRow['returned_qty']);
                 if ($qty > $eligible) {
                     throw new Exception("Cannot return {$qty} unit(s) of {$dRow['product_name']}: only {$eligible} damaged unit(s) eligible for return (Recorded: {$dRow['damaged_qty']}, Already Returned: {$dRow['returned_qty']}).");
@@ -1727,12 +1739,24 @@ try {
                 $mvNote = "Replacement Delivery (Inspected): {$reqRef} (PO: {$poNumber}, {$supplierName}) [Delivered {$deliveredQty}, Accepted {$acceptedQty} × {$containerSize}L (+{$addedLiters}L)" . ($damagedQty > 0 ? ", Damaged/Rejected {$damagedQty}" : '') . " · {$containerSize}L Units: {$beforeCans}→{$afterCans}, Batch: {$batchNumber}]" . ($inspectionNotes !== '' ? " — {$inspectionNotes}" : '');
                 $movementId = srInsertMovement($conn, 'receiving', $productId, $sizeId, $containerSize, $productName, $addedLiters, $mvNote, $actorName, $now);
 
+                $origUnitCost = null;
+                $ucStmt = $conn->prepare("SELECT unit_cost FROM purchase_order_items WHERE po_id = ? AND product_id = ? AND ABS(container_size - ?) < 0.01 LIMIT 1");
+                if ($ucStmt) {
+                    $ucStmt->bind_param("ssd", $poId, $productId, $containerSize);
+                    $ucStmt->execute();
+                    if ($ucRow = $ucStmt->get_result()->fetch_assoc()) {
+                        $origUnitCost = (float)$ucRow['unit_cost'];
+                    }
+                    $ucStmt->close();
+                }
+
                 $batchId = batchCreate($conn, [
                     'size_id' => $sizeId,
                     'product_id' => $productId,
                     'qty' => $acceptedQty,
                     'batch_number' => $batchNumber,
                     'expiration_date' => $expDate,
+                    'unit_cost' => $origUnitCost,
                     'supplier_id' => $supplierId,
                     'supplier_name' => $supplierName,
                     'po_id' => $poId,

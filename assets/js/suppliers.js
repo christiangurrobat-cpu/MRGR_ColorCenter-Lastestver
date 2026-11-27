@@ -551,7 +551,7 @@ function openSupplierDetailsModal(id) {
 
   const footHtml = `
     <button class="btn secondary" onclick="closeModal()">Close</button>
-    ${s.status === 'active' ? `<button class="btn secondary" onclick="closeModal(); startCreatePO(); if(typeof poSelectSupplier==='function'){poSelectSupplier('${s.id}');}else{poSupplierId='${s.id}'; poWizardGoToStep(2);}">+ Create Purchase Order</button>` : ''}
+    ${s.status === 'active' ? `<button class="btn secondary" onclick="closeModal(); startCreatePO(); poSupplierId='${s.id}'; renderPage();">+ Create Purchase Order</button>` : ''}
     ${isAdmin ? `<button class="btn" onclick="closeModal(); openSupplierModal('${s.id}')">✏️ Edit Supplier</button>` : ''}
   `;
 

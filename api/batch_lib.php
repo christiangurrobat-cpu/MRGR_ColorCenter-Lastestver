@@ -452,27 +452,81 @@ function batchFifoDeduct(mysqli $conn, string $sizeId, int $need, ?string $movem
     return $deducted;
 }
 
-/** Put $qty cans back into depleted batches (earliest received first); returns the leftover that fit nowhere. */
+/**
+ * Put $qty cans back into depleted NON-EXPIRED batches; returns the leftover that fit nowhere.
+ * Priority:
+ *  1. Explicit $firstBatchId when an Admin targets a specific batch directly.
+ *  2. Exact batch(es) originally deducted for $ref (e.g. OR-YYYYMMDD-XXXX on Void/Return), if still non-expired.
+ *  3. Most recently received depleted non-expired batches (expiration_date IS NULL OR expiration_date >= CURDATE()).
+ * Never restores good returned/voided stock into an expired batch.
+ */
 function batchRestore(mysqli $conn, string $sizeId, int $qty, ?string $movementId, ?string $ref, ?string $note, ?string $staff, ?string $when = null, ?string $firstBatchId = null): int {
     $order = [];
-    if ($firstBatchId) $order[] = $firstBatchId;
-    $res = $conn->prepare("SELECT batch_id FROM inventory_batches WHERE size_id = ? AND remaining_qty < original_qty ORDER BY date_received ASC, batch_id ASC");
-    $res->bind_param('s', $sizeId);
+    $seen = [];
+    $today = date('Y-m-d');
+
+    if ($firstBatchId) {
+        $order[] = $firstBatchId;
+        $seen[$firstBatchId] = true;
+    }
+
+    // Prefer restoring back to the exact batch(es) deducted under the same OR receipt reference, provided not expired
+    if ($ref !== null && $ref !== '') {
+        $refSt = $conn->prepare("SELECT bm.batch_id
+                                 FROM batch_movements bm
+                                 JOIN inventory_batches b ON b.batch_id = bm.batch_id
+                                 WHERE bm.reference = ?
+                                   AND b.size_id = ?
+                                   AND bm.qty_change < 0
+                                   AND b.remaining_qty < b.original_qty
+                                   AND (b.expiration_date IS NULL OR b.expiration_date >= ?)
+                                 ORDER BY bm.id DESC");
+        if ($refSt) {
+            $refSt->bind_param('sss', $ref, $sizeId, $today);
+            $refSt->execute();
+            $refRs = $refSt->get_result();
+            while ($rr = $refRs->fetch_assoc()) {
+                $bid = (string)$rr['batch_id'];
+                if (!isset($seen[$bid])) {
+                    $order[] = $bid;
+                    $seen[$bid] = true;
+                }
+            }
+            $refSt->close();
+        }
+    }
+
+    // Fall back to most recently received depleted non-expired batches
+    $res = $conn->prepare("SELECT batch_id
+                           FROM inventory_batches
+                           WHERE size_id = ?
+                             AND remaining_qty < original_qty
+                             AND (expiration_date IS NULL OR expiration_date >= ?)
+                           ORDER BY date_received DESC, batch_id DESC");
+    $res->bind_param('ss', $sizeId, $today);
     $res->execute();
     $rs = $res->get_result();
     while ($r = $rs->fetch_assoc()) {
-        if ($r['batch_id'] !== $firstBatchId) $order[] = $r['batch_id'];
+        $bid = (string)$r['batch_id'];
+        if (!isset($seen[$bid])) {
+            $order[] = $bid;
+            $seen[$bid] = true;
+        }
     }
     $res->close();
 
     foreach ($order as $bid) {
         if ($qty <= 0) break;
-        $st = $conn->prepare("SELECT remaining_qty, original_qty, size_id FROM inventory_batches WHERE batch_id = ? FOR UPDATE");
+        $st = $conn->prepare("SELECT remaining_qty, original_qty, size_id, expiration_date FROM inventory_batches WHERE batch_id = ? FOR UPDATE");
         $st->bind_param('s', $bid);
         $st->execute();
         $row = $st->get_result()->fetch_assoc();
         $st->close();
         if (!$row || (string)$row['size_id'] !== $sizeId) continue;
+        // Strictly block restoring into an expired batch unless explicitly targeted via $firstBatchId
+        if ($bid !== $firstBatchId && !empty($row['expiration_date']) && $row['expiration_date'] < $today) {
+            continue;
+        }
         $room = (int)$row['original_qty'] - (int)$row['remaining_qty'];
         if ($room <= 0) continue;
         $put = min($qty, $room);
@@ -575,15 +629,18 @@ function batchProcessMovement(mysqli $conn, array $m, string $type, ?string $siz
                     return;
                 }
             }
+            $isVoidRestore = stripos($shortNote, 'Void Sale Reversal') !== false;
+            $batchPrefix = ($type === 'return') ? 'RET' : ($isVoidRestore ? 'VOID' : 'ADJ');
+            $batchSource = ($type === 'return' || $isVoidRestore) ? 'return' : 'adjustment';
             $bid = batchCreate($conn, [
                 'size_id' => $sizeId,
                 'product_id' => $productId,
                 'qty' => $left,
-                'batch_number' => 'ADJ-' . date('Ymd', strtotime($dateSql)) . '-' . strtoupper(substr(md5($mid), 0, 4)),
+                'batch_number' => $batchPrefix . '-' . date('Ymd', strtotime($dateSql)) . '-' . strtoupper(substr(md5($mid), 0, 4)),
                 'expiration_date' => null,
                 'date_received' => $dateSql,
-                'source' => $type === 'return' ? 'return' : 'adjustment',
-                'notes' => 'Stock added without a batch (' . $type . '): ' . $shortNote,
+                'source' => $batchSource,
+                'notes' => 'Restored to non-expired sellable batch (' . $batchSource . '): ' . $shortNote,
                 'staff' => $staffName,
             ]);
             batchLog($conn, $bid, $mid, 'received', $left, $left, $ref, $shortNote, $staffName, $dateSql);

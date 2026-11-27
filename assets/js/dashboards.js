@@ -608,9 +608,9 @@ function renderAdminRecentTransactionsPanel(recent) {
                 </td>
                 <td class="center" style="white-space:nowrap;">${saleStatusBadge(s.status)}</td>
                 <td class="right" style="text-align:right; white-space:nowrap;">
-                  ${refundTotal > 0 ? `
+                  ${refundTotal !== 0 ? `
                     <div style="font-weight:700; font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif; font-size:13px;">${peso(netTotal)}</div>
-                    <div class="muted small" style="color:var(--danger); font-size:10.5px;" title="Original: ${peso(s.total)}">Orig: ${peso(s.total)}</div>
+                    <div class="muted small" style="color:${refundTotal < 0 ? 'var(--teal-text)' : 'var(--danger)'}; font-size:10.5px;" title="Original: ${peso(s.total)}">Orig: ${peso(s.total)}</div>
                   ` : `
                     <div style="font-weight:700; font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif; font-size:13px;">${peso(s.total)}</div>
                   `}
@@ -685,14 +685,14 @@ function renderAdminRecentTransactionsPanel(recent) {
                       </div>
                       ${(Number(s.discountAmount || s.discount || 0) > 0) ? `
                         <div>
-                          <span class="muted" style="display:block; font-size:11px; margin-bottom:2px;">Promo Discount (10%):</span>
+                          <span class="muted" style="display:block; font-size:11px; margin-bottom:2px;">Promo Discount${Number(s.discountPct || 0) > 0 ? ` (${Number(s.discountPct)}%)` : ''}:</span>
                           <strong style="font-size:13.5px; font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif; color:var(--teal-text); font-weight:700;">-${peso(Number(s.discountAmount || s.discount || 0))}</strong>
                         </div>
                       ` : ''}
                       <div>
                         <span class="muted" style="display:block; font-size:11px; margin-bottom:2px;">Total Due:</span>
                         <strong style="font-size:14px; font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif; color:var(--teal-text);">${peso(totalAmount)}</strong>
-                        ${refundTotal > 0 ? `<div class="muted small" style="color:var(--danger); font-size:11px;">Net: ${peso(netTotal)}</div>` : ''}
+                        ${refundTotal !== 0 ? `<div class="muted small" style="color:${refundTotal < 0 ? 'var(--teal-text)' : 'var(--danger)'}; font-size:11px;">Net: ${peso(netTotal)}</div>` : ''}
                       </div>
                     </div>
 
@@ -730,7 +730,13 @@ function adminDashboard() {
     (p.pendingPrice != null && Number(p.pendingPrice) > 0)
   );
   const totalPending = pendingAdj.length + pendingPOs.length + pendingInv.length + pendingVoid.length;
-  const recent = [...db.sales].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 10);
+  const recent = [...db.sales]
+    .filter(s => {
+      const st = String((s && s.status) || 'completed').trim().toLowerCase();
+      return st !== 'voided' && st !== 'void' && st !== 'cancelled' && st !== 'canceled';
+    })
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .slice(0, 10);
   const greeting = getGreeting();
   const activeSuppliers = (db.suppliers || []).filter(s => s.status === 'active');
   const openPOCount = summary.openPOCount || (pendingPOs.length + orderedPOs.length);
@@ -988,7 +994,8 @@ function adminDashboard() {
       const isLast = idx === rowSpan - 1;
       const sizeVariant = typeof productSizeVariantBySize === 'function' ? productSizeVariantBySize(p, s) : null;
       const sizeId = sizeVariant ? (sizeVariant.sizeId || '') : '';
-      const count = productCanCount(p, s);
+      const count = productSellableCanCount(p, s);
+      const expCount = productExpiredCanCount(p, s);
       const thresh = productSizeThreshold(p, s);
       const stockVol = count * Number(s);
       const threshVol = thresh * Number(s);
@@ -1011,7 +1018,8 @@ function adminDashboard() {
                     ${p.color && p.color !== '-' ? `<span style="font-weight:500;">(${escapeHtml(p.color)})</span>` : ''}
                   </div>
                   <div class="muted small" style="margin-top:4px; font-size:11px;">
-                    Total Stock: <b style="${productHasLowStock(p) ? 'color:var(--danger);' : ''}">${formatLiters(p.stock)}</b>
+                    Sellable Stock: <b style="${productHasLowStock(p) ? 'color:var(--danger);' : ''}">${formatLiters(productSellableStock(p))}</b>
+                    ${productExpiredStock(p) > 0 ? `<span style="color:var(--danger-text); font-weight:600;"> · ⛔ ${formatLiters(productExpiredStock(p))} expired</span>` : ''}
                   </div>
                 </td>
                 <td rowspan="${rowSpan}" style="vertical-align:middle; border-bottom: 2px solid var(--line); border-right: 1px solid var(--line); font-weight:600;">
@@ -1032,6 +1040,7 @@ function adminDashboard() {
               <!-- Stock Quantity (Units) -->
               <td class="right" style="font-weight:600; font-family:'Space Grotesk',sans-serif; vertical-align:middle; ${borderBottom} ${st === 'out' ? 'color:var(--danger);' : (st === 'low' ? 'color:var(--warning-text);' : 'color:var(--ink);')}">
                 ${count} ${count === 1 ? 'unit' : 'units'}
+                ${expCount > 0 ? `<div style="font-size:10.5px; color:var(--danger-text); font-weight:600;">⛔ +${expCount} expired</div>` : ''}
               </td>
 
               <!-- Stock Volume (L) -->

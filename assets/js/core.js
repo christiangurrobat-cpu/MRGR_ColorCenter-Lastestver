@@ -998,6 +998,7 @@ async function silentRefreshFromDB() {
     if (!normalized || !normalized.db) return;
 
     db = normalized.db;
+    captureProductBaselines(db.products);
     bumpDbCacheVersion();
 
     // Cache locally
@@ -1037,6 +1038,66 @@ async function silentRefreshFromDB() {
   }
 }
 
+// Concurrency guard (#4): track per-product baselines from the last load/save so saveDB()
+// only updates products (and stock quantities) that THIS terminal actually modified.
+let _loadedProductBaselines = new Map();
+
+function _computeProductSignatures(p) {
+  if (!p || !p.id) return { fullSig: '', stockSig: '' };
+  const stockPart = JSON.stringify({
+    stock: Number(p.stock) || 0,
+    canStock: p.canStock || {},
+    openedStock: Number(p.openedStock) || 0,
+    openedCanSize: Number(p.openedCanSize) || 0,
+    openedBySize: p.openedBySize || {},
+    sizesData: Array.isArray(p.sizesData)
+      ? p.sizesData.map(v => ({
+        s: Number(v.containerSize) || 0,
+        q: Number(v.sealedQuantity) || 0,
+        o: Number(v.openedQuantity) || 0,
+        r: Number(v.remainingVolume) || 0
+      }))
+      : []
+  });
+  const fullPart = stockPart + '|' + JSON.stringify({
+    name: p.name || '',
+    brand: p.brand || '',
+    type: p.type || '',
+    category: p.category || '',
+    taxClassification: p.taxClassification || 'vatable',
+    color: p.color || '',
+    colorId: p.colorId || null,
+    colorHex: p.colorHex || null,
+    colorClassification: p.colorClassification || null,
+    isColorPigment: Boolean(p.isColorPigment),
+    isBasePaint: Boolean(p.isBasePaint),
+    paintSystem: p.paintSystem || 'unverified',
+    isSpecialtyPigment: Boolean(p.isSpecialtyPigment),
+    adminReviewNote: p.adminReviewNote || null,
+    supplierId: p.supplierId || null,
+    price: Number(p.price) || 0,
+    recentPrice: p.recentPrice ?? null,
+    pendingPrice: p.pendingPrice ?? null,
+    sizes: p.sizes || [],
+    pendingSizes: p.pendingSizes || [],
+    pendingEdit: p.pendingEdit || null,
+    threshold: Number(p.threshold) || 0,
+    thresholdBySize: p.thresholdBySize || {},
+    status: p.status || 'active',
+    deactivationReason: p.deactivationReason || null,
+    discontinueReason: p.discontinueReason || null
+  });
+  return { fullSig: fullPart, stockSig: stockPart };
+}
+
+function captureProductBaselines(productsList) {
+  const next = new Map();
+  (Array.isArray(productsList) ? productsList : []).forEach(p => {
+    if (p && p.id) next.set(String(p.id), _computeProductSignatures(p));
+  });
+  _loadedProductBaselines = next;
+}
+
 async function loadDB() {
   try {
     const res = await fetch('api/db.php');
@@ -1046,9 +1107,10 @@ async function loadDB() {
         const normalized = normalizeDbPayload(data.db);
         if (normalized && normalized.db) {
           db = normalized.db;
-    bumpDbCacheVersion();
+          captureProductBaselines(db.products);
+          bumpDbCacheVersion();
           storage.set(DB_KEY, JSON.stringify(db)); // cache locally
-          if (dedupeProducts() || normalized.migratedDecimals) await saveDB();
+          if (normalized.migratedDecimals) await saveDB();
           return;
         }
       }
@@ -1065,13 +1127,15 @@ async function loadDB() {
       const normalized = normalizeDbPayload(parsed);
       if (normalized && normalized.db) {
         db = normalized.db;
-    bumpDbCacheVersion();
-        if (dedupeProducts() || normalized.migratedDecimals) await saveDB();
+        captureProductBaselines(db.products);
+        bumpDbCacheVersion();
+        if (normalized.migratedDecimals) await saveDB();
         return;
       }
     }
   } catch (e) { /* nothing saved yet */ }
   db = buildSeedData();
+  captureProductBaselines(db.products);
   await saveDB();
 }
 
@@ -1085,14 +1149,27 @@ async function saveDB() {
     });
   }
 
-  // 1. Serialize DB once & reuse for both local cache and API POST body (avoids double JSON.stringify)
-  bumpDbCacheVersion();
-  const dbJson = JSON.stringify(db);
-  try {
-    await storage.set(DB_KEY, dbJson);
-  } catch (e) {
-    console.warn('Local storage cache write failed:', e);
+  // Compute which products & stock counts actually changed on this terminal since last load/save
+  const dirtyProductIds = [];
+  const dirtyStockProductIds = [];
+  if (db && Array.isArray(db.products)) {
+    db.products.forEach(p => {
+      if (!p || !p.id) return;
+      const pid = String(p.id);
+      const cur = _computeProductSignatures(p);
+      const prev = _loadedProductBaselines.get(pid);
+      if (!prev) {
+        dirtyProductIds.push(pid);
+        dirtyStockProductIds.push(pid);
+      } else {
+        if (cur.fullSig !== prev.fullSig) dirtyProductIds.push(pid);
+        if (cur.stockSig !== prev.stockSig) dirtyStockProductIds.push(pid);
+      }
+    });
   }
+
+  // 1. Serialize DB once (persist to localStorage ONLY after MySQL confirms commit)
+  const dbJson = JSON.stringify(db);
 
   // 2. Persist to MySQL database MRGR_ColorCenter
   try {
@@ -1102,7 +1179,11 @@ async function saveDB() {
     const res = await fetch('api/db.php', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: '{"db":' + dbJson + ',"currentUser":' + JSON.stringify(userObj) + '}'
+      body: '{"db":' + dbJson
+        + ',"currentUser":' + JSON.stringify(userObj)
+        + ',"dirtyProductIds":' + JSON.stringify(dirtyProductIds)
+        + ',"dirtyStockProductIds":' + JSON.stringify(dirtyStockProductIds)
+        + '}'
     });
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
@@ -1146,6 +1227,27 @@ async function saveDB() {
     if (db.deletedProductIds && db.deletedProductIds.length) db.deletedProductIds = [];
     if (db.deletedProductSupplierIds && db.deletedProductSupplierIds.length) db.deletedProductSupplierIds = [];
     if (db.deletedSupplierIds && db.deletedSupplierIds.length) db.deletedSupplierIds = [];
+
+    // Update localStorage cache only after MySQL commit succeeds (never persist plaintext user passwords)
+    bumpDbCacheVersion();
+    try {
+      const safeCacheObj = syncedFromServer ? db : JSON.parse(dbJson);
+      if (safeCacheObj && Array.isArray(safeCacheObj.users)) {
+        safeCacheObj.users = safeCacheObj.users.map(u => {
+          if (!u || typeof u !== 'object') return u;
+          const copy = { ...u };
+          delete copy.password;
+          delete copy.newPassword;
+          return copy;
+        });
+      }
+      await storage.set(DB_KEY, JSON.stringify(safeCacheObj));
+    } catch (e) {
+      console.warn('Local storage cache write failed:', e);
+    }
+
+    // Update product baselines after successful save so subsequent saves only send newly changed products
+    captureProductBaselines(db.products);
 
     // Broadcast update to all other open tabs on this machine
     broadcastDbUpdate();
